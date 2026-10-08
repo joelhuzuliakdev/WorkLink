@@ -19,6 +19,7 @@ import { instagramUrl, tiktokUrl, whatsappUrl } from "../../lib/contact";
 import { formatLocation, formatMonthYear } from "../../lib/format";
 import { breadcrumbJsonLd, businessJsonLd, jsonLdScript } from "../../lib/seo/business";
 import { routes } from "../../config/site";
+import { directoryPath } from "../../services/directory";
 
 const { supabase, user } = Astro.locals;
 const slug = (Astro.params.slug ?? "").toLowerCase();
@@ -57,8 +58,20 @@ const loginToContact = `${routes.login}?next=${encodeURIComponent(`/e/${business
 const jsonLd = [
   businessJsonLd(business, url, catalog),
   breadcrumbJsonLd([
-    // Las páginas de categoría se suman al breadcrumb en la Etapa 7.
     { name: "Inicio", url: new URL("/", site).toString() },
+    ...(business.category
+      ? [
+          { name: business.category.name, url: new URL(directoryPath.category(business.category.slug), site).toString() },
+          ...(business.city?.province_slug
+            ? [
+                {
+                  name: `${business.category.name} en ${business.city.name}`,
+                  url: new URL(directoryPath.landing(business.category.slug, business.city.province_slug, business.city.slug), site).toString(),
+                },
+              ]
+            : []),
+        ]
+      : []),
     { name: business.name, url },
   ]),
 ];
@@ -110,7 +123,18 @@ const jsonLd = [
             )}
           </h1>
           <p class="mt-1 text-ink-muted">
-            {[business.category?.name, location].filter(Boolean).join(" · ")}
+            {business.category ? (
+              <a
+                href={business.city?.province_slug
+                  ? directoryPath.landing(business.category.slug, business.city.province_slug, business.city.slug)
+                  : directoryPath.category(business.category.slug)}
+                class="hover:text-ink hover:underline"
+              >
+                {[business.category.name, location].filter(Boolean).join(" · ")}
+              </a>
+            ) : (
+              location
+            )}
           </p>
           <p class="mt-1 text-sm text-ink-muted">
             <span data-followers={business.id}>{followersLabel(business.followers_count)}</span>

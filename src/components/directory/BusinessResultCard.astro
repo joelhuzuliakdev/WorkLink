@@ -1,0 +1,32 @@
+---
+/** Emprendimiento en resultados del buscador y del directorio. */
+import Avatar from "../ui/Avatar.astro";
+import type { BusinessResult } from "../../services/search";
+import { followersLabel } from "../../services/social";
+
+interface Props {
+  business: BusinessResult;
+  /** Ocultar el rubro (en la página del rubro ya se sabe). */
+  hideCategory?: boolean;
+}
+
+const { business: b, hideCategory = false } = Astro.props;
+const meta = [hideCategory ? null : b.category?.name, b.city ? `${b.city.name}${b.city.provinces ? `, ${b.city.provinces.name}` : ""}` : null]
+  .filter(Boolean)
+  .join(" · ");
+---
+
+<a href={`/e/${b.slug}`} class="flex items-start gap-4 p-4 hover:bg-surface-muted">
+  <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={56} />
+  <span class="min-w-0 flex-1">
+    <span class="flex flex-wrap items-center gap-x-2">
+      <span class="font-semibold">{b.name}</span>
+      {b.verification === "verified" && <span class="text-sm text-seek" title="Verificado">✓ Verificado</span>}
+    </span>
+    {meta && <span class="block truncate text-sm text-ink-muted">{meta}</span>}
+    {b.tagline && <span class="mt-1 line-clamp-2 block text-sm">{b.tagline}</span>}
+    <span class="mt-1 block text-xs text-ink-muted">
+      {followersLabel(b.followers_count)}{b.posts_count > 0 && ` · ${b.posts_count} ${b.posts_count === 1 ? "publicación" : "publicaciones"}`}
+    </span>
+  </span>
+</a>

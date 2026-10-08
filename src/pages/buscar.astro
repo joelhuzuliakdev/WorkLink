@@ -1,99 +1,253 @@
 ---
 /**
- * Buscador básico: personas, emprendimientos y publicaciones por palabra.
- * Los resultados nunca se indexan (contenido variable y duplicado).
- * La Etapa 7 suma filtros por rubro y ciudad, y páginas indexables.
+ * Buscador: personas, emprendimientos y publicaciones, con filtros por rubro,
+ * ciudad, situación (personas) y tipo (publicaciones). Sin texto funciona
+ * como directorio ("Tecnología en Villa María").
+ *
+ *   ?q=texto  &ver=todo|personas|emprendimientos|publicaciones
+ *   &rubro=slug  &ciudad=id  &situacion=job_seeking...  &tipo=offer...  &pagina=2
+ *
+ * Los resultados no se indexan (contenido variable); las páginas indexables
+ * del directorio son /rubros/...
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
-import Avatar from "../components/ui/Avatar.astro";
 import PostCard from "../components/posts/PostCard.astro";
-import SearchBox from "../components/home/SearchBox.astro";
-import SituationBadge from "../components/social/SituationBadge.astro";
-import { normalizeQuery, search, SEARCH_MIN } from "../services/search";
-import { getViewerReactions, followersLabel } from "../services/social";
-import { displayName } from "../services/profiles";
+import BusinessResultCard from "../components/directory/BusinessResultCard.astro";
+import PersonResultRow from "../components/directory/PersonResultRow.astro";
+import CityPicker from "../islands/CityPicker.tsx";
+import { hasCriteria, normalizeQuery, searchBusinesses, searchPeople, searchPosts, SEARCH_MIN, SEARCH_PAGE, type BusinessResult, type Paged, type PersonResult, type SearchFilters } from "../services/search";
+import { getViewerReactions } from "../services/social";
+import { getCategoryTree } from "../services/categories";
+import { getCity } from "../services/locations";
+import { SITUATIONS } from "../config/situations";
+import { POST_TYPES, type PostType } from "../schemas/post";
+import type { PostView, ProfileSituation } from "../services/posts";
 
 const { supabase, user } = Astro.locals;
-const q = normalizeQuery(Astro.url.searchParams.get("q"));
-const results = await search(supabase, q);
-const reactions = await getViewerReactions(supabase, user?.id, results.posts.map((p) => p.id));
-const total = results.people.length + results.businesses.length + results.posts.length;
-const tooShort = q.length > 0 && q.length < SEARCH_MIN;
+const params = Astro.url.searchParams;
+
+const TABS = [
+  { value: "todo", label: "Todo" },
+  { value: "personas", label: "Personas" },
+  { value: "emprendimientos", label: "Emprendimientos" },
+  { value: "publicaciones", label: "Publicaciones" },
+] as const;
+type Tab = (typeof TABS)[number]["value"];
+
+const tab: Tab = (TABS.find((t) => t.value === params.get("ver"))?.value ?? "todo") as Tab;
+const page = Math.max(1, Math.min(50, Number.parseInt(params.get("pagina") ?? "1", 10) || 1));
+
+const categories = await getCategoryTree(supabase);
+const category = categories.find((c) => c.slug === params.get("rubro")) ?? null;
+const cityIdParam = Number.parseInt(params.get("ciudad") ?? "", 10);
+const city = Number.isInteger(cityIdParam) && cityIdParam > 0 ? await getCity(supabase, cityIdParam) : null;
+const situation = (SITUATIONS.find((s) => s.value === params.get("situacion"))?.value ?? null) as ProfileSituation | null;
+const type = (POST_TYPES.find((t) => t.value === params.get("tipo"))?.value ?? null) as PostType | null;
+
+const filters: SearchFilters = {
+  q: normalizeQuery(params.get("q")),
+  categoryId: category?.id ?? null,
+  cityId: city?.id ?? null,
+  // Cada filtro aplica solo a su pestaña.
+  situation: tab === "personas" ? situation : null,
+  type: tab === "publicaciones" ? type : null,
+};
+const ready = hasCriteria(filters);
+const tooShort = filters.q.length > 0 && filters.q.length < SEARCH_MIN && !filters.categoryId && !filters.cityId;
+
+const offset = (page - 1) * SEARCH_PAGE;
+const none = <T,>(): Promise<Paged<T>> => Promise.resolve({ items: [], hasMore: false });
+const show = (which: Tab) => ready && (tab === "todo" || tab === which);
+const size = (preview: number) => (tab === "todo" ? preview : SEARCH_PAGE);
+const from = tab === "todo" ? 0 : offset;
+const [people, businesses, posts] = await Promise.all([
+  show("personas") ? searchPeople(supabase, filters, size(5), from) : none<PersonResult>(),
+  show("emprendimientos") ? searchBusinesses(supabase, filters, size(6), from) : none<BusinessResult>(),
+  show("publicaciones") ? searchPosts(supabase, filters, size(10), from) : none<PostView>(),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, posts.items.map((p) => p.id));
+const total = people.items.length + businesses.items.length + posts.items.length;
+
+// Enlaces que conservan los filtros actuales.
+function link(changes: Record<string, string | null>) {
+  const next = new URLSearchParams();
+  const base: Record<string, string | null> = {
+    q: filters.q || null,
+    ver: tab === "todo" ? null : tab,
+    rubro: category?.slug ?? null,
+    ciudad: city ? String(city.id) : null,
+    situacion: situation,
+    tipo: type,
+    ...changes,
+  };
+  for (const [key, value] of Object.entries(base)) if (value) next.set(key, value);
+  const s = next.toString();
+  return `/buscar${s ? `?${s}` : ""}`;
+}
+
+const titleParts = [filters.q && `“${filters.q}”`, category?.name, city && `en ${city.name}`].filter(Boolean).join(" ");
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
 ---
 
-<BaseLayout title={q ? `Buscar “${q}”` : "Buscar"} noindex canonicalPath="/buscar">
-  <section class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6">
-    <div>
-      <h1 class="sr-only">Buscar en WorkLink</h1>
-      <SearchBox value={q} autofocus={!q} />
-    </div>
+<BaseLayout title={titleParts ? `Buscar ${titleParts}` : "Buscar"} noindex canonicalPath="/buscar">
+  <section class="mx-auto flex max-w-3xl flex-col gap-5 px-4 py-6">
+    <h1 class="sr-only">Buscar en WorkLink</h1>
+
+    <form action="/buscar" method="GET" role="search" class="flex flex-col gap-3 rounded-wl-lg border border-line bg-surface p-4">
+      {tab !== "todo" && <input type="hidden" name="ver" value={tab} />}
+      <div class="relative">
+        <label for="buscar-q" class="sr-only">Qué buscás</label>
+        <input
+          id="buscar-q"
+          type="search"
+          name="q"
+          value={filters.q}
+          maxlength={100}
+          autofocus={!ready}
+          autocomplete="off"
+          enterkeyhint="search"
+          placeholder="Nombre, rubro o lo que necesitás"
+          class="h-12 w-full rounded-full border border-line bg-surface-muted px-5 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+        />
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div class="flex flex-col gap-1.5">
+          <label for="buscar-rubro" class="text-sm font-medium">Rubro</label>
+          <select id="buscar-rubro" name="rubro" class={selectClass}>
+            <option value="">Todos los rubros</option>
+            {categories.map((c) => <option value={c.slug} selected={c.id === category?.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <CityPicker
+          client:load
+          name="ciudad"
+          label="Ciudad"
+          initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+          hint="Dejala vacía para buscar en todo el país."
+        />
+        {tab === "personas" && (
+          <div class="flex flex-col gap-1.5">
+            <label for="buscar-situacion" class="text-sm font-medium">Situación</label>
+            <select id="buscar-situacion" name="situacion" class={selectClass}>
+              <option value="">Todas</option>
+              {SITUATIONS.map((s) => <option value={s.value} selected={s.value === situation}>{s.label}</option>)}
+            </select>
+          </div>
+        )}
+        {tab === "publicaciones" && (
+          <div class="flex flex-col gap-1.5">
+            <label for="buscar-tipo" class="text-sm font-medium">Tipo de publicación</label>
+            <select id="buscar-tipo" name="tipo" class={selectClass}>
+              <option value="">Todas</option>
+              {POST_TYPES.map((t) => <option value={t.value} selected={t.value === type}>{t.label}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="submit" class="h-11 rounded-wl bg-brand px-6 font-semibold text-brand-contrast hover:bg-brand-hover">Buscar</button>
+        {(filters.q || category || city || situation || type) && (
+          <a href={tab === "todo" ? "/buscar" : `/buscar?ver=${tab}`} class="text-sm font-semibold text-ink-muted hover:text-ink">Limpiar filtros</a>
+        )}
+      </div>
+    </form>
+
+    <nav aria-label="Qué mostrar" class="flex gap-1 overflow-x-auto border-b border-line">
+      {
+        TABS.map((t) => (
+          <a
+            href={link({ ver: t.value === "todo" ? null : t.value, pagina: null, situacion: t.value === "personas" ? situation : null, tipo: t.value === "publicaciones" ? type : null })}
+            aria-current={t.value === tab ? "page" : undefined}
+            class:list={[
+              "whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-semibold",
+              t.value === tab ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink",
+            ]}
+          >
+            {t.label}
+          </a>
+        ))
+      }
+    </nav>
 
     {
-      !q ? (
-        <p class="text-center text-ink-muted">Buscá por nombre, rubro o lo que necesitás: “electricista”, “tortas”, “diseño web”…</p>
-      ) : tooShort ? (
-        <p class="text-center text-ink-muted">Escribí al menos {SEARCH_MIN} letras.</p>
+      !ready ? (
+        tooShort ? (
+          <p class="text-center text-ink-muted">Escribí al menos {SEARCH_MIN} letras, o elegí un rubro o una ciudad.</p>
+        ) : (
+          <div>
+            <p class="text-ink-muted">Escribí qué buscás, o elegí un rubro para ver quiénes lo ofrecen:</p>
+            <ul class="mt-4 flex flex-wrap gap-2">
+              {categories.map((c) => (
+                <li>
+                  <a href={link({ rubro: c.slug })} class="inline-block rounded-full border border-line bg-surface px-3 py-1.5 text-sm hover:border-brand">
+                    {c.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p class="mt-6 text-sm">
+              <a href="/rubros" class="font-semibold text-brand hover:underline">Ver el directorio completo de rubros</a>
+            </p>
+          </div>
+        )
       ) : total === 0 ? (
         <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
-          <h2 class="text-lg font-semibold">No encontramos resultados para “{q}”</h2>
-          <p class="mt-1 text-ink-muted">Probá con otra palabra, o más corta (por ejemplo “foto” en vez de “fotógrafa profesional”).</p>
+          <h2 class="text-lg font-semibold">No encontramos resultados</h2>
+          <p class="mt-1 text-ink-muted">
+            {city ? "Probá sacando la ciudad para buscar en todo el país, o con otra palabra." : "Probá con otra palabra, o más corta (por ejemplo “foto” en vez de “fotógrafa profesional”)."}
+          </p>
         </div>
       ) : (
         <>
-          {results.people.length > 0 && (
+          {people.items.length > 0 && (
             <section aria-labelledby="r-personas">
-              <h2 id="r-personas" class="mb-3 text-lg font-semibold">Personas</h2>
+              <div class="mb-3 flex items-baseline justify-between gap-4">
+                <h2 id="r-personas" class="text-lg font-semibold">Personas</h2>
+                {tab === "todo" && people.hasMore && <a href={link({ ver: "personas" })} class="text-sm font-semibold text-brand hover:underline">Ver todas</a>}
+              </div>
               <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
-                {results.people.map((person) => (
-                  <li>
-                    <a href={`/u/${person.username}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
-                      <Avatar name={displayName(person)} path={person.avatar_path} size={48} />
-                      <span class="min-w-0 flex-1">
-                        <span class="flex flex-wrap items-center gap-2">
-                          <span class="font-semibold">{displayName(person)}</span>
-                          <SituationBadge situation={person.situation} />
-                        </span>
-                        <span class="block truncate text-sm text-ink-muted">
-                          {[person.headline, person.city?.name, followersLabel(person.followers_count)].filter(Boolean).join(" · ")}
-                        </span>
-                      </span>
-                    </a>
-                  </li>
+                {people.items.map((person) => (
+                  <li><PersonResultRow person={person} /></li>
                 ))}
               </ul>
             </section>
           )}
 
-          {results.businesses.length > 0 && (
+          {businesses.items.length > 0 && (
             <section aria-labelledby="r-emprendimientos">
-              <h2 id="r-emprendimientos" class="mb-3 text-lg font-semibold">Emprendimientos</h2>
+              <div class="mb-3 flex items-baseline justify-between gap-4">
+                <h2 id="r-emprendimientos" class="text-lg font-semibold">Emprendimientos</h2>
+                {tab === "todo" && businesses.hasMore && <a href={link({ ver: "emprendimientos" })} class="text-sm font-semibold text-brand hover:underline">Ver todos</a>}
+              </div>
               <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
-                {results.businesses.map((b) => (
-                  <li>
-                    <a href={`/e/${b.slug}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
-                      <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={48} />
-                      <span class="min-w-0 flex-1">
-                        <span class="font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</span>
-                        <span class="block truncate text-sm text-ink-muted">
-                          {[b.category?.name, b.city?.name, followersLabel(b.followers_count)].filter(Boolean).join(" · ")}
-                        </span>
-                      </span>
-                    </a>
-                  </li>
+                {businesses.items.map((b) => (
+                  <li><BusinessResultCard business={b} /></li>
                 ))}
               </ul>
             </section>
           )}
 
-          {results.posts.length > 0 && (
+          {posts.items.length > 0 && (
             <section aria-labelledby="r-publicaciones">
-              <h2 id="r-publicaciones" class="mb-3 text-lg font-semibold">Publicaciones</h2>
+              <div class="mb-3 flex items-baseline justify-between gap-4">
+                <h2 id="r-publicaciones" class="text-lg font-semibold">Publicaciones</h2>
+                {tab === "todo" && posts.hasMore && <a href={link({ ver: "publicaciones" })} class="text-sm font-semibold text-brand hover:underline">Ver todas</a>}
+              </div>
               <div class="flex flex-col gap-4">
-                {results.posts.map((post) => (
+                {posts.items.map((post) => (
                   <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
                 ))}
               </div>
             </section>
+          )}
+
+          {tab !== "todo" && (page > 1 || people.hasMore || businesses.hasMore || posts.hasMore) && (
+            <nav class="flex justify-between gap-4" aria-label="Páginas">
+              {page > 1 ? <a href={link({ pagina: page - 1 > 1 ? String(page - 1) : null })} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
+              {(people.hasMore || businesses.hasMore || posts.hasMore) && (
+                <a href={link({ pagina: String(page + 1) })} class="font-semibold text-brand hover:underline">Más resultados →</a>
+              )}
+            </nav>
           )}
         </>
       )

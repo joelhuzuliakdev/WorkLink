@@ -35,7 +35,7 @@ const forWho: Record<string, { title: string; points: string[] }> = {
 
 const steps = [
   { title: "Creá tu cuenta", text: "Es gratis. Poné tu foto, tu ciudad y contá tu situación: si buscás empleo, tenés un emprendimiento, ofrecés servicios o buscás contratar." },
-  { title: "Publicá", text: "Escribí qué ofrecés o qué buscás y sumá hasta 10 fotos o un video corto." },
+  { title: "Publicá", text: "Como en Facebook: escribí qué ofrecés o qué buscás y sumá hasta 10 fotos o un video corto." },
   { title: "Conectá", text: "La gente te sigue, comenta y te escribe. Vos hacés lo mismo con quienes te interesan, sin intermediarios." },
 ];
 
@@ -94,6 +94,7 @@ const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!
           </button>
         </div>
         <p class="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-sm text-ink-muted">
+          <a href="/rubros" class="font-semibold text-ink underline decoration-line underline-offset-4 hover:decoration-ink">Ver todos los rubros</a>
           {examples.map((example) => (
             <a href={`/buscar?q=${encodeURIComponent(example)}`} class="underline decoration-line underline-offset-4 hover:text-ink hover:decoration-ink">
               {example}

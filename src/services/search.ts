@@ -1,14 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPostsByIds, type PostView, type ProfileSituation } from "./posts";
+import type { PostType } from "../schemas/post";
 
 /**
- * Buscador básico por palabra: personas, emprendimientos y publicaciones.
- * Usa ILIKE con índices de trigramas (rápido aun con muchos datos). En la
- * Etapa 7 se suma relevancia, rubros y ciudades.
+ * Buscador y directorio: personas, emprendimientos y publicaciones con
+ * filtros opcionales (texto, rubro, ciudad, situación, tipo). Las funciones de
+ * la base devuelven ids ya filtrados y ordenados; acá se traen sus datos.
  */
 
 export const SEARCH_MIN = 2;
 export const SEARCH_MAX = 100;
+export const SEARCH_PAGE = 20;
 
 export function normalizeQuery(raw: string | null | undefined): string {
   return (raw ?? "").replace(/\s+/g, " ").trim().slice(0, SEARCH_MAX);
@@ -32,52 +34,100 @@ export interface BusinessResult {
   name: string;
   tagline: string | null;
   logo_path: string | null;
+  cover_path: string | null;
   verification: string;
   followers_count: number;
-  category: { name: string } | null;
-  city: { name: string } | null;
+  posts_count: number;
+  category: { name: string; slug: string } | null;
+  city: { name: string; slug: string; provinces: { name: string; slug: string } | null } | null;
 }
 
-export interface SearchResults {
-  people: PersonResult[];
-  businesses: BusinessResult[];
-  posts: PostView[];
+export interface SearchFilters {
+  q: string;
+  categoryId: number | null;
+  cityId: number | null;
+  situation: ProfileSituation | null;
+  type: PostType | null;
 }
 
-/** Escapa los comodines de LIKE para buscar el texto tal cual. */
-const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+export interface Paged<T> {
+  items: T[];
+  hasMore: boolean;
+}
 
-export async function search(supabase: SupabaseClient, q: string): Promise<SearchResults> {
-  if (q.length < SEARCH_MIN) return { people: [], businesses: [], posts: [] };
+const ids = (data: unknown) => ((data ?? []) as { id: string }[]).map((row) => row.id);
 
-  const [peopleIds, businesses, postIds] = await Promise.all([
-    supabase.rpc("search_profile_ids", { p_query: q, p_limit: 12 }),
-    supabase
-      .from("businesses")
-      .select("id, slug, name, tagline, logo_path, verification, followers_count, category:categories ( name ), city:cities ( name )")
-      .eq("status", "active")
-      .is("deleted_at", null)
-      .ilike("name", likePattern(q))
-      .order("followers_count", { ascending: false })
-      .limit(8),
-    supabase.rpc("search_post_ids", { p_query: q, p_limit: 20 }),
-  ]);
-  if (peopleIds.error) throw peopleIds.error;
-  if (businesses.error) throw businesses.error;
-  if (postIds.error) throw postIds.error;
+function ordered<T extends { id: string }>(order: string[], rows: T[]): T[] {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return order.map((id) => byId.get(id)).filter((row): row is T => Boolean(row));
+}
 
-  const ids = ((peopleIds.data ?? []) as { id: string }[]).map((row) => row.id);
-  let people: PersonResult[] = [];
-  if (ids.length) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, username, first_name, last_name, avatar_path, headline, situation, followers_count, city:cities ( name )")
-      .in("id", ids);
-    if (error) throw error;
-    const byId = new Map(((data ?? []) as unknown as PersonResult[]).map((p) => [p.id, p]));
-    people = ids.map((id) => byId.get(id)).filter((p): p is PersonResult => Boolean(p));
-  }
+/** Hay algo para buscar: texto válido o algún filtro. */
+export function hasCriteria(f: SearchFilters): boolean {
+  return f.q.length >= SEARCH_MIN || Boolean(f.categoryId || f.cityId || f.situation || f.type);
+}
 
-  const posts = await getPostsByIds(supabase, ((postIds.data ?? []) as { id: string }[]).map((row) => row.id));
-  return { people, businesses: (businesses.data ?? []) as unknown as BusinessResult[], posts };
+export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, limit = SEARCH_PAGE, offset = 0): Promise<Paged<PersonResult>> {
+  // Las personas no tienen rubro: si se filtra por rubro, no se listan.
+  if (f.categoryId) return { items: [], hasMore: false };
+  const { data, error } = await supabase.rpc("search_profile_ids", {
+    p_query: f.q || null,
+    p_city_id: f.cityId,
+    p_situation: f.situation,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+  if (error) throw error;
+  const list = ids(data);
+  const page = list.slice(0, limit);
+  if (!page.length) return { items: [], hasMore: false };
+  const { data: rows, error: rowsError } = await supabase
+    .from("profiles")
+    .select("id, username, first_name, last_name, avatar_path, headline, situation, followers_count, city:cities ( name )")
+    .in("id", page);
+  if (rowsError) throw rowsError;
+  return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };
+}
+
+export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count,
+  category:categories ( name, slug ), city:cities ( name, slug, provinces ( name, slug ) )`;
+
+export async function searchBusinesses(
+  supabase: SupabaseClient,
+  f: Pick<SearchFilters, "q" | "categoryId" | "cityId"> & { subcategoryId?: number | null; provinceId?: number | null },
+  limit = SEARCH_PAGE,
+  offset = 0,
+): Promise<Paged<BusinessResult>> {
+  const { data, error } = await supabase.rpc("search_business_ids", {
+    p_query: f.q || null,
+    p_category_id: f.categoryId,
+    p_subcategory_id: f.subcategoryId ?? null,
+    p_city_id: f.cityId,
+    p_province_id: f.provinceId ?? null,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+  if (error) throw error;
+  const list = ids(data);
+  const page = list.slice(0, limit);
+  if (!page.length) return { items: [], hasMore: false };
+  const { data: rows, error: rowsError } = await supabase.from("businesses").select(BUSINESS_RESULT_COLUMNS).in("id", page);
+  if (rowsError) throw rowsError;
+  return { items: ordered(page, (rows ?? []) as unknown as BusinessResult[]), hasMore: list.length > limit };
+}
+
+export async function searchPosts(supabase: SupabaseClient, f: SearchFilters, limit = SEARCH_PAGE, offset = 0): Promise<Paged<PostView>> {
+  // Las publicaciones no tienen "situación" propia: ese filtro es de personas.
+  if (f.situation) return { items: [], hasMore: false };
+  const { data, error } = await supabase.rpc("search_post_ids", {
+    p_query: f.q || null,
+    p_type: f.type,
+    p_category_id: f.categoryId,
+    p_city_id: f.cityId,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+  if (error) throw error;
+  const list = ids(data);
+  return { items: await getPostsByIds(supabase, list.slice(0, limit)), hasMore: list.length > limit };
 }

@@ -16,7 +16,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "check": "astro check"
+    "check": "astro check",
+    "db:localidades": "node scripts/importar-localidades.mjs"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",

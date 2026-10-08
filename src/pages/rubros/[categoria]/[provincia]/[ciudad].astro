@@ -1,0 +1,178 @@
+---
+/**
+ * Landing rubro + ciudad: /rubros/fotografia/cordoba/villa-maria
+ * "Fotógrafos en Villa María": emprendimientos del rubro en la ciudad,
+ * publicaciones recientes y enlaces a ciudades y rubros cercanos.
+ * Se indexa solo si tiene contenido suficiente (umbrales seo.* en settings).
+ */
+import BaseLayout from "../../../../layouts/BaseLayout.astro";
+import BusinessResultCard from "../../../../components/directory/BusinessResultCard.astro";
+import PostCard from "../../../../components/posts/PostCard.astro";
+import {
+  categoryNoun,
+  countBusinesses,
+  countRecentPosts,
+  directoryPath,
+  getCategoryBySlug,
+  getCategoryCities,
+  getCityBySlugs,
+  getCityCategories,
+  getSeoThresholds,
+  isIndexableLanding,
+} from "../../../../services/directory";
+import { searchBusinesses, searchPosts } from "../../../../services/search";
+import { getViewerReactions } from "../../../../services/social";
+import { breadcrumbJsonLd, jsonLdScript } from "../../../../lib/seo/business";
+
+const { supabase, user } = Astro.locals;
+const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const { categoria = "", provincia = "", ciudad = "" } = Astro.params;
+if (![categoria, provincia, ciudad].every((s) => SLUG.test(s))) return Astro.rewrite("/404");
+
+const [category, city] = await Promise.all([getCategoryBySlug(supabase, categoria), getCityBySlugs(supabase, provincia, ciudad)]);
+if (!category || !city) return Astro.rewrite("/404");
+
+const page = Math.max(1, Math.min(50, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const PER_PAGE = 20;
+
+const [total, recentPosts, thresholds, businesses, posts, otherCities, allCategories] = await Promise.all([
+  countBusinesses(supabase, category.id, city.id),
+  countRecentPosts(supabase, category.id, city.id),
+  getSeoThresholds(supabase),
+  searchBusinesses(supabase, { q: "", categoryId: category.id, cityId: city.id }, PER_PAGE, (page - 1) * PER_PAGE),
+  page === 1
+    ? searchPosts(supabase, { q: "", categoryId: category.id, cityId: city.id, situation: null, type: null }, 6)
+    : Promise.resolve({ items: [], hasMore: false }),
+  getCategoryCities(supabase, category.id, 13),
+  getCityCategories(supabase, city.id),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, posts.items.map((p) => p.id));
+
+const noun = categoryNoun(category);
+const title = `${noun} en ${city.name}`;
+const base = directoryPath.landing(category.slug, city.province.slug, city.slug);
+const indexable = page === 1 && isIndexableLanding(thresholds, total, recentPosts);
+const site = Astro.site ?? new URL(Astro.url.origin);
+const description = total
+  ? `${total} ${total === 1 ? "emprendimiento" : "emprendimientos"} de ${category.name.toLowerCase()} en ${city.name}, ${city.province.name}. Mirá sus trabajos, precios y contactalos por WhatsApp en WorkLink.`
+  : `${noun} en ${city.name}, ${city.province.name}: encontrá emprendedores y profesionales cerca tuyo en WorkLink.`;
+const nearby = otherCities.filter((c) => c.city_id !== city.id).slice(0, 12);
+const otherCategories = allCategories.filter((c) => c.id !== category.id);
+
+const jsonLd = [
+  breadcrumbJsonLd([
+    { name: "Inicio", url: new URL("/", site).toString() },
+    { name: "Rubros", url: new URL(directoryPath.index, site).toString() },
+    { name: category.name, url: new URL(directoryPath.category(category.slug), site).toString() },
+    { name: title, url: new URL(base, site).toString() },
+  ]),
+  ...(businesses.items.length
+    ? [
+        {
+          "@context": "https://schema.org",
+          "@type": "ItemList",
+          name: title,
+          itemListElement: businesses.items.map((b, index) => ({
+            "@type": "ListItem",
+            position: (page - 1) * PER_PAGE + index + 1,
+            url: new URL(`/e/${b.slug}`, site).toString(),
+            name: b.name,
+          })),
+        },
+      ]
+    : []),
+];
+const pageLink = (n: number) => (n > 1 ? `${base}?pagina=${n}` : base);
+---
+
+<BaseLayout title={page > 1 ? `${title} (página ${page})` : title} description={description} canonicalPath={page > 1 ? `${base}?pagina=${page}` : base} noindex={!indexable}>
+  <script slot="head" type="application/ld+json" set:html={jsonLdScript(jsonLd)} />
+  <section class="mx-auto max-w-5xl px-4 py-8">
+    <nav aria-label="Ubicación" class="flex flex-wrap gap-x-1.5 text-sm text-ink-muted">
+      <a href={directoryPath.index} class="hover:text-ink hover:underline">Rubros</a> <span aria-hidden="true">/</span>
+      <a href={directoryPath.category(category.slug)} class="hover:text-ink hover:underline">{category.name}</a> <span aria-hidden="true">/</span>
+      <span>{city.name}</span>
+    </nav>
+    <h1 class="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
+    <p class="mt-2 max-w-2xl text-ink-muted">
+      {total > 0
+        ? `${total} ${total === 1 ? "emprendimiento" : "emprendimientos"} de ${category.name.toLowerCase()} en ${city.name}, ${city.province.name}.`
+        : `Todavía no hay emprendimientos de ${category.name.toLowerCase()} en ${city.name}.`}
+    </p>
+
+    <div class="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div class="flex min-w-0 flex-col gap-10">
+        {
+          businesses.items.length > 0 ? (
+            <section aria-label="Emprendimientos">
+              <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+                {businesses.items.map((b) => (
+                  <li><BusinessResultCard business={b} hideCategory /></li>
+                ))}
+              </ul>
+              {(page > 1 || businesses.hasMore) && (
+                <nav class="mt-6 flex justify-between gap-4" aria-label="Páginas">
+                  {page > 1 ? <a href={pageLink(page - 1)} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
+                  {businesses.hasMore && <a href={pageLink(page + 1)} class="font-semibold text-brand hover:underline">Más emprendimientos →</a>}
+                </nav>
+              )}
+            </section>
+          ) : (
+            <div class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
+              <p class="font-semibold">¿Tenés un emprendimiento de {category.name.toLowerCase()} en {city.name}?</p>
+              <p class="mt-1 text-sm text-ink-muted">Creá su página gratis y sé el primero en aparecer acá.</p>
+              <a href="/panel/emprendimientos/nuevo" class="mt-4 inline-block font-semibold text-brand hover:underline">Crear la página de mi emprendimiento</a>
+            </div>
+          )
+        }
+
+        {
+          posts.items.length > 0 && (
+            <section aria-labelledby="publicaciones-recientes">
+              <h2 id="publicaciones-recientes" class="mb-4 text-xl font-semibold">Publicaciones recientes</h2>
+              <div class="flex flex-col gap-4">
+                {posts.items.map((post) => (
+                  <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
+                ))}
+              </div>
+            </section>
+          )
+        }
+      </div>
+
+      <aside class="flex flex-col gap-8">
+        {
+          nearby.length > 0 && (
+            <section aria-labelledby="otras-ciudades">
+              <h2 id="otras-ciudades" class="font-semibold">{category.name} en otras ciudades</h2>
+              <ul class="mt-3 flex flex-col">
+                {nearby.map((c) => (
+                  <li>
+                    <a href={directoryPath.landing(category.slug, c.province_slug, c.city_slug)} class="flex justify-between gap-3 border-b border-line py-2 text-sm hover:text-brand">
+                      <span>{c.city_name}</span>
+                      <span class="text-ink-muted">{c.businesses}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )
+        }
+        {otherCategories.length > 0 && (
+        <section aria-labelledby="otros-rubros">
+          <h2 id="otros-rubros" class="font-semibold">Otros rubros en {city.name}</h2>
+          <ul class="mt-3 flex flex-wrap gap-2">
+            {otherCategories.map((c) => (
+              <li>
+                <a href={directoryPath.landing(c.slug, city.province.slug, city.slug)} class="inline-block rounded-full border border-line bg-surface px-3 py-1 text-sm hover:border-brand">
+                  {c.name}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+        )}
+      </aside>
+    </div>
+  </section>
+</BaseLayout>

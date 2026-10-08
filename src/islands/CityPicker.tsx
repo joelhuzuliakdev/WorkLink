@@ -9,6 +9,7 @@ interface City {
   id: number;
   name: string;
   province_name: string;
+  department?: string | null;
 }
 
 interface Props {
@@ -135,6 +136,9 @@ export default function CityPicker({ name, label, initialCity = null, error, hin
               >
                 <span class="font-medium">{city.name}</span>
                 <span class="text-ink-muted">, {city.province_name}</span>
+                {city.department && city.department !== city.name && (
+                  <span class="block text-xs text-ink-muted">Depto. {city.department}</span>
+                )}
               </li>
             ))
           )}

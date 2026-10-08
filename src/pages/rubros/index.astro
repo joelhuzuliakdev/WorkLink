@@ -1,0 +1,42 @@
+---
+/** Directorio: todos los rubros, con cuántos emprendimientos tiene cada uno. */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { directoryPath, getDirectoryCategories } from "../../services/directory";
+import { breadcrumbJsonLd, jsonLdScript } from "../../lib/seo/business";
+
+const categories = await getDirectoryCategories(Astro.locals.supabase);
+const site = Astro.site ?? new URL(Astro.url.origin);
+const crumbs = breadcrumbJsonLd([
+  { name: "Inicio", url: new URL("/", site).toString() },
+  { name: "Rubros", url: new URL(directoryPath.index, site).toString() },
+]);
+---
+
+<BaseLayout
+  title="Rubros: emprendedores y servicios por categoría"
+  description="Encontrá emprendedores, profesionales y servicios de tu ciudad por rubro: gastronomía, belleza, tecnología, oficios y más."
+  canonicalPath={directoryPath.index}
+>
+  <script slot="head" type="application/ld+json" set:html={jsonLdScript(crumbs)} />
+  <section class="mx-auto max-w-5xl px-4 py-10">
+    <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">Rubros</h1>
+    <p class="mt-2 max-w-2xl text-ink-muted">Elegí un rubro para ver los emprendimientos que lo ofrecen y en qué ciudades están.</p>
+
+    <ul class="mt-8 grid gap-x-8 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+      {
+        categories.map((c) => (
+          <li>
+            <a href={directoryPath.category(c.slug)} class="flex items-baseline justify-between gap-3 border-b border-line py-3 hover:text-brand">
+              <span class="font-semibold">{c.name}</span>
+              <span class="text-sm text-ink-muted">{c.businesses > 0 ? `${c.businesses} ${c.businesses === 1 ? "emprendimiento" : "emprendimientos"}` : "Sin emprendimientos aún"}</span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+
+    <p class="mt-10 text-sm text-ink-muted">
+      ¿Tenés un emprendimiento? <a href="/panel/emprendimientos/nuevo" class="font-semibold text-brand hover:underline">Creá su página gratis</a> y aparecé en tu rubro.
+    </p>
+  </section>
+</BaseLayout>
