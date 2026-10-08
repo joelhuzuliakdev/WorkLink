@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · tilde de verificado también en el inicio y las notificaciones
+# WorkLink · instalador de la Etapa 9 (mensajes privados)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-tilde.sh
+#     bash instalar-etapa9.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0016 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0017 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos del tilde de verificado..."
+echo "Instalando archivos de la Etapa 9..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -506,6 +506,7 @@ import { business } from "./business";
 import { catalog } from "./catalog";
 import { posts } from "./posts";
 import { social } from "./social";
+import { messages } from "./messages";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -518,6 +519,50 @@ export const server = {
   catalog,
   posts,
   social,
+  messages,
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/messages.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { conversationRefSchema, sendMessageSchema } from "../schemas/message";
+import { dbError, requireUser } from "../lib/auth/guards";
+
+/**
+ * Mensajes privados. La base controla quién puede escribir (participantes,
+ * sin bloqueo, cuenta activa) y los límites; acá se traducen los errores.
+ */
+export const messages = {
+  send: defineAction({
+    accept: "form",
+    input: sendMessageSchema,
+    handler: async ({ conversation_id, body, post_id }, { locals }) => {
+      const user = requireUser(locals.user);
+      const { data, error } = await locals.supabase
+        .from("messages")
+        .insert({ conversation_id, sender_id: user.id, body, post_id: post_id ?? null })
+        .select("id, sender_id, body, created_at, post:posts ( id, title, body )")
+        .single();
+      if (error) {
+        if (error.code === "42501") {
+          throw new ActionError({ code: "FORBIDDEN", message: "No podés escribir en esta conversación." });
+        }
+        throw dbError(error, "No pudimos enviar el mensaje. Probá de nuevo.");
+      }
+      return data as unknown as { id: string; sender_id: string; body: string; created_at: string; post: { id: string; title: string | null; body: string } | null };
+    },
+  }),
+
+  hide: defineAction({
+    accept: "form",
+    input: conversationRefSchema,
+    handler: async ({ conversation_id }, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("hide_conversation", { p_conversation_id: conversation_id });
+      if (error) throw dbError(error, "No pudimos ocultar la conversación.");
+      return { ok: true };
+    },
+  }),
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -907,10 +952,12 @@ import { brand } from "../../config/brand";
 interface Props {
   /** "full" = símbolo + nombre; "mark" = solo el símbolo. */
   variant?: "full" | "mark";
+  /** En celulares muestra solo el símbolo (deja lugar a los íconos del encabezado). */
+  collapseOnMobile?: boolean;
   class?: string;
 }
 
-const { variant = "full", class: className = "" } = Astro.props;
+const { variant = "full", collapseOnMobile = false, class: className = "" } = Astro.props;
 ---
 
 <span class:list={["inline-flex items-center gap-2", className]}>
@@ -923,7 +970,7 @@ const { variant = "full", class: className = "" } = Astro.props;
   </svg>
   {
     variant === "full" ? (
-      <span class="font-display text-xl font-bold tracking-tight text-ink">
+      <span class:list={["font-display text-xl font-bold tracking-tight text-ink", collapseOnMobile && "hidden sm:inline"]}>
         Work<span class="text-brand">Link</span>
       </span>
     ) : (
@@ -1563,6 +1610,7 @@ const name = displayName(viewer);
 
 const links = [
   { href: `/u/${viewer.username}`, label: "Mi perfil" },
+  { href: "/mensajes", label: "Mensajes" },
   { href: "/panel/publicaciones", label: "Mis publicaciones" },
   { href: "/panel/guardados", label: "Guardados" },
   { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
@@ -2008,10 +2056,13 @@ import { routes } from "../../config/site";
 import { getViewerProfile } from "../../lib/viewer";
 import { displayName } from "../../services/profiles";
 import { countUnread } from "../../services/notifications";
+import { countUnreadConversations } from "../../services/messages";
 
 const user = Astro.locals.user;
 const viewer = await getViewerProfile(Astro.locals);
-const unread = user ? await countUnread(Astro.locals.supabase, user.id) : 0;
+const [unread, unreadMessages] = user
+  ? await Promise.all([countUnread(Astro.locals.supabase, user.id), countUnreadConversations(Astro.locals.supabase)])
+  : [0, 0];
 const badge = (n: number) => (n > 99 ? "99+" : String(n));
 const logoutAction = `/salir${actions.auth.signOut}`;
 const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
@@ -2020,7 +2071,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
 <header class="sticky top-0 z-30 border-b border-line bg-bg/85 backdrop-blur supports-[backdrop-filter]:bg-bg/70">
   <div class="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4">
     <a href={routes.home} class="shrink-0 rounded-wl" aria-label="WorkLink, ir al inicio">
-      <Logo />
+      <Logo collapseOnMobile={Boolean(user)} />
     </a>
 
     <form action="/buscar" method="GET" role="search" class="hidden max-w-xs flex-1 md:block">
@@ -2043,6 +2094,22 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
       {
         user ? (
           <>
+            <a
+              href="/mensajes"
+              class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
+              aria-label={unreadMessages ? `Mensajes (${unreadMessages} sin leer)` : "Mensajes"}
+            >
+              <svg viewBox="0 0 24 24" class="h-[22px] w-[22px] fill-none stroke-current stroke-2" aria-hidden="true">
+                <path stroke-linejoin="round" d="M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z" />
+              </svg>
+              <span
+                data-messages-badge
+                hidden={unreadMessages === 0}
+                class="absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white"
+              >
+                {badge(unreadMessages)}
+              </span>
+            </a>
             <a
               href="/notificaciones"
               class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
@@ -3352,7 +3419,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -4182,9 +4249,11 @@ export interface Props {
   image?: string;
   /** Oculta Header y Footer (pantallas enfocadas). */
   bare?: boolean;
+  /** Oculta solo el Footer (pantallas de altura completa, como el chat). */
+  hideFooter?: boolean;
 }
 
-const { title, description = brand.description, canonicalPath, noindex = false, image, bare = false } = Astro.props;
+const { title, description = brand.description, canonicalPath, noindex = false, image, bare = false, hideFooter = false } = Astro.props;
 
 const fullTitle = title ? `${title} · ${brand.name}` : `${brand.name} · ${brand.tagline}`;
 const site = Astro.site ?? new URL(Astro.url.origin);
@@ -4230,7 +4299,7 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
     <main id="contenido" class="flex-1">
       <slot />
     </main>
-    {!bare && <Footer />}
+    {!bare && !hideFooter && <Footer />}
   </body>
 </html>
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -5171,19 +5240,52 @@ export const GET: APIRoute = async ({ request }) => {
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/api/mensajes/[id].ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { getConversation, getMessagesAfter, markConversationRead } from "../../../services/messages";
+
+/**
+ * Mensajes nuevos de una conversación (la pide la pantalla del chat cada
+ * pocos segundos): GET /api/mensajes/<id>?despues=<fecha ISO>
+ * Responde los mensajes nuevos y hasta dónde leyó la otra persona ("Visto").
+ * Si llegaron mensajes de la otra persona, marca la conversación como leída.
+ */
+export const GET: APIRoute = async ({ params, url, locals }) => {
+  const headers = { "Cache-Control": "private, no-store" };
+  const user = locals.user;
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401, headers });
+
+  const id = params.id ?? "";
+  const after = url.searchParams.get("despues") ?? "";
+  if (!/^[0-9a-f-]{36}$/.test(id) || Number.isNaN(Date.parse(after))) {
+    return Response.json({ error: "bad_request" }, { status: 400, headers });
+  }
+
+  const conversation = await getConversation(locals.supabase, id, user.id);
+  if (!conversation) return Response.json({ error: "not_found" }, { status: 404, headers });
+
+  const messages = await getMessagesAfter(locals.supabase, id, after);
+  if (messages.some((m) => m.sender_id !== user.id)) await markConversationRead(locals.supabase, id);
+
+  return Response.json({ messages, otherLastReadAt: conversation.otherLastReadAt }, { headers });
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/api/notificaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { countUnread } from "../../services/notifications";
+import { countUnreadConversations } from "../../services/messages";
 
 /**
  * Cantidad de notificaciones sin leer del usuario actual (para la campanita).
- * GET /api/notificaciones -> { unread: number }. Privado: nunca se cachea.
+ * y de conversaciones con mensajes sin leer (para el ícono de mensajes).
+ * GET /api/notificaciones -> { unread, messages }. Privado: nunca se cachea.
  */
 export const GET: APIRoute = async ({ locals }) => {
   const headers = { "Cache-Control": "private, no-store" };
-  if (!locals.user) return Response.json({ unread: 0 }, { status: 401, headers });
-  const unread = await countUnread(locals.supabase, locals.user.id);
-  return Response.json({ unread }, { headers });
+  if (!locals.user) return Response.json({ unread: 0, messages: 0 }, { status: 401, headers });
+  const [unread, messages] = await Promise.all([countUnread(locals.supabase, locals.user.id), countUnreadConversations(locals.supabase)]);
+  return Response.json({ unread, messages }, { headers });
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -5624,6 +5726,7 @@ import { instagramUrl, tiktokUrl, whatsappUrl } from "../../lib/contact";
 import { formatLocation, formatMonthYear } from "../../lib/format";
 import { breadcrumbJsonLd, businessJsonLd, jsonLdScript } from "../../lib/seo/business";
 import { routes } from "../../config/site";
+import { newMessagePath } from "../../services/messages";
 import { directoryPath } from "../../services/directory";
 
 const { supabase, user } = Astro.locals;
@@ -5638,11 +5741,14 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }, following] = await Promise.all([
+const [catalog, { posts: businessPosts }, following, { data: owner }] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
   isFollowing(supabase, user?.id, "business", business.id),
+  supabase.from("profiles").select("username").eq("id", business.owner_id).eq("status", "active").maybeSingle(),
 ]);
+// Mensajes privados: le llegan a quien creó el emprendimiento.
+const messageHref = owner && owner.username && user?.id !== business.owner_id ? newMessagePath(owner.username) : null;
 const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
 const isPublic = business.status === "active";
 
@@ -5816,6 +5922,7 @@ const jsonLd = [
             <h2 class="font-semibold">Contacto</h2>
             {user ? (
               <div class="mt-4 flex flex-col gap-2">
+                {messageHref && <Button href={messageHref} variant="secondary" block>Enviar mensaje</Button>}
                 {business.whatsapp && (
                   <Button href={whatsappUrl(business.whatsapp, waMessage)} variant="primary" block target="_blank" rel="noopener nofollow">
                     Escribir por WhatsApp
@@ -5827,7 +5934,7 @@ const jsonLd = [
                 {business.email && (
                   <Button href={`mailto:${business.email}`} variant="secondary" block>Enviar email</Button>
                 )}
-                {!business.whatsapp && !business.phone && !business.email && (
+                {!messageHref && !business.whatsapp && !business.phone && !business.email && (
                   <p class="text-sm text-ink-muted">Todavía no cargó datos de contacto.</p>
                 )}
               </div>
@@ -6024,6 +6131,266 @@ Astro.response.headers.set("X-Robots-Tag", "noindex");
 />
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/mensajes/[id].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Conversación privada. Funciona sin JavaScript (formulario común); con
+ * JavaScript envía sin recargar y trae los mensajes nuevos cada pocos
+ * segundos (scripts/chat.ts). Al abrirla se marca como leída.
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import SituationBadge from "../../components/social/SituationBadge.astro";
+import { getConversation, getMessages, markConversationRead } from "../../services/messages";
+import { getPost, postHeadline } from "../../services/posts";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+import { postPath, profilePath } from "../../lib/urls";
+import { MESSAGE_MAX } from "../../schemas/message";
+
+const { supabase, user } = Astro.locals;
+const id = Astro.params.id ?? "";
+if (!/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+// Envío sin JavaScript: volver a la conversación con GET.
+const sent = Astro.getActionResult(actions.messages.send);
+if (sent && !sent.error) return Astro.redirect(`/mensajes/${id}#ultimo`, 303);
+const hidden = Astro.getActionResult(actions.messages.hide);
+if (hidden && !hidden.error) return Astro.redirect("/mensajes?oculta=1", 303);
+const sendError = sent?.error ? (isInputError(sent.error) ? sent.error.fields.body?.[0] : sent.error.message) : null;
+
+const conversation = await getConversation(supabase, id, user!.id);
+if (!conversation) return Astro.rewrite("/404");
+
+const before = Astro.url.searchParams.get("antes");
+const { messages, hasOlder } = await getMessages(supabase, id, { before });
+if (conversation.unread) await markConversationRead(supabase, id);
+
+// Consulta sobre una publicación (viene de "Enviar mensaje" en una publicación).
+const postParam = Astro.url.searchParams.get("publicacion");
+const contextPost = postParam && /^[0-9a-f-]{36}$/.test(postParam) ? await getPost(supabase, postParam) : null;
+
+const other = conversation.other;
+const name = other ? displayName(other) : "Usuario";
+const me = user!.id;
+const dayKey = (iso: string) => formatDate(iso, { year: "numeric", month: "2-digit", day: "2-digit" });
+const today = dayKey(new Date().toISOString());
+const yesterday = dayKey(new Date(Date.now() - 86400000).toISOString());
+const dayLabel = (iso: string) => {
+  const key = dayKey(iso);
+  return key === today ? "Hoy" : key === yesterday ? "Ayer" : formatDate(iso, { weekday: "long", day: "numeric", month: "long" });
+};
+const lastMine = [...messages].reverse().find((m) => m.sender_id === me);
+const seen = Boolean(lastMine && conversation.otherLastReadAt && conversation.otherLastReadAt >= lastMine.created_at);
+const lastAt = messages.length ? messages[messages.length - 1].created_at : new Date(0).toISOString();
+---
+
+<BaseLayout title={`Mensajes con ${name}`} noindex hideFooter>
+  <section
+    class="mx-auto flex h-[calc(100dvh-4rem)] max-w-2xl flex-col border-x border-line bg-surface"
+    data-chat
+    data-conversation={id}
+    data-me={me}
+    data-last={lastAt}
+    data-other-read={conversation.otherLastReadAt ?? ""}
+  >
+    <header class="flex items-center gap-3 border-b border-line px-3 py-2.5">
+      <a href="/mensajes" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted" aria-label="Volver a mensajes">
+        <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7" /></svg>
+      </a>
+      {other ? (
+        <a href={profilePath(other.username)} class="flex min-w-0 flex-1 items-center gap-3">
+          <Avatar name={name} path={other.avatar_path} size={40} />
+          <span class="min-w-0">
+            <span class="flex items-center gap-1.5 font-semibold">
+              <span class="truncate">{name}</span>
+              {other.verified_at && <VerifiedBadge size={14} />}
+              <SituationBadge situation={other.situation} />
+            </span>
+            {other.headline && <span class="block truncate text-xs text-ink-muted">{other.headline}</span>}
+          </span>
+        </a>
+      ) : (
+        <span class="flex-1 font-semibold">{name}</span>
+      )}
+      <form method="POST" action={actions.messages.hide} data-confirm="¿Ocultar esta conversación de tu bandeja?">
+        <input type="hidden" name="conversation_id" value={id} />
+        <button type="submit" class="rounded-wl px-2 py-1 text-xs font-semibold text-ink-muted hover:bg-surface-muted hover:text-ink">Ocultar</button>
+      </form>
+    </header>
+
+    <div class="flex-1 overflow-y-auto px-3 py-4" data-chat-scroll>
+      {hasOlder && messages[0] && (
+        <p class="mb-4 text-center">
+          <a href={`/mensajes/${id}?antes=${encodeURIComponent(messages[0].created_at)}`} class="text-sm font-semibold text-brand hover:underline">Ver mensajes anteriores</a>
+        </p>
+      )}
+      {messages.length === 0 && (
+        <p class="mt-10 text-center text-sm text-ink-muted" data-chat-empty>
+          Escribile a {other?.first_name ?? name}. Los mensajes son privados: solo los ven ustedes dos.
+        </p>
+      )}
+      <ol class="flex flex-col gap-1.5" data-chat-list>
+        {messages.map((m, index) => {
+          const mine = m.sender_id === me;
+          const newDay = index === 0 || dayKey(messages[index - 1].created_at) !== dayKey(m.created_at);
+          return (
+            <>
+              {newDay && <li class="my-3 text-center text-xs font-semibold capitalize text-ink-muted" data-day={dayKey(m.created_at)}>{dayLabel(m.created_at)}</li>}
+              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id}>
+                <div class:list={["max-w-[80%] rounded-2xl px-3.5 py-2", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
+                  {m.post && (
+                    <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
+                      Consulta sobre: <strong>{postHeadline(m.post, 60)}</strong>
+                    </a>
+                  )}
+                  <p class="whitespace-pre-line break-words">{m.body}</p>
+                  <time datetime={m.created_at} class:list={["mt-0.5 block text-right text-[11px]", mine ? "opacity-75" : "text-ink-muted"]}>
+                    {formatDate(m.created_at, { hour: "2-digit", minute: "2-digit" })}
+                  </time>
+                </div>
+              </li>
+            </>
+          );
+        })}
+      </ol>
+      <p class="mt-1 text-right text-xs text-ink-muted" data-chat-seen hidden={!seen}>Visto</p>
+      <span id="ultimo"></span>
+    </div>
+
+    <form method="POST" action={actions.messages.send} class="border-t border-line p-3" data-chat-form>
+      <input type="hidden" name="conversation_id" value={id} />
+      {contextPost && (
+        <div class="mb-2 flex items-center justify-between gap-2 rounded-wl bg-surface-muted px-3 py-2 text-sm" data-chat-context>
+          <span class="min-w-0 truncate">Consulta sobre: <strong>{postHeadline(contextPost, 60)}</strong></span>
+          <input type="hidden" name="post_id" value={contextPost.id} />
+        </div>
+      )}
+      {sendError && <p class="mb-2 text-sm text-danger" role="alert" data-chat-error>{sendError}</p>}
+      <p class="mb-2 hidden text-sm text-danger" role="alert" data-chat-error-js></p>
+      <div class="flex items-end gap-2">
+        <label for="chat-body" class="sr-only">Mensaje</label>
+        <textarea
+          id="chat-body"
+          name="body"
+          rows="1"
+          maxlength={MESSAGE_MAX}
+          required
+          placeholder="Escribí un mensaje…"
+          class="max-h-40 min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface-muted px-4 py-2.5 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+        ></textarea>
+        <button type="submit" class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast hover:bg-brand-hover disabled:opacity-50" aria-label="Enviar">
+          <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
+        </button>
+      </div>
+    </form>
+  </section>
+</BaseLayout>
+
+<script>
+  import "../../scripts/chat";
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/mensajes/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Bandeja de mensajes: conversaciones de la más reciente a la más vieja. */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import { getConversations } from "../../services/messages";
+import { displayName } from "../../services/profiles";
+import { formatRelative } from "../../lib/format";
+
+const { supabase, user } = Astro.locals;
+const conversations = await getConversations(supabase, user!.id);
+const hidden = Astro.url.searchParams.get("oculta") === "1";
+---
+
+<BaseLayout title="Mensajes" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <h1 class="text-2xl font-bold">Mensajes</h1>
+    {hidden && <p class="mt-3 text-sm text-ink-muted">Ocultaste la conversación. Si te vuelven a escribir, aparece de nuevo.</p>}
+
+    {
+      conversations.length === 0 ? (
+        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <p class="font-semibold">Todavía no tenés mensajes.</p>
+          <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Enviar mensaje”.</p>
+        </div>
+      ) : (
+        <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+          {conversations.map((c) => {
+            const name = c.other ? displayName(c.other) : "Usuario";
+            const mine = c.last_sender_id === user!.id;
+            return (
+              <li>
+                <a href={`/mensajes/${c.id}`} class:list={["flex items-center gap-3 p-4 hover:bg-surface-muted", c.unread && "bg-seek-soft/60"]}>
+                  <Avatar name={name} path={c.other?.avatar_path} size={52} />
+                  <span class="min-w-0 flex-1">
+                    <span class="flex items-baseline justify-between gap-3">
+                      <span class:list={["inline-flex min-w-0 items-center gap-1", c.unread ? "font-bold" : "font-semibold"]}>
+                        <span class="truncate">{name}</span>
+                        {c.other?.verified_at && <VerifiedBadge size={14} />}
+                      </span>
+                      {c.last_message_at && <span class:list={["shrink-0 text-xs", c.unread ? "font-semibold text-seek" : "text-ink-muted"]}>{formatRelative(c.last_message_at)}</span>}
+                    </span>
+                    <span class:list={["block truncate text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
+                      {mine && "Vos: "}{c.last_message_preview}
+                    </span>
+                  </span>
+                  {c.unread && <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Sin leer" />}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/mensajes/nuevo.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Empezar (o retomar) una conversación: /mensajes/nuevo?con=usuario&publicacion=id
+ * La base verifica que la persona exista, que no haya bloqueo y los límites.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Button from "../../components/ui/Button.astro";
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.url.searchParams.get("con") ?? "").toLowerCase();
+const postId = Astro.url.searchParams.get("publicacion");
+let message = "Esa cuenta no existe o no está disponible.";
+
+if (/^[a-z0-9_.]{3,30}$/.test(username)) {
+  const { data: other } = await supabase.from("profiles").select("id").eq("username", username).eq("status", "active").maybeSingle();
+  if (other?.id === user!.id) {
+    message = "No podés escribirte a vos.";
+  } else if (other) {
+    const { data, error } = await supabase.rpc("start_conversation", { p_other: other.id });
+    if (!error && data) {
+      const query = postId && /^[0-9a-f-]{36}$/.test(postId) ? `?publicacion=${postId}` : "";
+      return Astro.redirect(`/mensajes/${data}${query}`);
+    }
+    message = error?.message ?? "No pudimos abrir la conversación.";
+  }
+}
+---
+
+<BaseLayout title="Mensajes" noindex>
+  <section class="mx-auto max-w-xl px-4 py-16 text-center">
+    <h1 class="text-2xl font-bold">No pudimos abrir la conversación</h1>
+    <p class="mt-2 text-ink-muted">{message}</p>
+    <div class="mt-6"><Button href="/mensajes" variant="secondary">Ir a mis mensajes</Button></div>
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/notificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -6145,6 +6512,7 @@ import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import FollowButton from "../../components/social/FollowButton.astro";
 import CommentsSection from "../../components/social/CommentsSection.astro";
 import { getComments, getViewerReactions, isFollowing } from "../../services/social";
+import { newMessagePath } from "../../services/messages";
 import { getFeed, getPost, POST_TYPE_LABELS, postHeadline } from "../../services/posts";
 import { displayName } from "../../services/profiles";
 import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
@@ -6355,6 +6723,9 @@ const jsonLd =
       ) : post.author ? (
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
+      {post.author && !isOwner && isPublic && (
+        <Button href={newMessagePath(post.author.username, post.id)} variant="secondary" size="lg">Enviar mensaje</Button>
+      )}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
       {isOwner && (
@@ -8168,6 +8539,7 @@ import { instagramUrl, tiktokUrl, whatsappUrl } from "../../../lib/contact";
 import { formatLocation, formatMonthYear } from "../../../lib/format";
 import { getViewerProfile } from "../../../lib/viewer";
 import { routes } from "../../../config/site";
+import { newMessagePath } from "../../../services/messages";
 import Alert from "../../../components/ui/Alert.astro";
 
 const { supabase, user } = Astro.locals;
@@ -8216,12 +8588,11 @@ const firstName = profile.first_name ?? name;
           ) : (
             <>
               <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
-              {profile.whatsapp ? (
+              <Button href={newMessagePath(profile.username)} variant="secondary">Mensaje</Button>
+              {profile.whatsapp && (
                 <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
                   WhatsApp
                 </Button>
-              ) : (
-                !user && <Button href={`${routes.login}?next=${encodeURIComponent(base)}`} variant="secondary">Contactar</Button>
               )}
             </>
           )
@@ -8720,6 +9091,29 @@ export const optionalMediaPath = z.preprocess(
 );
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/schemas/message.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const emptyToUndefined = (value: unknown) => (value === "" || value === null ? undefined : value);
+
+export const MESSAGE_MAX = 2000;
+
+export const sendMessageSchema = z.object({
+  conversation_id: z.string().regex(UUID),
+  body: z
+    .string({ error: "Escribí un mensaje" })
+    .trim()
+    .min(1, { error: "Escribí un mensaje" })
+    .max(MESSAGE_MAX, { error: `El mensaje puede tener hasta ${MESSAGE_MAX} caracteres` }),
+  post_id: z.preprocess(emptyToUndefined, z.string().regex(UUID).optional()),
+});
+
+export const conversationRefSchema = z.object({
+  conversation_id: z.string().regex(UUID),
+});
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/schemas/post.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import { z } from "astro/zod";
 import { optionalAmount, optionalId, optionalText } from "./common";
@@ -8913,6 +9307,192 @@ export const commentRefSchema = z.object({
 });
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/scripts/chat.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Pantalla de conversación:
+ *  - envía sin recargar (y si algo falla, deja el texto para reintentar)
+ *  - trae los mensajes nuevos cada 4 segundos mientras la pestaña está a la vista
+ *  - muestra "Visto" cuando la otra persona leyó el último mensaje propio
+ *  - Enter envía en computadora (Shift+Enter hace un salto de línea)
+ * Los textos se insertan con textContent: nunca como HTML.
+ */
+import { actions } from "astro:actions";
+
+interface ChatMessage {
+  id: string;
+  sender_id: string;
+  body: string;
+  created_at: string;
+  post: { id: string; title: string | null; body: string } | null;
+}
+
+const TZ = "America/Argentina/Cordoba";
+const POLL_MS = 4000;
+const dayKey = (iso: string) =>
+  new Intl.DateTimeFormat("es-AR", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+const timeLabel = (iso: string) => new Intl.DateTimeFormat("es-AR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
+function slug(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/g, "");
+}
+
+const root = document.querySelector<HTMLElement>("[data-chat]");
+if (root) {
+  const conversationId = root.dataset.conversation!;
+  const me = root.dataset.me!;
+  const list = root.querySelector<HTMLOListElement>("[data-chat-list]")!;
+  const scroller = root.querySelector<HTMLElement>("[data-chat-scroll]")!;
+  const form = root.querySelector<HTMLFormElement>("[data-chat-form]")!;
+  const textarea = form.querySelector<HTMLTextAreaElement>("textarea")!;
+  const sendButton = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+  const seen = root.querySelector<HTMLElement>("[data-chat-seen]")!;
+  const errorBox = root.querySelector<HTMLElement>("[data-chat-error-js]")!;
+  let last = root.dataset.last!;
+  let otherRead = root.dataset.otherRead || "";
+  let lastMineAt = [...list.querySelectorAll<HTMLElement>("li[data-message]")]
+    .filter((li) => li.classList.contains("justify-end"))
+    .map((li) => li.querySelector("time")?.getAttribute("datetime") ?? "")
+    .pop() ?? "";
+
+  const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+  const toBottom = () => (scroller.scrollTop = scroller.scrollHeight);
+  toBottom();
+
+  const updateSeen = () => {
+    seen.hidden = !(lastMineAt && otherRead && otherRead >= lastMineAt);
+  };
+
+  function render(message: ChatMessage) {
+    if (list.querySelector(`[data-message="${message.id}"]`)) return;
+    root!.querySelector("[data-chat-empty]")?.remove();
+
+    const days = list.querySelectorAll<HTMLElement>("li[data-day]");
+    const lastDay = days[days.length - 1]?.dataset.day;
+    const key = dayKey(message.created_at);
+    if (lastDay !== key) {
+      const sep = document.createElement("li");
+      sep.className = "my-3 text-center text-xs font-semibold text-ink-muted";
+      sep.dataset.day = key;
+      sep.textContent = "Hoy";
+      list.append(sep);
+    }
+
+    const mine = message.sender_id === me;
+    const li = document.createElement("li");
+    li.className = `flex ${mine ? "justify-end" : "justify-start"}`;
+    li.dataset.message = message.id;
+    const bubble = document.createElement("div");
+    bubble.className = `max-w-[80%] rounded-2xl px-3.5 py-2 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
+    if (message.post) {
+      const link = document.createElement("a");
+      const words = slug(message.post.title || message.post.body);
+      link.href = `/p/${words ? `${words}-` : ""}${message.post.id}`;
+      link.className = `mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs ${mine ? "border-white/30" : "border-line"}`;
+      link.append("Consulta sobre: ");
+      const strong = document.createElement("strong");
+      strong.textContent = (message.post.title || message.post.body).slice(0, 60);
+      link.append(strong);
+      bubble.append(link);
+    }
+    const text = document.createElement("p");
+    text.className = "whitespace-pre-line break-words";
+    text.textContent = message.body;
+    const time = document.createElement("time");
+    time.dateTime = message.created_at;
+    time.className = `mt-0.5 block text-right text-[11px] ${mine ? "opacity-75" : "text-ink-muted"}`;
+    time.textContent = timeLabel(message.created_at);
+    bubble.append(text, time);
+    li.append(bubble);
+    list.append(li);
+
+    if (message.created_at > last) last = message.created_at;
+    if (mine && message.created_at > lastMineAt) lastMineAt = message.created_at;
+  }
+
+  // Altura automática del cuadro de texto.
+  const resize = () => {
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  };
+  textarea.addEventListener("input", resize);
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !matchMedia("(pointer: coarse)").matches) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = textarea.value.trim();
+    if (!body || sendButton.disabled) return;
+    sendButton.disabled = true;
+    errorBox.classList.add("hidden");
+    try {
+      const { data, error } = await actions.messages.send(new FormData(form));
+      if (error) {
+        errorBox.textContent = error.message || "No pudimos enviar el mensaje.";
+        errorBox.classList.remove("hidden");
+        return;
+      }
+      render(data as ChatMessage);
+      textarea.value = "";
+      resize();
+      // La publicación consultada se cita solo en el primer mensaje.
+      form.querySelector("[data-chat-context]")?.remove();
+      form.querySelector("[data-chat-error]")?.remove();
+      updateSeen();
+      toBottom();
+    } catch {
+      errorBox.textContent = "Sin conexión. Tu mensaje no se envió: probá de nuevo.";
+      errorBox.classList.remove("hidden");
+    } finally {
+      sendButton.disabled = false;
+      textarea.focus();
+    }
+  });
+
+  let polling = false;
+  async function poll() {
+    if (polling || document.visibilityState !== "visible") return;
+    polling = true;
+    try {
+      const res = await fetch(`/api/mensajes/${conversationId}?despues=${encodeURIComponent(last)}`, { headers: { Accept: "application/json" } });
+      if (res.ok) {
+        const json = (await res.json()) as { messages: ChatMessage[]; otherLastReadAt: string | null };
+        const stick = nearBottom();
+        for (const message of json.messages) render(message);
+        otherRead = json.otherLastReadAt ?? otherRead;
+        updateSeen();
+        if (json.messages.length && stick) toBottom();
+      }
+    } catch {
+      /* sin conexión: se reintenta */
+    } finally {
+      polling = false;
+    }
+  }
+  setInterval(poll, POLL_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void poll();
+  });
+
+  // Confirmación para "Ocultar".
+  for (const confirmForm of root.querySelectorAll<HTMLFormElement>("form[data-confirm]")) {
+    confirmForm.addEventListener("submit", (event) => {
+      if (!window.confirm(confirmForm.dataset.confirm ?? "¿Confirmás?")) event.preventDefault();
+    });
+  }
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/scripts/load-more.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
  * "Cargar más" sin recargar: pide el fragmento HTML de la página siguiente y
@@ -8954,7 +9534,11 @@ async function refresh() {
   try {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
-    const { unread } = (await res.json()) as { unread: number };
+    const { unread, messages } = (await res.json()) as { unread: number; messages: number };
+    for (const badge of document.querySelectorAll<HTMLElement>("[data-messages-badge]")) {
+      badge.textContent = messages > 99 ? "99+" : String(messages);
+      badge.hidden = messages === 0;
+    }
     for (const badge of document.querySelectorAll<HTMLElement>("[data-notifications-badge]")) {
       badge.textContent = unread > 99 ? "99+" : String(unread);
       badge.hidden = unread === 0;
@@ -9611,6 +10195,161 @@ export function toCityRef(row: CityRow | null | undefined): CityRef | null {
 export async function getCity(supabase: SupabaseClient, id: number): Promise<CityRef | null> {
   const { data } = await supabase.from("cities").select(CITY_EMBED).eq("id", id).maybeSingle();
   return toCityRef(data as CityRow | null);
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/messages.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * Mensajes privados. RLS garantiza que solo los dos participantes ven la
+ * conversación; las altas pasan por funciones de la base (start_conversation)
+ * y por insert en messages (con bloqueos y límites controlados por la base).
+ */
+
+export interface ChatPerson {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  verified_at: string | null;
+  situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
+  headline: string | null;
+}
+
+export interface ConversationView {
+  id: string;
+  other: ChatPerson | null;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  last_sender_id: string | null;
+  myLastReadAt: string;
+  otherLastReadAt: string | null;
+  hidden: boolean;
+  unread: boolean;
+}
+
+export interface MessageView {
+  id: string;
+  sender_id: string;
+  body: string;
+  created_at: string;
+  post: { id: string; title: string | null; body: string } | null;
+}
+
+const PERSON = "id, username, first_name, last_name, avatar_path, verified_at, situation, headline";
+const CONVERSATION_COLUMNS = `id, user_low, user_high, last_message_at, last_message_preview, last_sender_id,
+  low:profiles!conversations_user_low_fkey ( ${PERSON} ),
+  high:profiles!conversations_user_high_fkey ( ${PERSON} ),
+  conversation_members ( user_id, last_read_at, hidden_at )`;
+
+type ConversationRow = {
+  id: string;
+  user_low: string;
+  user_high: string;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  last_sender_id: string | null;
+  low: ChatPerson | null;
+  high: ChatPerson | null;
+  conversation_members: { user_id: string; last_read_at: string; hidden_at: string | null }[];
+};
+
+function toConversation(row: ConversationRow, me: string): ConversationView {
+  const mine = row.conversation_members.find((m) => m.user_id === me);
+  const theirs = row.conversation_members.find((m) => m.user_id !== me);
+  const myLastReadAt = mine?.last_read_at ?? new Date(0).toISOString();
+  return {
+    id: row.id,
+    other: row.user_low === me ? row.high : row.low,
+    last_message_at: row.last_message_at,
+    last_message_preview: row.last_message_preview,
+    last_sender_id: row.last_sender_id,
+    myLastReadAt,
+    otherLastReadAt: theirs?.last_read_at ?? null,
+    hidden: Boolean(mine?.hidden_at),
+    unread: Boolean(row.last_message_at && row.last_sender_id !== me && row.last_message_at > myLastReadAt),
+  };
+}
+
+/** Bandeja: conversaciones con mensajes, de la más reciente a la más vieja. */
+export async function getConversations(supabase: SupabaseClient, me: string, limit = 50): Promise<ConversationView[]> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select(CONVERSATION_COLUMNS)
+    .or(`user_low.eq.${me},user_high.eq.${me}`)
+    .not("last_message_at", "is", null)
+    .order("last_message_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return ((data ?? []) as unknown as ConversationRow[])
+    .map((row) => toConversation(row, me))
+    .filter((c) => !c.hidden && c.other);
+}
+
+export async function getConversation(supabase: SupabaseClient, id: string, me: string): Promise<ConversationView | null> {
+  const { data, error } = await supabase.from("conversations").select(CONVERSATION_COLUMNS).eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data ? toConversation(data as unknown as ConversationRow, me) : null;
+}
+
+export const MESSAGES_PAGE = 50;
+
+const MESSAGE_COLUMNS = "id, sender_id, body, created_at, post:posts ( id, title, body )";
+
+/** Últimos mensajes (o los anteriores a `before`), en orden cronológico. */
+export async function getMessages(
+  supabase: SupabaseClient,
+  conversationId: string,
+  { before }: { before?: string | null } = {},
+): Promise<{ messages: MessageView[]; hasOlder: boolean }> {
+  let query = supabase
+    .from("messages")
+    .select(MESSAGE_COLUMNS)
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(MESSAGES_PAGE + 1);
+  if (before && !Number.isNaN(Date.parse(before))) query = query.lt("created_at", before);
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as MessageView[];
+  return { messages: rows.slice(0, MESSAGES_PAGE).reverse(), hasOlder: rows.length > MESSAGES_PAGE };
+}
+
+/** Mensajes nuevos después de una fecha (para la actualización periódica). */
+export async function getMessagesAfter(supabase: SupabaseClient, conversationId: string, after: string): Promise<MessageView[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select(MESSAGE_COLUMNS)
+    .eq("conversation_id", conversationId)
+    .gt("created_at", after)
+    .order("created_at", { ascending: true })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as unknown as MessageView[];
+}
+
+export async function markConversationRead(supabase: SupabaseClient, conversationId: string): Promise<void> {
+  const { error } = await supabase.rpc("mark_conversation_read", { p_conversation_id: conversationId });
+  if (error) console.error("[mensajes]", error.message);
+}
+
+export async function countUnreadConversations(supabase: SupabaseClient): Promise<number> {
+  const { data, error } = await supabase.rpc("unread_conversations_count");
+  if (error) {
+    console.error("[mensajes]", error.message);
+    return 0;
+  }
+  return Number(data ?? 0);
+}
+
+/** Enlace para escribirle a alguien (opcionalmente citando una publicación). */
+export function newMessagePath(username: string, postId?: string | null): string {
+  const params = new URLSearchParams({ con: username });
+  if (postId) params.set("publicacion", postId);
+  return `/mensajes/nuevo?${params}`;
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -11457,13 +12196,310 @@ $$;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008001700_messages.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0017 · Mensajes privados (Etapa 9)
+-- =============================================================================
+-- * Conversaciones de a dos. Una sola conversación por par de personas.
+-- * Solo los dos participantes ven la conversación y sus mensajes (RLS).
+-- * Con bloqueo (en cualquier sentido) no se puede empezar ni escribir.
+-- * Cada participante tiene su estado: hasta dónde leyó (para "no leídos" y
+--   "Visto") y si la ocultó de su bandeja (vuelve a aparecer con un mensaje nuevo).
+-- * Un mensaje puede citar la publicación por la que se consulta.
+-- * Límites anti-spam: conversaciones nuevas por día y mensajes por hora.
+-- =============================================================================
+
+create table public.conversations (
+  id                    uuid primary key default gen_random_uuid(),
+  -- Par ordenado (user_low < user_high): garantiza una conversación por par.
+  user_low              uuid not null references public.profiles (id) on delete cascade,
+  user_high             uuid not null references public.profiles (id) on delete cascade,
+  created_by            uuid not null references public.profiles (id) on delete cascade,
+  created_at            timestamptz not null default now(),
+  last_message_at       timestamptz,
+  last_message_preview  text,
+  last_sender_id        uuid references public.profiles (id) on delete set null,
+  constraint conversations_pair_order check (user_low < user_high),
+  constraint conversations_pair_key unique (user_low, user_high)
+);
+
+create table public.conversation_members (
+  conversation_id  uuid not null references public.conversations (id) on delete cascade,
+  user_id          uuid not null references public.profiles (id) on delete cascade,
+  last_read_at     timestamptz not null default now(),
+  hidden_at        timestamptz,
+  primary key (conversation_id, user_id)
+);
+
+create index conversation_members_user_idx on public.conversation_members (user_id);
+
+create table public.messages (
+  id               uuid primary key default gen_random_uuid(),
+  conversation_id  uuid not null references public.conversations (id) on delete cascade,
+  sender_id        uuid not null references public.profiles (id) on delete cascade,
+  body             text not null,
+  post_id          uuid references public.posts (id) on delete set null,
+  created_at       timestamptz not null default now(),
+  constraint messages_body_len check (char_length(btrim(body)) between 1 and 2000)
+);
+
+create index messages_conversation_idx on public.messages (conversation_id, created_at desc, id desc);
+create index messages_sender_recent_idx on public.messages (sender_id, created_at desc);
+
+-- ¿El usuario actual participa de la conversación?
+create or replace function public.is_conversation_member(p_conversation_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.conversation_members m
+    where m.conversation_id = p_conversation_id and m.user_id = (select auth.uid())
+  );
+$$;
+
+revoke execute on function public.is_conversation_member(uuid) from public, anon;
+grant  execute on function public.is_conversation_member(uuid) to authenticated, service_role;
+
+-- La otra persona de la conversación (para el usuario actual).
+create or replace function public.conversation_other(p_conversation_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case when c.user_low = (select auth.uid()) then c.user_high else c.user_low end
+  from public.conversations c
+  where c.id = p_conversation_id
+    and (select auth.uid()) in (c.user_low, c.user_high);
+$$;
+
+revoke execute on function public.conversation_other(uuid) from public, anon;
+grant  execute on function public.conversation_other(uuid) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- Empezar (o retomar) una conversación con otra persona. Devuelve su id.
+-- -----------------------------------------------------------------------------
+create or replace function public.start_conversation(p_other uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me     uuid := (select auth.uid());
+  low    uuid;
+  high   uuid;
+  conv   uuid;
+begin
+  if me is null then
+    raise exception 'Tenés que ingresar' using errcode = '42501';
+  end if;
+  if p_other is null or p_other = me then
+    raise exception 'No podés escribirte a vos' using errcode = '22023';
+  end if;
+  if not public.is_active_user() then
+    raise exception 'Tu cuenta no puede enviar mensajes' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = p_other and p.status = 'active') then
+    raise exception 'Esa cuenta no está disponible' using errcode = '42501';
+  end if;
+  if public.is_blocked_between(me, p_other) then
+    raise exception 'No podés escribirle a esta persona' using errcode = '42501';
+  end if;
+
+  low  := least(me, p_other);
+  high := greatest(me, p_other);
+
+  select c.id into conv from public.conversations c where c.user_low = low and c.user_high = high;
+  if conv is not null then
+    return conv;
+  end if;
+
+  if (
+    select count(*) from public.conversations c
+    where c.created_by = me and c.created_at > now() - interval '24 hours'
+  ) >= public.setting_int('limits.conversations_per_day', 30) then
+    raise exception 'Empezaste muchas conversaciones hoy. Probá de nuevo mañana.'
+      using errcode = 'P0001', hint = 'rate_limited';
+  end if;
+
+  insert into public.conversations (user_low, user_high, created_by)
+  values (low, high, me)
+  on conflict (user_low, user_high) do nothing
+  returning id into conv;
+
+  if conv is null then
+    select c.id into conv from public.conversations c where c.user_low = low and c.user_high = high;
+    return conv;
+  end if;
+
+  insert into public.conversation_members (conversation_id, user_id)
+  values (conv, me), (conv, p_other);
+  return conv;
+end;
+$$;
+
+revoke execute on function public.start_conversation(uuid) from public, anon;
+grant  execute on function public.start_conversation(uuid) to authenticated;
+
+-- Marcar como leída (hasta ahora) para el usuario actual.
+create or replace function public.mark_conversation_read(p_conversation_id uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.conversation_members
+  set last_read_at = now()
+  where conversation_id = p_conversation_id and user_id = (select auth.uid());
+$$;
+
+revoke execute on function public.mark_conversation_read(uuid) from public, anon;
+grant  execute on function public.mark_conversation_read(uuid) to authenticated;
+
+-- Ocultar de mi bandeja (vuelve a aparecer si llega un mensaje nuevo).
+create or replace function public.hide_conversation(p_conversation_id uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.conversation_members
+  set hidden_at = now(), last_read_at = now()
+  where conversation_id = p_conversation_id and user_id = (select auth.uid());
+$$;
+
+revoke execute on function public.hide_conversation(uuid) from public, anon;
+grant  execute on function public.hide_conversation(uuid) to authenticated;
+
+-- Conversaciones con mensajes sin leer del usuario actual (para el ícono).
+create or replace function public.unread_conversations_count()
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select count(*)::integer
+  from public.conversation_members m
+  join public.conversations c on c.id = m.conversation_id
+  where m.user_id = (select auth.uid())
+    and c.last_message_at is not null
+    and c.last_sender_id is distinct from m.user_id
+    and c.last_message_at > m.last_read_at;
+$$;
+
+revoke execute on function public.unread_conversations_count() from public, anon;
+grant  execute on function public.unread_conversations_count() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Envío de mensajes: autor = usuario actual, límite por hora, y al guardarse
+-- actualiza la conversación (último mensaje) y la vuelve a mostrar a ambos.
+-- -----------------------------------------------------------------------------
+create or replace function public.tg_messages_before_insert()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.body := btrim(new.body);
+  if public.is_system_call() then
+    return new;
+  end if;
+  new.sender_id := (select auth.uid());
+  new.created_at := now();
+
+  perform public.enforce_rate_limit(
+    (select count(*) from public.messages m
+      where m.sender_id = new.sender_id and m.created_at > now() - interval '1 hour'),
+    'limits.messages_per_hour', 200,
+    'Mandaste muchos mensajes seguidos. Esperá un rato y probá de nuevo.'
+  );
+  return new;
+end;
+$$;
+
+create trigger messages_before_insert
+  before insert on public.messages
+  for each row execute function public.tg_messages_before_insert();
+
+create or replace function public.tg_messages_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.conversations
+  set last_message_at = new.created_at,
+      last_message_preview = left(regexp_replace(new.body, '\s+', ' ', 'g'), 140),
+      last_sender_id = new.sender_id
+  where id = new.conversation_id;
+
+  update public.conversation_members
+  set hidden_at = null,
+      last_read_at = case when user_id = new.sender_id then new.created_at else last_read_at end
+  where conversation_id = new.conversation_id;
+  return null;
+end;
+$$;
+
+create trigger messages_after_insert
+  after insert on public.messages
+  for each row execute function public.tg_messages_after_insert();
+
+-- -----------------------------------------------------------------------------
+-- Seguridad
+-- -----------------------------------------------------------------------------
+alter table public.conversations        enable row level security;
+alter table public.conversation_members enable row level security;
+alter table public.messages             enable row level security;
+
+create policy "conversations: participantes" on public.conversations
+  for select to authenticated
+  using ((select auth.uid()) in (user_low, user_high));
+
+create policy "conversation_members: participantes" on public.conversation_members
+  for select to authenticated
+  using ((select public.is_conversation_member(conversation_id)));
+
+create policy "messages: participantes leen" on public.messages
+  for select to authenticated
+  using ((select public.is_conversation_member(conversation_id)));
+
+create policy "messages: participantes escriben" on public.messages
+  for insert to authenticated
+  with check (
+    sender_id = (select auth.uid())
+    and (select public.is_active_user())
+    and (select public.is_conversation_member(conversation_id))
+    and not public.is_blocked_between((select auth.uid()), public.conversation_other(conversation_id))
+  );
+
+-- Todo lo demás pasa por las funciones de arriba: sin UPDATE/DELETE directos.
+revoke all on public.conversations, public.conversation_members, public.messages from anon, authenticated;
+grant select on public.conversations, public.conversation_members to authenticated;
+grant select, insert on public.messages to authenticated;
+
+insert into public.settings (key, value, is_public, description) values
+  ('limits.conversations_per_day', '30',  false, 'Conversaciones nuevas que una persona puede empezar cada 24 h'),
+  ('limits.messages_per_hour',     '200', false, 'Mensajes por persona cada hora')
+on conflict (key) do nothing;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 137 archivos del tilde de verificado instalados."
+echo " Listo. 146 archivos de la Etapa 9 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

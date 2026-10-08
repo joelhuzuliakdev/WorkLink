@@ -19,6 +19,7 @@ import { instagramUrl, tiktokUrl, whatsappUrl } from "../../lib/contact";
 import { formatLocation, formatMonthYear } from "../../lib/format";
 import { breadcrumbJsonLd, businessJsonLd, jsonLdScript } from "../../lib/seo/business";
 import { routes } from "../../config/site";
+import { newMessagePath } from "../../services/messages";
 import { directoryPath } from "../../services/directory";
 
 const { supabase, user } = Astro.locals;
@@ -33,11 +34,14 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }, following] = await Promise.all([
+const [catalog, { posts: businessPosts }, following, { data: owner }] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
   isFollowing(supabase, user?.id, "business", business.id),
+  supabase.from("profiles").select("username").eq("id", business.owner_id).eq("status", "active").maybeSingle(),
 ]);
+// Mensajes privados: le llegan a quien creó el emprendimiento.
+const messageHref = owner && owner.username && user?.id !== business.owner_id ? newMessagePath(owner.username) : null;
 const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
 const isPublic = business.status === "active";
 
@@ -211,6 +215,7 @@ const jsonLd = [
             <h2 class="font-semibold">Contacto</h2>
             {user ? (
               <div class="mt-4 flex flex-col gap-2">
+                {messageHref && <Button href={messageHref} variant="secondary" block>Enviar mensaje</Button>}
                 {business.whatsapp && (
                   <Button href={whatsappUrl(business.whatsapp, waMessage)} variant="primary" block target="_blank" rel="noopener nofollow">
                     Escribir por WhatsApp
@@ -222,7 +227,7 @@ const jsonLd = [
                 {business.email && (
                   <Button href={`mailto:${business.email}`} variant="secondary" block>Enviar email</Button>
                 )}
-                {!business.whatsapp && !business.phone && !business.email && (
+                {!messageHref && !business.whatsapp && !business.phone && !business.email && (
                   <p class="text-sm text-ink-muted">Todavía no cargó datos de contacto.</p>
                 )}
               </div>

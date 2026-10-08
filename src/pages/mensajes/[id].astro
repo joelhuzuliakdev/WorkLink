@@ -1,0 +1,160 @@
+---
+/**
+ * Conversación privada. Funciona sin JavaScript (formulario común); con
+ * JavaScript envía sin recargar y trae los mensajes nuevos cada pocos
+ * segundos (scripts/chat.ts). Al abrirla se marca como leída.
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import SituationBadge from "../../components/social/SituationBadge.astro";
+import { getConversation, getMessages, markConversationRead } from "../../services/messages";
+import { getPost, postHeadline } from "../../services/posts";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+import { postPath, profilePath } from "../../lib/urls";
+import { MESSAGE_MAX } from "../../schemas/message";
+
+const { supabase, user } = Astro.locals;
+const id = Astro.params.id ?? "";
+if (!/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+// Envío sin JavaScript: volver a la conversación con GET.
+const sent = Astro.getActionResult(actions.messages.send);
+if (sent && !sent.error) return Astro.redirect(`/mensajes/${id}#ultimo`, 303);
+const hidden = Astro.getActionResult(actions.messages.hide);
+if (hidden && !hidden.error) return Astro.redirect("/mensajes?oculta=1", 303);
+const sendError = sent?.error ? (isInputError(sent.error) ? sent.error.fields.body?.[0] : sent.error.message) : null;
+
+const conversation = await getConversation(supabase, id, user!.id);
+if (!conversation) return Astro.rewrite("/404");
+
+const before = Astro.url.searchParams.get("antes");
+const { messages, hasOlder } = await getMessages(supabase, id, { before });
+if (conversation.unread) await markConversationRead(supabase, id);
+
+// Consulta sobre una publicación (viene de "Enviar mensaje" en una publicación).
+const postParam = Astro.url.searchParams.get("publicacion");
+const contextPost = postParam && /^[0-9a-f-]{36}$/.test(postParam) ? await getPost(supabase, postParam) : null;
+
+const other = conversation.other;
+const name = other ? displayName(other) : "Usuario";
+const me = user!.id;
+const dayKey = (iso: string) => formatDate(iso, { year: "numeric", month: "2-digit", day: "2-digit" });
+const today = dayKey(new Date().toISOString());
+const yesterday = dayKey(new Date(Date.now() - 86400000).toISOString());
+const dayLabel = (iso: string) => {
+  const key = dayKey(iso);
+  return key === today ? "Hoy" : key === yesterday ? "Ayer" : formatDate(iso, { weekday: "long", day: "numeric", month: "long" });
+};
+const lastMine = [...messages].reverse().find((m) => m.sender_id === me);
+const seen = Boolean(lastMine && conversation.otherLastReadAt && conversation.otherLastReadAt >= lastMine.created_at);
+const lastAt = messages.length ? messages[messages.length - 1].created_at : new Date(0).toISOString();
+---
+
+<BaseLayout title={`Mensajes con ${name}`} noindex hideFooter>
+  <section
+    class="mx-auto flex h-[calc(100dvh-4rem)] max-w-2xl flex-col border-x border-line bg-surface"
+    data-chat
+    data-conversation={id}
+    data-me={me}
+    data-last={lastAt}
+    data-other-read={conversation.otherLastReadAt ?? ""}
+  >
+    <header class="flex items-center gap-3 border-b border-line px-3 py-2.5">
+      <a href="/mensajes" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted" aria-label="Volver a mensajes">
+        <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7" /></svg>
+      </a>
+      {other ? (
+        <a href={profilePath(other.username)} class="flex min-w-0 flex-1 items-center gap-3">
+          <Avatar name={name} path={other.avatar_path} size={40} />
+          <span class="min-w-0">
+            <span class="flex items-center gap-1.5 font-semibold">
+              <span class="truncate">{name}</span>
+              {other.verified_at && <VerifiedBadge size={14} />}
+              <SituationBadge situation={other.situation} />
+            </span>
+            {other.headline && <span class="block truncate text-xs text-ink-muted">{other.headline}</span>}
+          </span>
+        </a>
+      ) : (
+        <span class="flex-1 font-semibold">{name}</span>
+      )}
+      <form method="POST" action={actions.messages.hide} data-confirm="¿Ocultar esta conversación de tu bandeja?">
+        <input type="hidden" name="conversation_id" value={id} />
+        <button type="submit" class="rounded-wl px-2 py-1 text-xs font-semibold text-ink-muted hover:bg-surface-muted hover:text-ink">Ocultar</button>
+      </form>
+    </header>
+
+    <div class="flex-1 overflow-y-auto px-3 py-4" data-chat-scroll>
+      {hasOlder && messages[0] && (
+        <p class="mb-4 text-center">
+          <a href={`/mensajes/${id}?antes=${encodeURIComponent(messages[0].created_at)}`} class="text-sm font-semibold text-brand hover:underline">Ver mensajes anteriores</a>
+        </p>
+      )}
+      {messages.length === 0 && (
+        <p class="mt-10 text-center text-sm text-ink-muted" data-chat-empty>
+          Escribile a {other?.first_name ?? name}. Los mensajes son privados: solo los ven ustedes dos.
+        </p>
+      )}
+      <ol class="flex flex-col gap-1.5" data-chat-list>
+        {messages.map((m, index) => {
+          const mine = m.sender_id === me;
+          const newDay = index === 0 || dayKey(messages[index - 1].created_at) !== dayKey(m.created_at);
+          return (
+            <>
+              {newDay && <li class="my-3 text-center text-xs font-semibold capitalize text-ink-muted" data-day={dayKey(m.created_at)}>{dayLabel(m.created_at)}</li>}
+              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id}>
+                <div class:list={["max-w-[80%] rounded-2xl px-3.5 py-2", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
+                  {m.post && (
+                    <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
+                      Consulta sobre: <strong>{postHeadline(m.post, 60)}</strong>
+                    </a>
+                  )}
+                  <p class="whitespace-pre-line break-words">{m.body}</p>
+                  <time datetime={m.created_at} class:list={["mt-0.5 block text-right text-[11px]", mine ? "opacity-75" : "text-ink-muted"]}>
+                    {formatDate(m.created_at, { hour: "2-digit", minute: "2-digit" })}
+                  </time>
+                </div>
+              </li>
+            </>
+          );
+        })}
+      </ol>
+      <p class="mt-1 text-right text-xs text-ink-muted" data-chat-seen hidden={!seen}>Visto</p>
+      <span id="ultimo"></span>
+    </div>
+
+    <form method="POST" action={actions.messages.send} class="border-t border-line p-3" data-chat-form>
+      <input type="hidden" name="conversation_id" value={id} />
+      {contextPost && (
+        <div class="mb-2 flex items-center justify-between gap-2 rounded-wl bg-surface-muted px-3 py-2 text-sm" data-chat-context>
+          <span class="min-w-0 truncate">Consulta sobre: <strong>{postHeadline(contextPost, 60)}</strong></span>
+          <input type="hidden" name="post_id" value={contextPost.id} />
+        </div>
+      )}
+      {sendError && <p class="mb-2 text-sm text-danger" role="alert" data-chat-error>{sendError}</p>}
+      <p class="mb-2 hidden text-sm text-danger" role="alert" data-chat-error-js></p>
+      <div class="flex items-end gap-2">
+        <label for="chat-body" class="sr-only">Mensaje</label>
+        <textarea
+          id="chat-body"
+          name="body"
+          rows="1"
+          maxlength={MESSAGE_MAX}
+          required
+          placeholder="Escribí un mensaje…"
+          class="max-h-40 min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface-muted px-4 py-2.5 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+        ></textarea>
+        <button type="submit" class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast hover:bg-brand-hover disabled:opacity-50" aria-label="Enviar">
+          <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
+        </button>
+      </div>
+    </form>
+  </section>
+</BaseLayout>
+
+<script>
+  import "../../scripts/chat";
+</script>

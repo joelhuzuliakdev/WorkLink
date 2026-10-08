@@ -21,9 +21,11 @@ export interface Props {
   image?: string;
   /** Oculta Header y Footer (pantallas enfocadas). */
   bare?: boolean;
+  /** Oculta solo el Footer (pantallas de altura completa, como el chat). */
+  hideFooter?: boolean;
 }
 
-const { title, description = brand.description, canonicalPath, noindex = false, image, bare = false } = Astro.props;
+const { title, description = brand.description, canonicalPath, noindex = false, image, bare = false, hideFooter = false } = Astro.props;
 
 const fullTitle = title ? `${title} · ${brand.name}` : `${brand.name} · ${brand.tagline}`;
 const site = Astro.site ?? new URL(Astro.url.origin);
@@ -69,6 +71,6 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
     <main id="contenido" class="flex-1">
       <slot />
     </main>
-    {!bare && <Footer />}
+    {!bare && !hideFooter && <Footer />}
   </body>
 </html>

@@ -21,6 +21,7 @@ import { instagramUrl, tiktokUrl, whatsappUrl } from "../../../lib/contact";
 import { formatLocation, formatMonthYear } from "../../../lib/format";
 import { getViewerProfile } from "../../../lib/viewer";
 import { routes } from "../../../config/site";
+import { newMessagePath } from "../../../services/messages";
 import Alert from "../../../components/ui/Alert.astro";
 
 const { supabase, user } = Astro.locals;
@@ -69,12 +70,11 @@ const firstName = profile.first_name ?? name;
           ) : (
             <>
               <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
-              {profile.whatsapp ? (
+              <Button href={newMessagePath(profile.username)} variant="secondary">Mensaje</Button>
+              {profile.whatsapp && (
                 <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
                   WhatsApp
                 </Button>
-              ) : (
-                !user && <Button href={`${routes.login}?next=${encodeURIComponent(base)}`} variant="secondary">Contactar</Button>
               )}
             </>
           )

@@ -9,10 +9,12 @@ import { brand } from "../../config/brand";
 interface Props {
   /** "full" = símbolo + nombre; "mark" = solo el símbolo. */
   variant?: "full" | "mark";
+  /** En celulares muestra solo el símbolo (deja lugar a los íconos del encabezado). */
+  collapseOnMobile?: boolean;
   class?: string;
 }
 
-const { variant = "full", class: className = "" } = Astro.props;
+const { variant = "full", collapseOnMobile = false, class: className = "" } = Astro.props;
 ---
 
 <span class:list={["inline-flex items-center gap-2", className]}>
@@ -25,7 +27,7 @@ const { variant = "full", class: className = "" } = Astro.props;
   </svg>
   {
     variant === "full" ? (
-      <span class="font-display text-xl font-bold tracking-tight text-ink">
+      <span class:list={["font-display text-xl font-bold tracking-tight text-ink", collapseOnMobile && "hidden sm:inline"]}>
         Work<span class="text-brand">Link</span>
       </span>
     ) : (

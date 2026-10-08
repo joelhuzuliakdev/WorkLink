@@ -15,6 +15,7 @@ import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import FollowButton from "../../components/social/FollowButton.astro";
 import CommentsSection from "../../components/social/CommentsSection.astro";
 import { getComments, getViewerReactions, isFollowing } from "../../services/social";
+import { newMessagePath } from "../../services/messages";
 import { getFeed, getPost, POST_TYPE_LABELS, postHeadline } from "../../services/posts";
 import { displayName } from "../../services/profiles";
 import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
@@ -225,6 +226,9 @@ const jsonLd =
       ) : post.author ? (
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
+      {post.author && !isOwner && isPublic && (
+        <Button href={newMessagePath(post.author.username, post.id)} variant="secondary" size="lg">Enviar mensaje</Button>
+      )}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
       {isOwner && (

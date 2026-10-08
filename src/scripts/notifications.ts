@@ -13,7 +13,11 @@ async function refresh() {
   try {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
-    const { unread } = (await res.json()) as { unread: number };
+    const { unread, messages } = (await res.json()) as { unread: number; messages: number };
+    for (const badge of document.querySelectorAll<HTMLElement>("[data-messages-badge]")) {
+      badge.textContent = messages > 99 ? "99+" : String(messages);
+      badge.hidden = messages === 0;
+    }
     for (const badge of document.querySelectorAll<HTMLElement>("[data-notifications-badge]")) {
       badge.textContent = unread > 99 ? "99+" : String(unread);
       badge.hidden = unread === 0;
