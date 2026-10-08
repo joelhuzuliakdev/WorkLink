@@ -75,5 +75,6 @@ if (enabled()) {
     }
   });
   window.addEventListener("focus", () => void refresh());
+  window.addEventListener("wl:refresh-badges", () => void refresh());
   start();
 }

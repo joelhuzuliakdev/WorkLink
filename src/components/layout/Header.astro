@@ -47,6 +47,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
           <>
             <a
               href="/mensajes"
+              data-messages-toggle
               class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
               aria-label={unreadMessages ? `Mensajes (${unreadMessages} sin leer)` : "Mensajes"}
             >
@@ -113,6 +114,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
   user && (
     <script>
       import "../../scripts/notifications";
+      import "../../scripts/messenger";
     </script>
   )
 }

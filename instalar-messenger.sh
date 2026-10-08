@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · chat más chico con ✕ y avisos de mensajes al momento (incluye la Etapa 9)
+# WorkLink · mensajes estilo Facebook (computadora) e Instagram (celular), incluye la Etapa 9
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-chat.sh
+#     bash instalar-messenger.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
 # y .env.example, y agrega la migración 0017 (incluye todo lo anterior). NO toca tu .env, node_modules ni
@@ -2096,6 +2096,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
           <>
             <a
               href="/mensajes"
+              data-messages-toggle
               class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
               aria-label={unreadMessages ? `Mensajes (${unreadMessages} sin leer)` : "Mensajes"}
             >
@@ -2162,6 +2163,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
   user && (
     <script>
       import "../../scripts/notifications";
+      import "../../scripts/messenger";
     </script>
   )
 }
@@ -5162,6 +5164,62 @@ export const GET: APIRoute = async ({ url, locals }) => {
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/api/conversaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { getConversations } from "../../services/messages";
+import { displayName } from "../../services/profiles";
+import { mediaUrl } from "../../lib/media";
+import { formatRelative } from "../../lib/format";
+
+/**
+ * Bandeja para el panel de mensajes de la computadora.
+ *  GET  /api/conversaciones           -> { conversations: [...] }
+ *  POST /api/conversaciones {username} -> { id }  (empieza o retoma una conversación)
+ * Privado: nunca se cachea. La base controla bloqueos y límites.
+ */
+const headers = { "Cache-Control": "private, no-store" };
+
+export const GET: APIRoute = async ({ locals }) => {
+  const user = locals.user;
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401, headers });
+  const list = await getConversations(locals.supabase, user.id, 30);
+  return Response.json(
+    {
+      conversations: list.map((c) => ({
+        id: c.id,
+        name: c.other ? displayName(c.other) : "Usuario",
+        username: c.other?.username ?? null,
+        avatar: mediaUrl("avatar", c.other?.avatar_path, 96),
+        verified: Boolean(c.other?.verified_at),
+        preview: c.last_message_preview ?? "",
+        mine: c.last_sender_id === user.id,
+        when: c.last_message_at ? formatRelative(c.last_message_at) : "",
+        unread: c.unread,
+      })),
+    },
+    { headers },
+  );
+};
+
+export const POST: APIRoute = async ({ locals, request }) => {
+  const user = locals.user;
+  if (!user) return Response.json({ error: "Tenés que ingresar." }, { status: 401, headers });
+  let username = "";
+  try {
+    username = String(((await request.json()) as { username?: string }).username ?? "").toLowerCase();
+  } catch {
+    /* cuerpo inválido */
+  }
+  if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Response.json({ error: "Usuario inválido." }, { status: 400, headers });
+
+  const { data: other } = await locals.supabase.from("profiles").select("id").eq("username", username).eq("status", "active").maybeSingle();
+  if (!other) return Response.json({ error: "Esa cuenta no está disponible." }, { status: 404, headers });
+  const { data, error } = await locals.supabase.rpc("start_conversation", { p_other: other.id });
+  if (error || !data) return Response.json({ error: error?.message ?? "No pudimos abrir la conversación." }, { status: 403, headers });
+  return Response.json({ id: data }, { headers });
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/api/cron/limpiar-archivos.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { getSecret } from "astro:env/server";
@@ -5242,13 +5300,18 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/api/mensajes/[id].ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
-import { getConversation, getMessagesAfter, markConversationRead } from "../../../services/messages";
+import { getConversation, getMessages, getMessagesAfter, markConversationRead } from "../../../services/messages";
+import { displayName } from "../../../services/profiles";
+import { mediaUrl } from "../../../lib/media";
 
 /**
  * Mensajes nuevos de una conversación (la pide la pantalla del chat cada
  * pocos segundos): GET /api/mensajes/<id>?despues=<fecha ISO>
  * Responde los mensajes nuevos y hasta dónde leyó la otra persona ("Visto").
  * Si llegaron mensajes de la otra persona, marca la conversación como leída.
+ *
+ * GET /api/mensajes/<id>?ultimos=1 -> la conversación (persona y últimos
+ * mensajes) para abrir la ventanita flotante de la computadora.
  */
 export const GET: APIRoute = async ({ params, url, locals }) => {
   const headers = { "Cache-Control": "private, no-store" };
@@ -5256,6 +5319,30 @@ export const GET: APIRoute = async ({ params, url, locals }) => {
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401, headers });
 
   const id = params.id ?? "";
+  if (/^[0-9a-f-]{36}$/.test(id) && url.searchParams.get("ultimos") === "1") {
+    const conversation = await getConversation(locals.supabase, id, user.id);
+    if (!conversation) return Response.json({ error: "not_found" }, { status: 404, headers });
+    const { messages } = await getMessages(locals.supabase, id);
+    if (conversation.unread) await markConversationRead(locals.supabase, id);
+    const other = conversation.other;
+    return Response.json(
+      {
+        me: user.id,
+        other: other
+          ? {
+              name: displayName(other),
+              username: other.username,
+              avatar: mediaUrl("avatar", other.avatar_path, 96),
+              verified: Boolean(other.verified_at),
+              headline: other.headline,
+            }
+          : null,
+        messages,
+        otherLastReadAt: conversation.otherLastReadAt,
+      },
+      { headers },
+    );
+  }
   const after = url.searchParams.get("despues") ?? "";
   if (!/^[0-9a-f-]{36}$/.test(id) || Number.isNaN(Date.parse(after))) {
     return Response.json({ error: "bad_request" }, { status: 400, headers });
@@ -5922,7 +6009,7 @@ const jsonLd = [
             <h2 class="font-semibold">Contacto</h2>
             {user ? (
               <div class="mt-4 flex flex-col gap-2">
-                {messageHref && <Button href={messageHref} variant="secondary" block>Enviar mensaje</Button>}
+                {messageHref && owner && <Button href={messageHref} variant="secondary" block data-open-chat={owner.username}>Enviar mensaje</Button>}
                 {business.whatsapp && (
                   <Button href={whatsappUrl(business.whatsapp, waMessage)} variant="primary" block target="_blank" rel="noopener nofollow">
                     Escribir por WhatsApp
@@ -6242,7 +6329,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
           return (
             <>
               {newDay && <li class="my-3 text-center text-xs font-semibold capitalize text-ink-muted" data-day={dayKey(m.created_at)}>{dayLabel(m.created_at)}</li>}
-              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id}>
+              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id} data-mine={mine ? "" : undefined}>
                 <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
@@ -6272,7 +6359,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
         </div>
       )}
       {sendError && <p class="mb-2 text-sm text-danger" role="alert" data-chat-error>{sendError}</p>}
-      <p class="mb-2 hidden text-sm text-danger" role="alert" data-chat-error-js></p>
+      <p class="mb-2 text-sm text-danger" role="alert" data-chat-error-js hidden></p>
       <div class="flex items-end gap-2">
         <label for="chat-body" class="sr-only">Mensaje</label>
         <textarea
@@ -6299,49 +6386,77 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/mensajes/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
-/** Bandeja de mensajes: conversaciones de la más reciente a la más vieja. */
+/**
+ * Bandeja de mensajes (estilo Instagram): tu usuario arriba, buscador y las
+ * conversaciones de la más reciente a la más vieja. En el celular es la
+ * pantalla principal de mensajes; en la computadora también se puede usar el
+ * panel "Chats" del encabezado.
+ */
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import { getConversations } from "../../services/messages";
 import { displayName } from "../../services/profiles";
+import { getViewerProfile } from "../../lib/viewer";
 import { formatRelative } from "../../lib/format";
 
 const { supabase, user } = Astro.locals;
-const conversations = await getConversations(supabase, user!.id);
+const [conversations, viewer] = await Promise.all([getConversations(supabase, user!.id), getViewerProfile(Astro.locals)]);
 const hidden = Astro.url.searchParams.get("oculta") === "1";
 ---
 
-<BaseLayout title="Mensajes" noindex>
-  <section class="mx-auto max-w-2xl px-4 py-8">
-    <h1 class="text-2xl font-bold">Mensajes</h1>
-    {hidden && <p class="mt-3 text-sm text-ink-muted">Ocultaste la conversación. Si te vuelven a escribir, aparece de nuevo.</p>}
+<BaseLayout title="Mensajes" noindex hideFooter>
+  <section class="mx-auto max-w-xl px-4 py-5 md:py-8">
+    <div class="flex items-center justify-between gap-3">
+      <h1 class="text-xl font-bold">{viewer?.username ?? "Mensajes"}</h1>
+      <a
+        href="/buscar?ver=personas"
+        class="grid h-10 w-10 place-items-center rounded-full text-ink hover:bg-surface-muted"
+        aria-label="Nuevo mensaje: buscá a la persona"
+        title="Nuevo mensaje"
+      >
+        <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7" /><path stroke-linejoin="round" d="m17.5 3.5 3 3L12 15l-4 1 1-4 8.5-8.5Z" />
+        </svg>
+      </a>
+    </div>
+
+    <label for="buscar-chat" class="sr-only">Buscar conversación</label>
+    <input
+      id="buscar-chat"
+      type="search"
+      placeholder="Buscar"
+      autocomplete="off"
+      class="mt-3 h-10 w-full rounded-wl bg-surface-muted px-4 text-base placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-brand/25"
+      data-chat-search
+    />
+
+    <h2 class="mt-5 font-semibold">Mensajes</h2>
+    {hidden && <p class="mt-2 text-sm text-ink-muted">Ocultaste la conversación. Si te vuelven a escribir, aparece de nuevo.</p>}
 
     {
       conversations.length === 0 ? (
-        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
           <p class="font-semibold">Todavía no tenés mensajes.</p>
-          <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Enviar mensaje”.</p>
+          <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Mensaje”.</p>
         </div>
       ) : (
-        <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+        <ul class="-mx-2 mt-2" data-chat-items>
           {conversations.map((c) => {
             const name = c.other ? displayName(c.other) : "Usuario";
             const mine = c.last_sender_id === user!.id;
             return (
-              <li>
-                <a href={`/mensajes/${c.id}`} class:list={["flex items-center gap-3 p-4 hover:bg-surface-muted", c.unread && "bg-seek-soft/60"]}>
-                  <Avatar name={name} path={c.other?.avatar_path} size={52} />
+              <li data-name={name.toLowerCase()}>
+                <a href={`/mensajes/${c.id}`} class="flex items-center gap-3 rounded-wl px-2 py-2.5 hover:bg-surface-muted">
+                  <Avatar name={name} path={c.other?.avatar_path} size={56} />
                   <span class="min-w-0 flex-1">
-                    <span class="flex items-baseline justify-between gap-3">
-                      <span class:list={["inline-flex min-w-0 items-center gap-1", c.unread ? "font-bold" : "font-semibold"]}>
-                        <span class="truncate">{name}</span>
-                        {c.other?.verified_at && <VerifiedBadge size={14} />}
-                      </span>
-                      {c.last_message_at && <span class:list={["shrink-0 text-xs", c.unread ? "font-semibold text-seek" : "text-ink-muted"]}>{formatRelative(c.last_message_at)}</span>}
+                    <span class:list={["flex items-center gap-1", c.unread ? "font-bold" : "font-medium"]}>
+                      <span class="truncate">{name}</span>
+                      {c.other?.verified_at && <VerifiedBadge size={14} />}
                     </span>
-                    <span class:list={["block truncate text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
-                      {mine && "Vos: "}{c.last_message_preview}
+                    <span class:list={["flex gap-1 text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
+                      <span class="truncate">{mine && "Vos: "}{c.last_message_preview}</span>
+                      {c.last_message_at && <span class="shrink-0">· {formatRelative(c.last_message_at)}</span>}
                     </span>
                   </span>
                   {c.unread && <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Sin leer" />}
@@ -6354,6 +6469,17 @@ const hidden = Astro.url.searchParams.get("oculta") === "1";
     }
   </section>
 </BaseLayout>
+
+<script>
+  // Buscador de conversaciones por nombre (en la página, sin recargar).
+  const search = document.querySelector<HTMLInputElement>("[data-chat-search]");
+  search?.addEventListener("input", () => {
+    const term = search.value.trim().toLowerCase();
+    for (const li of document.querySelectorAll<HTMLElement>("[data-chat-items] li")) {
+      li.hidden = Boolean(term) && !(li.dataset.name ?? "").includes(term);
+    }
+  });
+</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/mensajes/nuevo.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -6727,7 +6853,16 @@ const jsonLd =
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
       {post.author && !isOwner && isPublic && (
-        <Button href={newMessagePath(post.author.username, post.id)} variant="secondary" size="lg">Enviar mensaje</Button>
+        <Button
+          href={newMessagePath(post.author.username, post.id)}
+          variant="secondary"
+          size="lg"
+          data-open-chat={post.author.username}
+          data-post-id={post.id}
+          data-post-title={headline}
+        >
+          Enviar mensaje
+        </Button>
       )}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
@@ -8591,7 +8726,7 @@ const firstName = profile.first_name ?? name;
           ) : (
             <>
               <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
-              <Button href={newMessagePath(profile.username)} variant="secondary">Mensaje</Button>
+              <Button href={newMessagePath(profile.username)} variant="secondary" data-open-chat={profile.username}>Mensaje</Button>
               {profile.whatsapp && (
                 <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
                   WhatsApp
@@ -9310,18 +9445,17 @@ export const commentRefSchema = z.object({
 });
 __WORKLINK_FIN_DEL_ARCHIVO__
 
-escribir 'src/scripts/chat.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+escribir 'src/scripts/chat-core.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
- * Pantalla de conversación:
- *  - envía sin recargar (y si algo falla, deja el texto para reintentar)
- *  - trae los mensajes nuevos cada 4 segundos mientras la pestaña está a la vista
+ * Lógica compartida de una conversación (la usan la página /mensajes/[id] y
+ * la ventanita flotante de la computadora):
+ *  - dibuja mensajes (siempre con textContent: nunca como HTML)
+ *  - envía sin recargar y trae los nuevos cada pocos segundos
  *  - muestra "Visto" cuando la otra persona leyó el último mensaje propio
- *  - Enter envía en computadora (Shift+Enter hace un salto de línea)
- * Los textos se insertan con textContent: nunca como HTML.
  */
 import { actions } from "astro:actions";
 
-interface ChatMessage {
+export interface ChatMessage {
   id: string;
   sender_id: string;
   body: string;
@@ -9330,10 +9464,19 @@ interface ChatMessage {
 }
 
 const TZ = "America/Argentina/Cordoba";
-const POLL_MS = 4000;
-const dayKey = (iso: string) =>
+export const dayKey = (iso: string) =>
   new Intl.DateTimeFormat("es-AR", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
-const timeLabel = (iso: string) => new Intl.DateTimeFormat("es-AR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+export const timeLabel = (iso: string) =>
+  new Intl.DateTimeFormat("es-AR", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+
+const todayKey = () => dayKey(new Date().toISOString());
+const yesterdayKey = () => dayKey(new Date(Date.now() - 86400000).toISOString());
+export function dayLabel(iso: string) {
+  const key = dayKey(iso);
+  if (key === todayKey()) return "Hoy";
+  if (key === yesterdayKey()) return "Ayer";
+  return new Intl.DateTimeFormat("es-AR", { timeZone: TZ, weekday: "long", day: "numeric", month: "long" }).format(new Date(iso));
+}
 
 function slug(text: string) {
   return text
@@ -9346,51 +9489,76 @@ function slug(text: string) {
     .replace(/-+$/g, "");
 }
 
-const root = document.querySelector<HTMLElement>("[data-chat]");
-if (root) {
-  const conversationId = root.dataset.conversation!;
-  const me = root.dataset.me!;
-  const list = root.querySelector<HTMLOListElement>("[data-chat-list]")!;
-  const scroller = root.querySelector<HTMLElement>("[data-chat-scroll]")!;
-  const form = root.querySelector<HTMLFormElement>("[data-chat-form]")!;
-  const textarea = form.querySelector<HTMLTextAreaElement>("textarea")!;
-  const sendButton = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
-  const seen = root.querySelector<HTMLElement>("[data-chat-seen]")!;
-  const errorBox = root.querySelector<HTMLElement>("[data-chat-error-js]")!;
-  let last = root.dataset.last!;
-  let otherRead = root.dataset.otherRead || "";
-  let lastMineAt = [...list.querySelectorAll<HTMLElement>("li[data-message]")]
-    .filter((li) => li.classList.contains("justify-end"))
-    .map((li) => li.querySelector("time")?.getAttribute("datetime") ?? "")
-    .pop() ?? "";
+export interface ThreadElements {
+  list: HTMLOListElement;
+  scroller: HTMLElement;
+  seen: HTMLElement;
+  form: HTMLFormElement;
+  textarea: HTMLTextAreaElement;
+  sendButton: HTMLButtonElement;
+  errorBox: HTMLElement;
+  empty?: HTMLElement | null;
+}
 
-  const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
-  const toBottom = () => (scroller.scrollTop = scroller.scrollHeight);
-  toBottom();
+export class ChatThread {
+  private last: string;
+  private otherRead: string;
+  private lastMineAt = "";
+  private timer: number | undefined;
+  private polling = false;
 
-  const updateSeen = () => {
-    seen.hidden = !(lastMineAt && otherRead && otherRead >= lastMineAt);
-  };
+  constructor(
+    private readonly conversationId: string,
+    private readonly me: string,
+    private readonly el: ThreadElements,
+    opts: { last?: string; otherRead?: string | null; pollMs?: number } = {},
+  ) {
+    this.last = opts.last || new Date(0).toISOString();
+    this.otherRead = opts.otherRead ?? "";
+    this.pollMs = opts.pollMs ?? 4000;
+    // Mensajes ya dibujados por el servidor.
+    for (const li of el.list.querySelectorAll<HTMLElement>("li[data-message][data-mine]")) {
+      const at = li.querySelector("time")?.getAttribute("datetime") ?? "";
+      if (at > this.lastMineAt) this.lastMineAt = at;
+    }
+    this.bindForm();
+  }
 
-  function render(message: ChatMessage) {
+  private readonly pollMs: number;
+
+  get isNearBottom() {
+    const s = this.el.scroller;
+    return s.scrollHeight - s.scrollTop - s.clientHeight < 120;
+  }
+
+  toBottom() {
+    this.el.scroller.scrollTop = this.el.scroller.scrollHeight;
+  }
+
+  updateSeen() {
+    this.el.seen.hidden = !(this.lastMineAt && this.otherRead && this.otherRead >= this.lastMineAt);
+  }
+
+  render(message: ChatMessage) {
+    const { list } = this.el;
     if (list.querySelector(`[data-message="${message.id}"]`)) return;
-    root!.querySelector("[data-chat-empty]")?.remove();
+    this.el.empty?.remove();
 
     const days = list.querySelectorAll<HTMLElement>("li[data-day]");
-    const lastDay = days[days.length - 1]?.dataset.day;
     const key = dayKey(message.created_at);
-    if (lastDay !== key) {
+    if (days[days.length - 1]?.dataset.day !== key) {
       const sep = document.createElement("li");
-      sep.className = "my-3 text-center text-xs font-semibold text-ink-muted";
+      sep.className = "my-3 text-center text-xs font-semibold first-letter:uppercase text-ink-muted";
       sep.dataset.day = key;
-      sep.textContent = "Hoy";
+      sep.textContent = dayLabel(message.created_at);
       list.append(sep);
     }
 
-    const mine = message.sender_id === me;
+    const mine = message.sender_id === this.me;
     const li = document.createElement("li");
     li.className = `flex ${mine ? "justify-end" : "justify-start"}`;
     li.dataset.message = message.id;
+    if (mine) li.dataset.mine = "";
     const bubble = document.createElement("div");
     bubble.className = `max-w-[78%] rounded-2xl px-3 py-1.5 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
     if (message.post) {
@@ -9415,88 +9583,130 @@ if (root) {
     li.append(bubble);
     list.append(li);
 
-    if (message.created_at > last) last = message.created_at;
-    if (mine && message.created_at > lastMineAt) lastMineAt = message.created_at;
+    if (message.created_at > this.last) this.last = message.created_at;
+    if (mine && message.created_at > this.lastMineAt) this.lastMineAt = message.created_at;
   }
 
-  // Altura automática del cuadro de texto.
-  const resize = () => {
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
-  };
-  textarea.addEventListener("input", resize);
-  textarea.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !matchMedia("(pointer: coarse)").matches) {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const body = textarea.value.trim();
-    if (!body || sendButton.disabled) return;
-    sendButton.disabled = true;
-    errorBox.classList.add("hidden");
-    try {
-      const { data, error } = await actions.messages.send(new FormData(form));
-      if (error) {
-        errorBox.textContent = error.message || "No pudimos enviar el mensaje.";
-        errorBox.classList.remove("hidden");
-        return;
+  private bindForm() {
+    const { form, textarea, sendButton, errorBox } = this.el;
+    const resize = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+    };
+    textarea.addEventListener("input", resize);
+    textarea.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !matchMedia("(pointer: coarse)").matches) {
+        event.preventDefault();
+        form.requestSubmit();
       }
-      render(data as ChatMessage);
-      textarea.value = "";
-      resize();
-      // La publicación consultada se cita solo en el primer mensaje.
-      form.querySelector("[data-chat-context]")?.remove();
-      form.querySelector("[data-chat-error]")?.remove();
-      updateSeen();
-      toBottom();
-    } catch {
-      errorBox.textContent = "Sin conexión. Tu mensaje no se envió: probá de nuevo.";
-      errorBox.classList.remove("hidden");
-    } finally {
-      sendButton.disabled = false;
-      textarea.focus();
-    }
-  });
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!textarea.value.trim() || sendButton.disabled) return;
+      sendButton.disabled = true;
+      errorBox.hidden = true;
+      try {
+        const { data, error } = await actions.messages.send(new FormData(form));
+        if (error) {
+          errorBox.textContent = error.message || "No pudimos enviar el mensaje.";
+          errorBox.hidden = false;
+          return;
+        }
+        this.render(data as ChatMessage);
+        textarea.value = "";
+        resize();
+        // La publicación consultada se cita solo en el primer mensaje.
+        form.querySelector("[data-chat-context]")?.remove();
+        form.querySelector("[data-chat-error]")?.remove();
+        this.updateSeen();
+        this.toBottom();
+      } catch {
+        errorBox.textContent = "Sin conexión. Tu mensaje no se envió: probá de nuevo.";
+        errorBox.hidden = false;
+      } finally {
+        sendButton.disabled = false;
+        textarea.focus();
+      }
+    });
+  }
 
-  let polling = false;
-  async function poll() {
-    if (polling || document.visibilityState !== "visible") return;
-    polling = true;
+  async poll() {
+    if (this.polling || document.visibilityState !== "visible") return;
+    this.polling = true;
     try {
-      const res = await fetch(`/api/mensajes/${conversationId}?despues=${encodeURIComponent(last)}`, { headers: { Accept: "application/json" } });
+      const res = await fetch(`/api/mensajes/${this.conversationId}?despues=${encodeURIComponent(this.last)}`, {
+        headers: { Accept: "application/json" },
+      });
       if (res.ok) {
         const json = (await res.json()) as { messages: ChatMessage[]; otherLastReadAt: string | null };
-        const stick = nearBottom();
-        for (const message of json.messages) render(message);
-        otherRead = json.otherLastReadAt ?? otherRead;
-        updateSeen();
-        if (json.messages.length && stick) toBottom();
+        const stick = this.isNearBottom;
+        for (const message of json.messages) this.render(message);
+        this.otherRead = json.otherLastReadAt ?? this.otherRead;
+        this.updateSeen();
+        if (json.messages.length && stick) this.toBottom();
       }
     } catch {
       /* sin conexión: se reintenta */
     } finally {
-      polling = false;
+      this.polling = false;
     }
   }
-  setInterval(poll, POLL_MS);
+
+  start() {
+    this.stop();
+    this.timer = window.setInterval(() => void this.poll(), this.pollMs);
+  }
+
+  stop() {
+    window.clearInterval(this.timer);
+  }
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/scripts/chat.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Página de conversación (/mensajes/[id]). La lógica de mensajes está en
+ * chat-core.ts (compartida con la ventanita flotante de la computadora).
+ */
+import { ChatThread } from "./chat-core";
+
+const root = document.querySelector<HTMLElement>("[data-chat]");
+if (root) {
+  const conversationId = root.dataset.conversation!;
+  const form = root.querySelector<HTMLFormElement>("[data-chat-form]")!;
+  const thread = new ChatThread(
+    conversationId,
+    root.dataset.me!,
+    {
+      list: root.querySelector<HTMLOListElement>("[data-chat-list]")!,
+      scroller: root.querySelector<HTMLElement>("[data-chat-scroll]")!,
+      seen: root.querySelector<HTMLElement>("[data-chat-seen]")!,
+      form,
+      textarea: form.querySelector<HTMLTextAreaElement>("textarea")!,
+      sendButton: form.querySelector<HTMLButtonElement>("button[type=submit]")!,
+      errorBox: root.querySelector<HTMLElement>("[data-chat-error-js]")!,
+      empty: root.querySelector<HTMLElement>("[data-chat-empty]"),
+    },
+    { last: root.dataset.last, otherRead: root.dataset.otherRead },
+  );
+  thread.toBottom();
+  thread.start();
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void poll();
+    if (document.visibilityState === "visible") void thread.poll();
   });
 
   // Cerrar (✕): volver a la página anterior si vino de WorkLink; si no, a la bandeja.
-  root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.addEventListener("click", (event) => {
+  const close = root.querySelector<HTMLAnchorElement>("[data-chat-close]");
+  close?.addEventListener("click", (event) => {
     const cameFromSite = document.referrer.startsWith(location.origin) && !document.referrer.includes(`/mensajes/${conversationId}`);
     if (cameFromSite && history.length > 1) {
       event.preventDefault();
       history.back();
     }
   });
+  const textarea = form.querySelector<HTMLTextAreaElement>("textarea")!;
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !textarea.value.trim()) root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.click();
+    if (event.key === "Escape" && !textarea.value.trim()) close?.click();
   });
 
   // Confirmación para "Ocultar".
@@ -9531,6 +9741,363 @@ document.addEventListener("click", async (event) => {
     window.location.href = link.href;
   }
 });
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/scripts/messenger.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Mensajes estilo Facebook en la computadora (pantallas de 768 px o más):
+ *  - el ícono de mensajes abre un panel "Chats" con buscador y la bandeja
+ *  - cada conversación se abre en una ventanita abajo a la derecha, encima de
+ *    la página, con botones para minimizar (−) y cerrar (✕)
+ *  - la ventanita sigue abierta al pasar a otra página (se recuerda en la pestaña)
+ *  - "Mensaje" / "Enviar mensaje" en perfiles y publicaciones la abren directo
+ * En el celular no se usa: el ícono lleva a /mensajes (pantalla completa).
+ * Los textos se insertan siempre con textContent: nunca como HTML.
+ */
+import { ChatThread, type ChatMessage } from "./chat-core";
+
+const desktop = matchMedia("(min-width: 768px)");
+const STORE = "wl-chat";
+const MAX_LEN = 2000;
+
+interface ConversationItem {
+  id: string;
+  name: string;
+  username: string | null;
+  avatar: string | null;
+  verified: boolean;
+  preview: string;
+  mine: boolean;
+  when: string;
+  unread: boolean;
+}
+
+interface OpenData {
+  me: string;
+  other: { name: string; username: string; avatar: string | null; verified: boolean; headline: string | null } | null;
+  messages: ChatMessage[];
+  otherLastReadAt: string | null;
+}
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+function avatar(name: string, url: string | null, size: number) {
+  if (url) {
+    const img = el("img", "shrink-0 rounded-full object-cover");
+    img.src = url;
+    img.alt = "";
+    img.width = size;
+    img.height = size;
+    img.style.width = img.style.height = `${size}px`;
+    return img;
+  }
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("");
+  const span = el("span", "grid shrink-0 place-items-center rounded-full bg-seek-soft font-bold text-seek", initials || "?");
+  span.style.width = span.style.height = `${size}px`;
+  span.style.fontSize = `${Math.round(size * 0.38)}px`;
+  return span;
+}
+
+const verifiedIcon = () => {
+  const span = el("span", "inline-flex shrink-0 text-seek");
+  span.title = "Cuenta verificada por WorkLink";
+  span.innerHTML =
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 1.5l2.6 1.9 3.2-.1 1 3.1 2.6 1.9-1 3.1 1 3.1-2.6 1.9-1 3.1-3.2-.1L12 22.5l-2.6-1.9-3.2.1-1-3.1-2.6-1.9 1-3.1-1-3.1 2.6-1.9 1-3.1 3.2.1L12 1.5Z"/><path fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m8 12.2 2.7 2.7L16.2 9.4"/></svg>';
+  return span;
+};
+
+const iconButton = (label: string, svg: string) => {
+  const b = el("button", "grid h-8 w-8 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink");
+  b.type = "button";
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  b.innerHTML = svg;
+  return b;
+};
+
+const ICON_CLOSE = '<svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/></svg>';
+const ICON_MIN = '<svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" d="M6 12h12"/></svg>';
+const ICON_EXPAND = '<svg viewBox="0 0 24 24" class="h-[18px] w-[18px] fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>';
+const ICON_SEND = '<svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>';
+
+// ---------------------------------------------------------------------------
+// Panel "Chats"
+// ---------------------------------------------------------------------------
+let panel: HTMLElement | null = null;
+
+function closePanel() {
+  panel?.remove();
+  panel = null;
+}
+
+async function openPanel() {
+  closePanel();
+  panel = el("section", "fixed right-4 top-[4.25rem] z-40 flex max-h-[calc(100dvh-5.5rem)] w-[360px] flex-col overflow-hidden rounded-wl-lg border border-line bg-surface shadow-2xl");
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", "Chats");
+
+  const head = el("div", "flex items-center justify-between px-4 pb-2 pt-3");
+  head.append(el("h2", "text-xl font-bold", "Chats"));
+  const expand = el("a", "grid h-8 w-8 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink");
+  expand.href = "/mensajes";
+  expand.title = "Abrir Mensajes";
+  expand.setAttribute("aria-label", "Abrir Mensajes en pantalla completa");
+  expand.innerHTML = ICON_EXPAND;
+  head.append(expand);
+
+  const searchWrap = el("div", "px-4 pb-2");
+  const search = el("input", "h-9 w-full rounded-full border border-line bg-surface-muted px-4 text-sm focus:border-brand focus:outline-none");
+  search.type = "search";
+  search.placeholder = "Buscar en Mensajes";
+  search.setAttribute("aria-label", "Buscar conversación");
+  searchWrap.append(search);
+
+  const list = el("ul", "flex-1 overflow-y-auto px-2 pb-2");
+  list.append(el("li", "px-3 py-6 text-center text-sm text-ink-muted", "Cargando…"));
+
+  const foot = el("a", "block border-t border-line py-2.5 text-center text-sm font-semibold text-brand hover:bg-surface-muted", "Ver todo en Mensajes");
+  foot.href = "/mensajes";
+
+  panel.append(head, searchWrap, list, foot);
+  document.body.append(panel);
+  search.focus();
+
+  try {
+    const res = await fetch("/api/conversaciones", { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error();
+    const { conversations } = (await res.json()) as { conversations: ConversationItem[] };
+    list.replaceChildren();
+    if (!conversations.length) {
+      list.append(el("li", "px-3 py-6 text-center text-sm text-ink-muted", "Todavía no tenés mensajes. Escribile a alguien desde su perfil."));
+      return;
+    }
+    for (const c of conversations) {
+      const li = el("li");
+      li.dataset.name = c.name.toLowerCase();
+      const button = el("button", `flex w-full items-center gap-3 rounded-wl p-2 text-left hover:bg-surface-muted ${c.unread ? "" : ""}`);
+      button.type = "button";
+      const textBox = el("span", "min-w-0 flex-1");
+      const nameRow = el("span", `flex items-center gap-1 ${c.unread ? "font-bold" : "font-semibold"}`);
+      nameRow.append(el("span", "truncate", c.name));
+      if (c.verified) nameRow.append(verifiedIcon());
+      const preview = el("span", `flex gap-1 text-sm ${c.unread ? "font-semibold text-ink" : "text-ink-muted"}`);
+      preview.append(el("span", "truncate", `${c.mine ? "Vos: " : ""}${c.preview}`), el("span", "shrink-0", `· ${c.when}`));
+      textBox.append(nameRow, preview);
+      button.append(avatar(c.name, c.avatar, 52), textBox);
+      if (c.unread) button.append(el("span", "h-3 w-3 shrink-0 rounded-full bg-seek"));
+      button.addEventListener("click", () => {
+        closePanel();
+        void openChat(c.id);
+      });
+      li.append(button);
+      list.append(li);
+    }
+    search.addEventListener("input", () => {
+      const term = search.value.trim().toLowerCase();
+      for (const li of list.querySelectorAll<HTMLElement>("li[data-name]")) li.hidden = Boolean(term) && !li.dataset.name!.includes(term);
+    });
+  } catch {
+    list.replaceChildren(el("li", "px-3 py-6 text-center text-sm text-ink-muted", "No pudimos cargar tus mensajes. Probá de nuevo."));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ventanita de conversación
+// ---------------------------------------------------------------------------
+let win: HTMLElement | null = null;
+let thread: ChatThread | null = null;
+
+function remember(id: string | null, minimized = false) {
+  try {
+    if (id) sessionStorage.setItem(STORE, JSON.stringify({ id, minimized }));
+    else sessionStorage.removeItem(STORE);
+  } catch {
+    /* almacenamiento no disponible: no se recuerda */
+  }
+}
+
+function closeChat() {
+  thread?.stop();
+  thread = null;
+  win?.remove();
+  win = null;
+  remember(null);
+}
+
+async function openChat(id: string, opts: { minimized?: boolean; post?: { id: string; title: string } | null } = {}) {
+  closeChat();
+  let data: OpenData;
+  try {
+    const res = await fetch(`/api/mensajes/${id}?ultimos=1`, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error();
+    data = (await res.json()) as OpenData;
+  } catch {
+    remember(null);
+    window.location.href = `/mensajes/${id}`;
+    return;
+  }
+
+  const name = data.other?.name ?? "Usuario";
+  win = el("section", "fixed bottom-0 right-6 z-40 flex w-[330px] flex-col overflow-hidden rounded-t-xl border border-b-0 border-line bg-surface shadow-2xl");
+  win.setAttribute("role", "dialog");
+  win.setAttribute("aria-label", `Conversación con ${name}`);
+  win.dataset.conversation = id;
+
+  // Encabezado
+  const head = el("div", "flex items-center gap-1 border-b border-line px-2 py-1.5");
+  const who = el("a", "flex min-w-0 flex-1 items-center gap-2 rounded-wl p-1 hover:bg-surface-muted");
+  who.href = data.other ? `/u/${data.other.username}` : "#";
+  const nameBox = el("span", "min-w-0");
+  const nameRow = el("span", "flex items-center gap-1 text-sm font-semibold");
+  nameRow.append(el("span", "truncate", name));
+  if (data.other?.verified) nameRow.append(verifiedIcon());
+  nameBox.append(nameRow);
+  if (data.other?.headline) nameBox.append(el("span", "block truncate text-xs text-ink-muted", data.other.headline));
+  who.append(avatar(name, data.other?.avatar ?? null, 32), nameBox);
+  const minimize = iconButton("Minimizar", ICON_MIN);
+  const close = iconButton("Cerrar", ICON_CLOSE);
+  head.append(who, minimize, close);
+
+  // Cuerpo
+  const body = el("div", "flex h-[400px] flex-col");
+  const scroller = el("div", "flex-1 overflow-y-auto px-3 py-2 text-[15px]");
+  const list = el("ol", "flex flex-col gap-1.5");
+  const empty = data.messages.length ? null : el("p", "mt-8 text-center text-sm text-ink-muted", `Escribile a ${name}. Los mensajes son privados.`);
+  const seen = el("p", "mt-1 text-right text-xs text-ink-muted", "Visto");
+  seen.hidden = true;
+  if (empty) scroller.append(empty);
+  scroller.append(list, seen);
+
+  const form = el("form", "border-t border-line p-2");
+  const hidden = el("input");
+  hidden.type = "hidden";
+  hidden.name = "conversation_id";
+  hidden.value = id;
+  form.append(hidden);
+  if (opts.post) {
+    const context = el("div", "mb-1.5 truncate rounded-wl bg-surface-muted px-2.5 py-1.5 text-xs");
+    context.dataset.chatContext = "";
+    context.append("Consulta sobre: ", el("strong", "", opts.post.title));
+    const postInput = el("input");
+    postInput.type = "hidden";
+    postInput.name = "post_id";
+    postInput.value = opts.post.id;
+    context.append(postInput);
+    form.append(context);
+  }
+  const errorBox = el("p", "mb-1.5 text-xs text-danger");
+  errorBox.setAttribute("role", "alert");
+  errorBox.hidden = true;
+  const row = el("div", "flex items-end gap-2");
+  const textarea = el("textarea", "max-h-32 min-h-9 flex-1 resize-none rounded-2xl border border-line bg-surface-muted px-3 py-1.5 text-sm focus:border-brand focus:outline-none");
+  textarea.name = "body";
+  textarea.rows = 1;
+  textarea.maxLength = MAX_LEN;
+  textarea.placeholder = "Aa";
+  textarea.setAttribute("aria-label", "Mensaje");
+  const send = el("button", "grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast hover:bg-brand-hover disabled:opacity-50");
+  send.type = "submit";
+  send.setAttribute("aria-label", "Enviar");
+  send.innerHTML = ICON_SEND;
+  row.append(textarea, send);
+  form.append(errorBox, row);
+  body.append(scroller, form);
+
+  win.append(head, body);
+  document.body.append(win);
+
+  thread = new ChatThread(id, data.me, { list, scroller, seen, form, textarea, sendButton: send, errorBox, empty }, { otherRead: data.otherLastReadAt });
+  for (const m of data.messages) thread.render(m);
+  thread.updateSeen();
+  thread.toBottom();
+  thread.start();
+  // Al abrirla queda leída: actualizar los íconos del encabezado ya.
+  window.dispatchEvent(new Event("wl:refresh-badges"));
+
+  const setMinimized = (value: boolean) => {
+    body.hidden = value;
+    minimize.setAttribute("aria-label", value ? "Abrir" : "Minimizar");
+    minimize.title = value ? "Abrir" : "Minimizar";
+    remember(id, value);
+    if (value) thread?.stop();
+    else {
+      thread?.start();
+      void thread?.poll();
+      thread?.toBottom();
+      textarea.focus();
+    }
+  };
+  minimize.addEventListener("click", () => setMinimized(!body.hidden));
+  close.addEventListener("click", closeChat);
+  setMinimized(Boolean(opts.minimized));
+}
+
+// ---------------------------------------------------------------------------
+// Conexión con la página
+// ---------------------------------------------------------------------------
+const onMessagesPage = () => location.pathname.startsWith("/mensajes");
+
+document.addEventListener("click", async (event) => {
+  if (!desktop.matches || event.metaKey || event.ctrlKey || event.shiftKey) return;
+  const target = event.target as HTMLElement;
+
+  const toggle = target.closest<HTMLAnchorElement>("[data-messages-toggle]");
+  if (toggle && !onMessagesPage()) {
+    event.preventDefault();
+    if (panel) closePanel();
+    else void openPanel();
+    return;
+  }
+
+  const starter = target.closest<HTMLAnchorElement>("[data-open-chat]");
+  if (starter && !onMessagesPage()) {
+    event.preventDefault();
+    try {
+      const res = await fetch("/api/conversaciones", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ username: starter.dataset.openChat }),
+      });
+      if (res.status === 401) {
+        window.location.href = starter.href;
+        return;
+      }
+      const json = (await res.json()) as { id?: string; error?: string };
+      if (!json.id) throw new Error(json.error);
+      const post = starter.dataset.postId ? { id: starter.dataset.postId, title: starter.dataset.postTitle ?? "esta publicación" } : null;
+      await openChat(json.id, { post });
+    } catch {
+      window.location.href = starter.href;
+    }
+    return;
+  }
+
+  if (panel && !panel.contains(target)) closePanel();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePanel();
+});
+
+// Al cambiar de página, la ventanita se vuelve a abrir como estaba.
+if (desktop.matches && !onMessagesPage()) {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(STORE) ?? "null") as { id: string; minimized: boolean } | null;
+    if (saved?.id) void openChat(saved.id, { minimized: saved.minimized });
+  } catch {
+    /* nada guardado */
+  }
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/scripts/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -9611,6 +10178,7 @@ if (enabled()) {
     }
   });
   window.addEventListener("focus", () => void refresh());
+  window.addEventListener("wl:refresh-badges", () => void refresh());
   start();
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -12547,7 +13115,7 @@ echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 146 archivos de la Etapa 9 instalados."
+echo " Listo. 149 archivos de la Etapa 9 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

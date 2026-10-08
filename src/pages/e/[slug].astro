@@ -215,7 +215,7 @@ const jsonLd = [
             <h2 class="font-semibold">Contacto</h2>
             {user ? (
               <div class="mt-4 flex flex-col gap-2">
-                {messageHref && <Button href={messageHref} variant="secondary" block>Enviar mensaje</Button>}
+                {messageHref && owner && <Button href={messageHref} variant="secondary" block data-open-chat={owner.username}>Enviar mensaje</Button>}
                 {business.whatsapp && (
                   <Button href={whatsappUrl(business.whatsapp, waMessage)} variant="primary" block target="_blank" rel="noopener nofollow">
                     Escribir por WhatsApp

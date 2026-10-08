@@ -108,7 +108,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
           return (
             <>
               {newDay && <li class="my-3 text-center text-xs font-semibold capitalize text-ink-muted" data-day={dayKey(m.created_at)}>{dayLabel(m.created_at)}</li>}
-              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id}>
+              <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id} data-mine={mine ? "" : undefined}>
                 <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
@@ -138,7 +138,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
         </div>
       )}
       {sendError && <p class="mb-2 text-sm text-danger" role="alert" data-chat-error>{sendError}</p>}
-      <p class="mb-2 hidden text-sm text-danger" role="alert" data-chat-error-js></p>
+      <p class="mb-2 text-sm text-danger" role="alert" data-chat-error-js hidden></p>
       <div class="flex items-end gap-2">
         <label for="chat-body" class="sr-only">Mensaje</label>
         <textarea

@@ -70,7 +70,7 @@ const firstName = profile.first_name ?? name;
           ) : (
             <>
               <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
-              <Button href={newMessagePath(profile.username)} variant="secondary">Mensaje</Button>
+              <Button href={newMessagePath(profile.username)} variant="secondary" data-open-chat={profile.username}>Mensaje</Button>
               {profile.whatsapp && (
                 <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
                   WhatsApp

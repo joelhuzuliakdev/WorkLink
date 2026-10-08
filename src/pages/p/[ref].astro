@@ -227,7 +227,16 @@ const jsonLd =
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
       {post.author && !isOwner && isPublic && (
-        <Button href={newMessagePath(post.author.username, post.id)} variant="secondary" size="lg">Enviar mensaje</Button>
+        <Button
+          href={newMessagePath(post.author.username, post.id)}
+          variant="secondary"
+          size="lg"
+          data-open-chat={post.author.username}
+          data-post-id={post.id}
+          data-post-title={headline}
+        >
+          Enviar mensaje
+        </Button>
       )}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}

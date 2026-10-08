@@ -1,47 +1,75 @@
 ---
-/** Bandeja de mensajes: conversaciones de la más reciente a la más vieja. */
+/**
+ * Bandeja de mensajes (estilo Instagram): tu usuario arriba, buscador y las
+ * conversaciones de la más reciente a la más vieja. En el celular es la
+ * pantalla principal de mensajes; en la computadora también se puede usar el
+ * panel "Chats" del encabezado.
+ */
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import { getConversations } from "../../services/messages";
 import { displayName } from "../../services/profiles";
+import { getViewerProfile } from "../../lib/viewer";
 import { formatRelative } from "../../lib/format";
 
 const { supabase, user } = Astro.locals;
-const conversations = await getConversations(supabase, user!.id);
+const [conversations, viewer] = await Promise.all([getConversations(supabase, user!.id), getViewerProfile(Astro.locals)]);
 const hidden = Astro.url.searchParams.get("oculta") === "1";
 ---
 
-<BaseLayout title="Mensajes" noindex>
-  <section class="mx-auto max-w-2xl px-4 py-8">
-    <h1 class="text-2xl font-bold">Mensajes</h1>
-    {hidden && <p class="mt-3 text-sm text-ink-muted">Ocultaste la conversación. Si te vuelven a escribir, aparece de nuevo.</p>}
+<BaseLayout title="Mensajes" noindex hideFooter>
+  <section class="mx-auto max-w-xl px-4 py-5 md:py-8">
+    <div class="flex items-center justify-between gap-3">
+      <h1 class="text-xl font-bold">{viewer?.username ?? "Mensajes"}</h1>
+      <a
+        href="/buscar?ver=personas"
+        class="grid h-10 w-10 place-items-center rounded-full text-ink hover:bg-surface-muted"
+        aria-label="Nuevo mensaje: buscá a la persona"
+        title="Nuevo mensaje"
+      >
+        <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7" /><path stroke-linejoin="round" d="m17.5 3.5 3 3L12 15l-4 1 1-4 8.5-8.5Z" />
+        </svg>
+      </a>
+    </div>
+
+    <label for="buscar-chat" class="sr-only">Buscar conversación</label>
+    <input
+      id="buscar-chat"
+      type="search"
+      placeholder="Buscar"
+      autocomplete="off"
+      class="mt-3 h-10 w-full rounded-wl bg-surface-muted px-4 text-base placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-brand/25"
+      data-chat-search
+    />
+
+    <h2 class="mt-5 font-semibold">Mensajes</h2>
+    {hidden && <p class="mt-2 text-sm text-ink-muted">Ocultaste la conversación. Si te vuelven a escribir, aparece de nuevo.</p>}
 
     {
       conversations.length === 0 ? (
-        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
           <p class="font-semibold">Todavía no tenés mensajes.</p>
-          <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Enviar mensaje”.</p>
+          <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Mensaje”.</p>
         </div>
       ) : (
-        <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+        <ul class="-mx-2 mt-2" data-chat-items>
           {conversations.map((c) => {
             const name = c.other ? displayName(c.other) : "Usuario";
             const mine = c.last_sender_id === user!.id;
             return (
-              <li>
-                <a href={`/mensajes/${c.id}`} class:list={["flex items-center gap-3 p-4 hover:bg-surface-muted", c.unread && "bg-seek-soft/60"]}>
-                  <Avatar name={name} path={c.other?.avatar_path} size={52} />
+              <li data-name={name.toLowerCase()}>
+                <a href={`/mensajes/${c.id}`} class="flex items-center gap-3 rounded-wl px-2 py-2.5 hover:bg-surface-muted">
+                  <Avatar name={name} path={c.other?.avatar_path} size={56} />
                   <span class="min-w-0 flex-1">
-                    <span class="flex items-baseline justify-between gap-3">
-                      <span class:list={["inline-flex min-w-0 items-center gap-1", c.unread ? "font-bold" : "font-semibold"]}>
-                        <span class="truncate">{name}</span>
-                        {c.other?.verified_at && <VerifiedBadge size={14} />}
-                      </span>
-                      {c.last_message_at && <span class:list={["shrink-0 text-xs", c.unread ? "font-semibold text-seek" : "text-ink-muted"]}>{formatRelative(c.last_message_at)}</span>}
+                    <span class:list={["flex items-center gap-1", c.unread ? "font-bold" : "font-medium"]}>
+                      <span class="truncate">{name}</span>
+                      {c.other?.verified_at && <VerifiedBadge size={14} />}
                     </span>
-                    <span class:list={["block truncate text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
-                      {mine && "Vos: "}{c.last_message_preview}
+                    <span class:list={["flex gap-1 text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
+                      <span class="truncate">{mine && "Vos: "}{c.last_message_preview}</span>
+                      {c.last_message_at && <span class="shrink-0">· {formatRelative(c.last_message_at)}</span>}
                     </span>
                   </span>
                   {c.unread && <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Sin leer" />}
@@ -54,3 +82,14 @@ const hidden = Astro.url.searchParams.get("oculta") === "1";
     }
   </section>
 </BaseLayout>
+
+<script>
+  // Buscador de conversaciones por nombre (en la página, sin recargar).
+  const search = document.querySelector<HTMLInputElement>("[data-chat-search]");
+  search?.addEventListener("input", () => {
+    const term = search.value.trim().toLowerCase();
+    for (const li of document.querySelectorAll<HTMLElement>("[data-chat-items] li")) {
+      li.hidden = Boolean(term) && !(li.dataset.name ?? "").includes(term);
+    }
+  });
+</script>
