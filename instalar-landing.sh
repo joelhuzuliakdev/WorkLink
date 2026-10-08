@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de ajustes (nombre de la persona en las publicaciones e ingreso al inicio)
+# WorkLink · instalador de la landing (página principal para visitantes)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-ajustes.sh
+#     bash instalar-landing.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
 # y .env.example. No hay migración nueva. NO toca tu .env, node_modules ni
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de los ajustes..."
+echo "Instalando archivos de la landing..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -1572,6 +1572,295 @@ const links = [
 </div>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/home/Landing.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Landing de WorkLink para visitantes sin cuenta: qué es, para quién sirve,
+ * cómo funciona, qué se puede hacer y preguntas frecuentes.
+ *
+ * El elemento central es la "escena" del hero: tres publicaciones de ejemplo
+ * (personas ficticias) que muestran la idea de la plataforma — alguien busca,
+ * alguien ofrece, y se conectan en los comentarios.
+ */
+import Button from "../ui/Button.astro";
+import { routes } from "../../config/site";
+import { SITUATIONS } from "../../config/situations";
+
+const examples = ["electricista", "tortas", "diseño web", "niñera", "fotografía"];
+
+// Qué puede hacer cada persona según su situación (mismos nombres que en el perfil).
+const forWho: Record<string, { title: string; points: string[] }> = {
+  job_seeking: {
+    title: "Si buscás empleo",
+    points: ["Mostrá en tu perfil qué sabés hacer y dónde vivís.", "Seguí a emprendimientos de tu zona y enterate cuando buscan gente."],
+  },
+  entrepreneur: {
+    title: "Si tenés un emprendimiento",
+    points: ["Creale su página con logo, catálogo, horarios y contacto.", "Publicá productos y promociones con fotos o video."],
+  },
+  freelancer: {
+    title: "Si ofrecés tus servicios",
+    points: ["Contá tu oficio o profesión y mostrá tus trabajos.", "Que te encuentren por el buscador y te escriban por WhatsApp."],
+  },
+  hiring: {
+    title: "Si necesitás contratar",
+    points: ["Publicá lo que buscás y recibí respuestas en los comentarios.", "Mirá el perfil, los trabajos y quién sigue a cada persona antes de decidir."],
+  },
+};
+
+const steps = [
+  { title: "Creá tu cuenta", text: "Es gratis. Poné tu foto, tu ciudad y contá tu situación: si buscás empleo, tenés un emprendimiento, ofrecés servicios o buscás contratar." },
+  { title: "Publicá", text: "Como en Facebook: escribí qué ofrecés o qué buscás y sumá hasta 10 fotos o un video corto." },
+  { title: "Conectá", text: "La gente te sigue, comenta y te escribe. Vos hacés lo mismo con quienes te interesan, sin intermediarios." },
+];
+
+const features = [
+  { title: "Inicio a tu medida", text: "Ves lo que publican las personas y emprendimientos que seguís.", icon: "M4 6h16M4 12h16M4 18h10" },
+  { title: "Publicaciones con fotos y video", text: "Hasta 10 fotos o un video de 60 segundos, con precio si querés.", icon: "M4 5h16v14H4zM8 10.5a1.5 1.5 0 1 0 0-.01M4 17l5-4.5 3.5 3 3-2.5L20 17" },
+  { title: "Páginas de emprendimiento", text: "Logo, portada, catálogo de productos y servicios, horarios y contacto.", icon: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5" },
+  { title: "Buscador", text: "Encontrá personas por nombre o rubro, emprendimientos y publicaciones.", icon: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5" },
+  { title: "Me gusta, comentarios y guardados", text: "Preguntá por precio o disponibilidad y guardá lo que querés ver después.", icon: "M12 20s-7.5-4.6-9.2-9.3C1.6 7.3 3.9 4 7.3 4c2 0 3.6 1.1 4.7 2.8C13.1 5.1 14.7 4 16.7 4c3.4 0 5.7 3.3 4.5 6.7C19.5 15.4 12 20 12 20Z" },
+  { title: "Tus datos, cuidados", text: "Tu WhatsApp y teléfono solo los ven personas con cuenta. Podés bloquear a quien quieras.", icon: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" },
+];
+
+const faqs = [
+  { q: "¿Cuánto cuesta?", a: "Crear tu cuenta, armar tu perfil, publicar y crear la página de tu emprendimiento es gratis. Más adelante vas a poder destacar tus publicaciones con una suscripción opcional." },
+  { q: "¿Necesito tener un emprendimiento?", a: "No. Podés usar WorkLink solo con tu perfil personal, para buscar trabajo, ofrecer tus servicios o encontrar a quien contratar. La página de emprendimiento es opcional." },
+  { q: "¿Quién ve mi WhatsApp?", a: "Solo las personas que tienen cuenta en WorkLink. Los visitantes sin cuenta y los buscadores como Google no lo ven." },
+  { q: "¿En qué ciudades funciona?", a: "Arrancamos en Córdoba, pero podés sumarte desde cualquier ciudad de Argentina." },
+  { q: "¿Cómo contacto a alguien?", a: "Desde su perfil o su página: por WhatsApp, o comentando su publicación. El trato lo arreglan directamente entre ustedes." },
+];
+
+const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!;
+---
+
+<!-- Hero -->
+<section class="relative overflow-hidden">
+  <div class="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-16 pt-10 sm:pt-16 lg:grid-cols-[1.05fr_1fr] lg:pb-24">
+    <div>
+      <h1 class="max-w-xl text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl">
+        Mostrá lo que hacés. Encontrá a quien lo necesita.
+      </h1>
+      <p class="mt-5 max-w-xl text-lg leading-relaxed text-ink-muted">
+        WorkLink es la red de trabajo de tu ciudad. Publicás como en Facebook, contás si buscás empleo, tenés un
+        emprendimiento u ofrecés servicios, y te conectás con gente de tu zona.
+      </p>
+
+      <div class="mt-8 flex flex-wrap gap-3">
+        <Button href={routes.signup} size="lg">Crear cuenta gratis</Button>
+        <Button href={routes.login} variant="secondary" size="lg">Ya tengo cuenta</Button>
+      </div>
+
+      <form action="/buscar" method="GET" role="search" class="mt-10 max-w-xl">
+        <label for="landing-q" class="text-sm font-semibold">¿Buscás a alguien? Probá sin crear cuenta:</label>
+        <div class="relative mt-2">
+          <input
+            id="landing-q"
+            name="q"
+            type="search"
+            maxlength={100}
+            autocomplete="off"
+            enterkeyhint="search"
+            placeholder="Electricista, tortas, diseño web…"
+            class="h-12 w-full rounded-full border border-line bg-surface pl-5 pr-28 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+          />
+          <button type="submit" class="absolute right-1.5 top-1/2 h-9 -translate-y-1/2 rounded-full bg-ink px-4 text-sm font-semibold text-bg hover:opacity-90">
+            Buscar
+          </button>
+        </div>
+        <p class="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-sm text-ink-muted">
+          {examples.map((example) => (
+            <a href={`/buscar?q=${encodeURIComponent(example)}`} class="underline decoration-line underline-offset-4 hover:text-ink hover:decoration-ink">
+              {example}
+            </a>
+          ))}
+        </p>
+      </form>
+    </div>
+
+    <!-- Escena: alguien busca, alguien ofrece, y se conectan. Personas ficticias. -->
+    <div class="relative mx-auto w-full max-w-md lg:max-w-none" aria-label="Ejemplo de cómo se ve WorkLink" role="img">
+      <div class="absolute -inset-x-10 -top-10 bottom-0 -z-10 rounded-[3rem] bg-seek-soft/70 lg:-right-24" aria-hidden="true"></div>
+
+      <article class="scene-card relative z-10 rounded-wl-lg border border-line bg-surface p-4 shadow-[0_18px_40px_-24px_rgb(20_22_31/0.45)] sm:mr-10" aria-hidden="true">
+        <header class="flex items-center gap-3">
+          <span class="grid h-10 w-10 place-items-center rounded-full bg-warning-soft font-bold text-warning">LM</span>
+          <span class="min-w-0 flex-1">
+            <span class="flex flex-wrap items-center gap-2 font-semibold">Lucía M. <span class:list={["rounded-full px-2 py-0.5 text-xs", sceneBadge("hiring").class]}>{sceneBadge("hiring").badge}</span></span>
+            <span class="block text-xs text-ink-muted">hace 12 min · Villa Carlos Paz</span>
+          </span>
+          <span class="rounded-full bg-seek-soft px-2.5 py-1 text-xs font-semibold text-seek">Busco</span>
+        </header>
+        <p class="mt-3">Busco electricista matriculado para revisar la instalación de un local antes de abrir. ¿Alguien recomienda?</p>
+        <div class="mt-3 flex items-center gap-4 border-t border-line pt-2 text-sm text-ink-muted">
+          <span>♥ 8</span><span>3 comentarios</span>
+        </div>
+        <div class="mt-2 flex gap-2.5">
+          <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-success-soft text-xs font-bold text-success">MR</span>
+          <p class="rounded-wl-lg bg-surface-muted px-3 py-2 text-sm">
+            <span class="font-semibold">Martín R.</span> ¡Hola Lucía! Soy electricista matriculado y estoy cerca. Te escribo por WhatsApp.
+          </p>
+        </div>
+      </article>
+
+      <article class="scene-card relative z-20 -mt-4 ml-6 rounded-wl-lg border border-line bg-surface p-4 shadow-[0_18px_40px_-24px_rgb(20_22_31/0.45)] sm:ml-16" aria-hidden="true">
+        <header class="flex items-center gap-3">
+          <span class="grid h-10 w-10 place-items-center rounded-full bg-offer-soft font-bold text-offer">CS</span>
+          <span class="min-w-0 flex-1">
+            <span class="flex flex-wrap items-center gap-2 font-semibold">Carla S. <span class:list={["rounded-full px-2 py-0.5 text-xs", sceneBadge("entrepreneur").class]}>{sceneBadge("entrepreneur").badge}</span></span>
+            <span class="block text-xs text-ink-muted">Dulce Carla · hace 1 h · Córdoba</span>
+          </span>
+          <span class="rounded-full bg-warning-soft px-2.5 py-1 text-xs font-semibold text-warning">Promoción</span>
+        </header>
+        <p class="mt-3">Tortas personalizadas para cumpleaños. Este mes, 10% off encargando con una semana de anticipación 🎂</p>
+        <div class="mt-3 grid grid-cols-3 gap-1 overflow-hidden rounded-wl" aria-hidden="true">
+          <span class="h-16 bg-offer-soft"></span><span class="h-16 bg-warning-soft"></span><span class="h-16 bg-seek-soft"></span>
+        </div>
+      </article>
+
+      <article class="scene-card relative z-10 -mt-3 mr-4 rounded-wl-lg border border-line bg-surface p-4 shadow-[0_18px_40px_-24px_rgb(20_22_31/0.45)] sm:mr-16" aria-hidden="true">
+        <header class="flex items-center gap-3">
+          <span class="grid h-10 w-10 place-items-center rounded-full bg-seek-soft font-bold text-seek">JP</span>
+          <span class="min-w-0 flex-1">
+            <span class="flex flex-wrap items-center gap-2 font-semibold">Joaquín P. <span class:list={["rounded-full px-2 py-0.5 text-xs", sceneBadge("job_seeking").class]}>{sceneBadge("job_seeking").badge}</span></span>
+            <span class="block text-xs text-ink-muted">Cajero y repositor · hace 3 h · Río Cuarto</span>
+          </span>
+        </header>
+        <p class="mt-3">Tengo experiencia en atención al público y disponibilidad de lunes a sábado. ¡Cualquier dato me ayuda!</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- Para quién -->
+<section class="border-y border-line bg-surface" aria-labelledby="para-quien">
+  <div class="mx-auto max-w-6xl px-4 py-16 sm:py-20">
+    <h2 id="para-quien" class="max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">Una cuenta, cuatro maneras de usarla</h2>
+    <p class="mt-3 max-w-2xl text-ink-muted">
+      En tu perfil elegís tu situación y se muestra en todo lo que publicás. Así, quien te lee sabe enseguida si buscás,
+      ofrecés o contratás.
+    </p>
+
+    <div class="mt-10 grid gap-x-10 gap-y-10 md:grid-cols-2">
+      {
+        SITUATIONS.map((situation) => {
+          const info = forWho[situation.value];
+          return (
+            <div class="flex gap-4">
+              <span class:list={["mt-1 w-1.5 shrink-0 rounded-full", situation.class]} aria-hidden="true" />
+              <div>
+                <span class:list={["inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold", situation.class]}>{situation.badge}</span>
+                <h3 class="mt-2 text-xl font-semibold">{info.title}</h3>
+                <ul class="mt-2 flex flex-col gap-1.5 text-ink-muted">
+                  {info.points.map((point) => (
+                    <li class="flex gap-2"><span aria-hidden="true">✓</span>{point}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          );
+        })
+      }
+    </div>
+  </div>
+</section>
+
+<!-- Cómo funciona (es una secuencia: lleva números) -->
+<section class="mx-auto max-w-6xl px-4 py-16 sm:py-20" aria-labelledby="como-funciona">
+  <h2 id="como-funciona" class="text-3xl font-bold tracking-tight sm:text-4xl">Cómo funciona</h2>
+  <ol class="mt-10 grid gap-8 md:grid-cols-3">
+    {
+      steps.map((step, index) => (
+        <li class="relative">
+          <span class="text-5xl font-extrabold leading-none text-brand/30" aria-hidden="true">{index + 1}</span>
+          <h3 class="mt-3 text-xl font-semibold">{step.title}</h3>
+          <p class="mt-2 text-ink-muted">{step.text}</p>
+        </li>
+      ))
+    }
+  </ol>
+</section>
+
+<!-- Qué podés hacer -->
+<section class="bg-surface-muted/60" aria-labelledby="funciones">
+  <div class="mx-auto grid max-w-6xl gap-12 px-4 py-16 sm:py-20 lg:grid-cols-[1fr_2fr]">
+    <div>
+      <h2 id="funciones" class="text-3xl font-bold tracking-tight sm:text-4xl">Todo lo que necesitás para que te encuentren</h2>
+      <p class="mt-3 text-ink-muted">Pensado para el celular, rápido aunque tengas poca señal.</p>
+    </div>
+    <ul class="grid gap-x-8 gap-y-8 sm:grid-cols-2">
+      {
+        features.map((feature) => (
+          <li class="flex gap-4">
+            <span class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-surface text-brand ring-1 ring-line">
+              <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d={feature.icon} />
+              </svg>
+            </span>
+            <div>
+              <h3 class="font-semibold">{feature.title}</h3>
+              <p class="mt-1 text-sm text-ink-muted">{feature.text}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</section>
+
+<!-- Preguntas frecuentes -->
+<section class="mx-auto max-w-3xl px-4 py-16 sm:py-20" aria-labelledby="preguntas">
+  <h2 id="preguntas" class="text-3xl font-bold tracking-tight sm:text-4xl">Preguntas frecuentes</h2>
+  <div class="mt-8 divide-y divide-line border-y border-line">
+    {
+      faqs.map((faq) => (
+        <details class="group py-4">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 text-lg font-semibold">
+            {faq.q}
+            <span class="text-2xl font-normal text-ink-muted transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+          </summary>
+          <p class="mt-2 text-ink-muted">{faq.a}</p>
+        </details>
+      ))
+    }
+  </div>
+</section>
+
+<!-- Cierre -->
+<section class="px-4 pb-20">
+  <div class="mx-auto flex max-w-6xl flex-col items-start gap-6 rounded-wl-lg bg-brand px-6 py-12 text-brand-contrast sm:px-12 md:flex-row md:items-center md:justify-between">
+    <div>
+      <h2 class="text-3xl font-bold tracking-tight">Sumate a WorkLink</h2>
+      <p class="mt-2 max-w-xl opacity-90">Creá tu cuenta en un minuto y empezá a publicar hoy. Es gratis.</p>
+    </div>
+    <a href={routes.signup} class="inline-flex h-12 shrink-0 items-center rounded-wl bg-brand-contrast px-6 font-semibold text-brand hover:opacity-90">
+      Crear cuenta gratis
+    </a>
+  </div>
+</section>
+
+<style>
+  /* Única animación de la página: las tarjetas de la escena entran en cascada. */
+  @media (prefers-reduced-motion: no-preference) {
+    .scene-card {
+      animation: scene-in 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .scene-card:nth-of-type(2) {
+      animation-delay: 0.15s;
+    }
+    .scene-card:nth-of-type(3) {
+      animation-delay: 0.3s;
+    }
+  }
+  @keyframes scene-in {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+  }
+</style>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/home/SearchBox.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /** Caja de búsqueda grande (inicio y /buscar). Funciona sin JavaScript. */
@@ -1689,7 +1978,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
             <Button href={routes.login} variant="ghost" size="sm">
               Ingresar
             </Button>
-            <Button href={routes.signup} size="sm">
+            <Button href={routes.signup} size="sm" class="whitespace-nowrap">
               Crear cuenta
             </Button>
           </>
@@ -5184,22 +5473,31 @@ escribir 'src/pages/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Inicio.
  *  - Con sesión: el feed personal (buscador, caja para publicar, publicaciones
  *    de quienes sigue). No se indexa: es distinto para cada persona.
- *  - Sin sesión: presentación de WorkLink, buscador y últimas publicaciones.
+ *  - Sin sesión: la landing que explica qué es WorkLink y para qué sirve.
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
-import Button from "../components/ui/Button.astro";
-import { routes } from "../config/site";
-import PostCard from "../components/posts/PostCard.astro";
 import HomeFeed from "../components/home/HomeFeed.astro";
-import { getFeed } from "../services/posts";
+import Landing from "../components/home/Landing.astro";
 import { getViewerProfile } from "../lib/viewer";
+import { jsonLdScript } from "../lib/seo/business";
+import { brand } from "../config/brand";
 
-const user = Astro.locals.user;
 const viewer = await getViewerProfile(Astro.locals);
-const latest = viewer ? [] : (await getFeed(Astro.locals.supabase, { limit: 4 })).posts;
 
-const seekExamples = ["Fotógrafo para un casamiento", "Electricista", "Tortas personalizadas", "Diseño de logo"];
-const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "Clases particulares"];
+const site = Astro.site ?? new URL(Astro.url.origin);
+// Datos estructurados: Google puede mostrar la caja de búsqueda del sitio.
+const websiteJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: brand.name,
+  url: new URL("/", site).toString(),
+  inLanguage: "es-AR",
+  potentialAction: {
+    "@type": "SearchAction",
+    target: { "@type": "EntryPoint", urlTemplate: new URL("/buscar?q={search_term_string}", site).toString() },
+    "query-input": "required name=search_term_string",
+  },
+};
 ---
 
 {
@@ -5208,89 +5506,14 @@ const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "C
       <HomeFeed viewer={viewer} />
     </BaseLayout>
   ) : (
-<BaseLayout>
-  <section class="mx-auto max-w-6xl px-4 pb-12 pt-10 sm:pt-16">
-    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">Córdoba, Argentina</p>
-    <h1 class="mt-3 max-w-3xl text-4xl font-extrabold leading-[1.05] sm:text-6xl">
-      Lo que <span class="text-seek">necesitás</span>, con quien lo <span class="text-offer">ofrece</span>.
-    </h1>
-    <p class="mt-5 max-w-2xl text-lg text-ink-muted">
-      Encontrá emprendedores, profesionales, productos y servicios cerca tuyo. O publicá lo que buscás y recibí
-      propuestas.
-    </p>
-
-    <form action="/buscar" method="GET" role="search" class="mt-8 flex max-w-2xl flex-col gap-2 sm:flex-row">
-      <label for="q" class="sr-only">¿Qué estás buscando?</label>
-      <input
-        id="q"
-        name="q"
-        type="search"
-        placeholder="¿Qué estás buscando? Ej.: fotógrafo en Córdoba"
-        autocomplete="off"
-        enterkeyhint="search"
-        class="h-13 w-full rounded-wl border border-line bg-surface px-4 text-base shadow-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
-      />
-      <Button type="submit" size="lg" class="h-13 shrink-0">Buscar</Button>
-    </form>
-  </section>
-
-  <section class="mx-auto grid max-w-6xl gap-4 px-4 pb-16 md:grid-cols-2" aria-label="Cómo usar WorkLink">
-    <article class="flex flex-col rounded-wl-lg border border-line bg-seek-soft p-6 sm:p-8">
-      <h2 class="text-2xl font-bold">¿Qué estás buscando?</h2>
-      <p class="mt-2 text-ink-muted">
-        Buscá entre emprendedores de tu zona o publicá tu necesidad y dejá que te lleguen las propuestas.
-      </p>
-      <ul class="mt-5 flex flex-wrap gap-2" aria-label="Ejemplos">
-        {seekExamples.map((example) => (
-          <li>
-            <a
-              href={`/buscar?q=${encodeURIComponent(example)}`}
-              class="inline-block rounded-full border border-seek/25 bg-surface px-3 py-1.5 text-sm hover:border-seek"
-            >
-              Busco {example.toLowerCase()}
-            </a>
-          </li>
-        ))}
-      </ul>
-      <div class="mt-auto pt-6">
-        <Button href={user ? routes.dashboard : `${routes.signup}?intent=seeker`} variant="seek">
-          Publicar una necesidad
-        </Button>
-      </div>
-    </article>
-
-    <article class="flex flex-col rounded-wl-lg border border-line bg-offer-soft p-6 sm:p-8">
-      <h2 class="text-2xl font-bold">¿Qué ofrecés?</h2>
-      <p class="mt-2 text-ink-muted">
-        Creá el perfil de tu emprendimiento, mostrá tus trabajos y encontrá personas que necesitan lo que hacés.
-      </p>
-      <ul class="mt-5 flex flex-wrap gap-2" aria-label="Ejemplos">
-        {offerExamples.map((example) => (
-          <li class="rounded-full border border-offer/25 bg-surface px-3 py-1.5 text-sm">Ofrezco {example.toLowerCase()}</li>
-        ))}
-      </ul>
-      <div class="mt-auto pt-6">
-        <Button href={user ? routes.dashboard : `${routes.signup}?intent=provider`} variant="offer">
-          Crear mi emprendimiento
-        </Button>
-      </div>
-    </article>
-  </section>
-
-  {
-    latest.length > 0 && (
-      <section class="mx-auto max-w-2xl px-4 pb-20" aria-labelledby="ultimas">
-        <div class="mb-5 flex items-end justify-between gap-4">
-          <h2 id="ultimas" class="text-2xl font-bold">Últimas publicaciones</h2>
-          <a href="/publicaciones" class="text-sm font-semibold text-brand hover:underline">Ver todas →</a>
-        </div>
-        <div class="flex flex-col gap-4">
-          {latest.map((post) => <PostCard post={post} />)}
-        </div>
-      </section>
-    )
-  }
-</BaseLayout>
+    <BaseLayout
+      title="Red de trabajo, servicios y emprendimientos de tu ciudad"
+      description="Publicá como en Facebook, contá si buscás empleo, tenés un emprendimiento u ofrecés servicios, y conectá con gente de tu zona. Gratis."
+      canonicalPath="/"
+    >
+      <script slot="head" type="application/ld+json" set:html={jsonLdScript(websiteJsonLd)} />
+      <Landing />
+    </BaseLayout>
   )
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -9143,6 +9366,6 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 echo ""
 echo "============================================================"
-echo " Listo. 118 archivos de los ajustes instalados."
+echo " Listo. 119 archivos de la landing instalados."
 echo " Siguiente paso: git add . , git commit y git push"
 echo "============================================================"
