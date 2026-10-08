@@ -9,6 +9,8 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
  *  - se subieron pero nunca se publicaron (pending) hace más de 24 h, o
  *  - quedaron desvinculados (orphan) hace más de 24 h (editados o eliminados).
  *
+ * Además borra las notificaciones leídas hace más de 90 días.
+ *
  * Vercel envía "Authorization: Bearer <CRON_SECRET>": sin ese secreto, 401.
  * Procesa en lotes para no exceder el tiempo de una función.
  */
@@ -56,5 +58,18 @@ export const GET: APIRoute = async ({ request }) => {
     if (deleteError) console.error("[cron/limpiar-archivos]", deleteError.message);
   }
 
-  return Response.json({ ok: true, media: removedRows.length, files: removedFiles, more: (rows?.length ?? 0) === BATCH });
+  const oldRead = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { count: notifications, error: notifError } = await supabase
+    .from("notifications")
+    .delete({ count: "exact" })
+    .lt("read_at", oldRead);
+  if (notifError) console.error("[cron/limpiar-archivos] notificaciones", notifError.message);
+
+  return Response.json({
+    ok: true,
+    media: removedRows.length,
+    files: removedFiles,
+    notifications: notifications ?? 0,
+    more: (rows?.length ?? 0) === BATCH,
+  });
 };

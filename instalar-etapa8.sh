@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · arreglo: eliminar publicaciones desde el feed, el perfil y la publicación (incluye la Etapa 7)
+# WorkLink · instalador de la Etapa 8 (notificaciones)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-eliminar.sh
+#     bash instalar-etapa8.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, agrega scripts/importar-localidades.mjs y la migración 0014. NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0015 (incluye también lo de la Etapa 7). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos del arreglo..."
+echo "Instalando archivos de la Etapa 8..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -2005,9 +2005,12 @@ import { actions } from "astro:actions";
 import { routes } from "../../config/site";
 import { getViewerProfile } from "../../lib/viewer";
 import { displayName } from "../../services/profiles";
+import { countUnread } from "../../services/notifications";
 
 const user = Astro.locals.user;
 const viewer = await getViewerProfile(Astro.locals);
+const unread = user ? await countUnread(Astro.locals.supabase, user.id) : 0;
+const badge = (n: number) => (n > 99 ? "99+" : String(n));
 const logoutAction = `/salir${actions.auth.signOut}`;
 const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
@@ -2038,6 +2041,23 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
       {
         user ? (
           <>
+            <a
+              href="/notificaciones"
+              class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
+              aria-label={unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones"}
+              data-notifications-link
+            >
+              <svg viewBox="0 0 24 24" class="h-[22px] w-[22px] fill-none stroke-current stroke-2" aria-hidden="true">
+                <path stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16Z" /><path stroke-linecap="round" d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+              </svg>
+              <span
+                data-notifications-badge
+                hidden={unread === 0}
+                class="absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white"
+              >
+                {badge(unread)}
+              </span>
+            </a>
             {viewer && (
               <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
                 <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
@@ -2068,6 +2088,14 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </nav>
   </div>
 </header>
+
+{
+  user && (
+    <script>
+      import "../../scripts/notifications";
+    </script>
+  )
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/posts/FeedPage.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -3294,7 +3322,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -5046,6 +5074,8 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
  *  - se subieron pero nunca se publicaron (pending) hace más de 24 h, o
  *  - quedaron desvinculados (orphan) hace más de 24 h (editados o eliminados).
  *
+ * Además borra las notificaciones leídas hace más de 90 días.
+ *
  * Vercel envía "Authorization: Bearer <CRON_SECRET>": sin ese secreto, 401.
  * Procesa en lotes para no exceder el tiempo de una función.
  */
@@ -5093,7 +5123,36 @@ export const GET: APIRoute = async ({ request }) => {
     if (deleteError) console.error("[cron/limpiar-archivos]", deleteError.message);
   }
 
-  return Response.json({ ok: true, media: removedRows.length, files: removedFiles, more: (rows?.length ?? 0) === BATCH });
+  const oldRead = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const { count: notifications, error: notifError } = await supabase
+    .from("notifications")
+    .delete({ count: "exact" })
+    .lt("read_at", oldRead);
+  if (notifError) console.error("[cron/limpiar-archivos] notificaciones", notifError.message);
+
+  return Response.json({
+    ok: true,
+    media: removedRows.length,
+    files: removedFiles,
+    notifications: notifications ?? 0,
+    more: (rows?.length ?? 0) === BATCH,
+  });
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/api/notificaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { countUnread } from "../../services/notifications";
+
+/**
+ * Cantidad de notificaciones sin leer del usuario actual (para la campanita).
+ * GET /api/notificaciones -> { unread: number }. Privado: nunca se cachea.
+ */
+export const GET: APIRoute = async ({ locals }) => {
+  const headers = { "Cache-Control": "private, no-store" };
+  if (!locals.user) return Response.json({ unread: 0 }, { status: 401, headers });
+  const unread = await countUnread(locals.supabase, locals.user.id);
+  return Response.json({ unread }, { headers });
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -5932,6 +5991,108 @@ Astro.response.headers.set("X-Robots-Tag", "noindex");
   nextHref={page.nextCursor ? `/?${more(page.nextCursor)}` : null}
   nextFragmentHref={page.nextCursor ? `/inicio/mas?${more(page.nextCursor)}` : null}
 />
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/notificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Notificaciones del usuario: me gusta, comentarios y nuevos seguidores.
+ * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
+ * esta vez). Ruta protegida por el middleware.
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Avatar from "../components/ui/Avatar.astro";
+import { decodeCursor, getNotifications, markAllRead, type NotificationView } from "../services/notifications";
+import { displayName } from "../services/profiles";
+import { postHeadline } from "../services/posts";
+import { formatDate, formatRelative } from "../lib/format";
+import { postPath, profilePath } from "../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
+const { items, nextCursor } = await getNotifications(supabase, user!.id, cursor);
+if (items.some((n) => !n.read_at)) await markAllRead(supabase);
+
+function describe(n: NotificationView) {
+  const name = n.actor ? displayName(n.actor) : "Alguien";
+  const post = n.post ? `“${postHeadline(n.post, 60)}”` : "tu publicación";
+  switch (n.type) {
+    case "post_like":
+      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "♥", tone: "bg-danger text-white" };
+    case "post_comment":
+      return {
+        name,
+        text: `comentó tu publicación ${post}:`,
+        quote: n.comment?.body,
+        href: n.post ? `${postPath(n.post)}${n.comment ? `#c-${n.comment.id}` : "#comentarios"}` : "#",
+        icon: "💬",
+        tone: "bg-seek text-white",
+      };
+    case "profile_follow":
+      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "+", tone: "bg-success text-white" };
+    case "business_follow":
+      return {
+        name,
+        text: `empezó a seguir a ${n.business?.name ?? "tu emprendimiento"}.`,
+        href: n.actor ? profilePath(n.actor.username) : "#",
+        icon: "+",
+        tone: "bg-offer text-white",
+      };
+  }
+}
+---
+
+<BaseLayout title="Notificaciones" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <h1 class="text-2xl font-bold">Notificaciones</h1>
+
+    {
+      items.length === 0 ? (
+        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente o te siga, te avisamos acá.</p>
+        </div>
+      ) : (
+        <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+          {items.map((n) => {
+            const d = describe(n);
+            const unread = !n.read_at;
+            return (
+              <li>
+                <a href={d.href} class:list={["flex gap-3 p-4 hover:bg-surface-muted", unread && "bg-seek-soft/60"]}>
+                  <span class="relative shrink-0">
+                    <Avatar name={d.name} path={n.actor?.avatar_path} size={48} />
+                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface text-xs font-bold", d.tone]} aria-hidden="true">
+                      {d.icon}
+                    </span>
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block">
+                      <strong>{d.name}</strong> {d.text}
+                    </span>
+                    {d.quote && <span class="mt-1 line-clamp-2 block text-sm text-ink-muted">“{d.quote}”</span>}
+                    <time datetime={n.created_at} title={formatDate(n.created_at, { dateStyle: "long", timeStyle: "short" })} class:list={["mt-1 block text-xs", unread ? "font-semibold text-seek" : "text-ink-muted"]}>
+                      {formatRelative(n.created_at)}
+                    </time>
+                  </span>
+                  {unread && <span class="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Nueva" />}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+
+    {
+      nextCursor && (
+        <div class="mt-6 text-center">
+          <a href={`/notificaciones?antes=${nextCursor}`} class="font-semibold text-brand hover:underline">Ver anteriores</a>
+        </div>
+      )
+    }
+  </section>
+</BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/p/[ref].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -8740,6 +8901,51 @@ document.addEventListener("click", async (event) => {
 });
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/scripts/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Campanita: actualiza la cantidad de notificaciones sin leer cada minuto
+ * mientras la pestaña está a la vista, y al volver a ella. Una consulta
+ * liviana (solo un número); sin conexión, no hace nada.
+ */
+const INTERVAL = 60_000;
+let timer: number | undefined;
+
+const enabled = () => Boolean(document.querySelector("[data-notifications-badge]"));
+
+async function refresh() {
+  if (document.visibilityState !== "visible" || !enabled()) return;
+  try {
+    const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
+    if (!res.ok) return;
+    const { unread } = (await res.json()) as { unread: number };
+    for (const badge of document.querySelectorAll<HTMLElement>("[data-notifications-badge]")) {
+      badge.textContent = unread > 99 ? "99+" : String(unread);
+      badge.hidden = unread === 0;
+    }
+    for (const link of document.querySelectorAll<HTMLElement>("[data-notifications-link]")) {
+      link.setAttribute("aria-label", unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones");
+    }
+  } catch {
+    /* sin conexión: se reintenta en el próximo ciclo */
+  }
+}
+
+function start() {
+  window.clearInterval(timer);
+  timer = window.setInterval(refresh, INTERVAL);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    void refresh();
+    start();
+  } else {
+    window.clearInterval(timer);
+  }
+});
+start();
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/scripts/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
  * Botones de me gusta, guardar, seguir y compartir, y el "Ver más" de los
@@ -9368,6 +9574,84 @@ export function toCityRef(row: CityRow | null | undefined): CityRef | null {
 export async function getCity(supabase: SupabaseClient, id: number): Promise<CityRef | null> {
   const { data } = await supabase.from("cities").select(CITY_EMBED).eq("id", id).maybeSingle();
   return toCityRef(data as CityRow | null);
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { decodeCursor, encodeCursor, type Cursor } from "./posts";
+
+/**
+ * Notificaciones del usuario actual (RLS: cada uno ve solo las suyas).
+ * Las crea la base con triggers; acá solo se leen y se marcan como leídas.
+ */
+
+export type NotificationType = "post_like" | "post_comment" | "profile_follow" | "business_follow";
+
+export interface NotificationView {
+  id: string;
+  type: NotificationType;
+  created_at: string;
+  read_at: string | null;
+  actor: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  post: { id: string; title: string | null; body: string } | null;
+  comment: { id: string; body: string } | null;
+  business: { slug: string; name: string } | null;
+}
+
+export const NOTIFICATIONS_PAGE = 30;
+
+const COLUMNS = `id, type, created_at, read_at,
+  actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path ),
+  post:posts ( id, title, body ),
+  comment:post_comments ( id, body ),
+  business:businesses ( slug, name )`;
+
+export async function getNotifications(
+  supabase: SupabaseClient,
+  userId: string,
+  cursor?: Cursor | null,
+): Promise<{ items: NotificationView[]; nextCursor: string | null }> {
+  let query = supabase
+    .from("notifications")
+    .select(COLUMNS)
+    .eq("recipient_id", userId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(NOTIFICATIONS_PAGE + 1);
+  if (cursor) {
+    query = query.or(`created_at.lt."${cursor.publishedAt}",and(created_at.eq."${cursor.publishedAt}",id.lt.${cursor.id})`);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as NotificationView[];
+  const page = rows.slice(0, NOTIFICATIONS_PAGE);
+  const last = page[page.length - 1];
+  return {
+    // Si la cuenta de quien la generó fue suspendida, RLS devuelve actor null: se omite.
+    items: page.filter((n) => n.actor),
+    nextCursor: rows.length > NOTIFICATIONS_PAGE && last ? encodeCursor({ published_at: last.created_at, id: last.id }) : null,
+  };
+}
+
+export { decodeCursor };
+
+export async function countUnread(supabase: SupabaseClient, userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("recipient_id", userId)
+    .is("read_at", null);
+  if (error) {
+    console.error("[notificaciones]", error.message);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+export async function markAllRead(supabase: SupabaseClient): Promise<void> {
+  const { error } = await supabase.rpc("mark_notifications_read");
+  if (error) console.error("[notificaciones]", error.message);
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -10887,13 +11171,211 @@ update public.settings set is_public = true where key like 'seo.%';
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008001500_notifications.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0015 · Notificaciones (Etapa 8)
+-- =============================================================================
+-- * Avisos dentro de WorkLink: me gusta en tu publicación, comentario en tu
+--   publicación, alguien empezó a seguirte o a seguir tu emprendimiento.
+-- * Las crea la base con triggers (nadie puede crear avisos falsos desde la
+--   app). Cada usuario solo ve y marca como leídos los suyos.
+-- * Sin avisos duplicados: dar y quitar me gusta varias veces deja un solo
+--   aviso; al quitar el me gusta o dejar de seguir, el aviso se borra.
+-- * Los leídos de más de 90 días los borra la limpieza diaria.
+-- * Pensado para sumar después: mensajes (Etapa 9) y propuestas (Etapa 10).
+-- =============================================================================
+
+create type public.notification_type as enum ('post_like', 'post_comment', 'profile_follow', 'business_follow');
+
+create table public.notifications (
+  id            uuid primary key default gen_random_uuid(),
+  recipient_id  uuid not null references public.profiles (id) on delete cascade,
+  actor_id      uuid not null references public.profiles (id) on delete cascade,
+  type          public.notification_type not null,
+  post_id       uuid references public.posts (id) on delete cascade,
+  comment_id    uuid references public.post_comments (id) on delete cascade,
+  business_id   uuid references public.businesses (id) on delete cascade,
+  created_at    timestamptz not null default now(),
+  read_at       timestamptz,
+  constraint notifications_not_self check (recipient_id <> actor_id)
+);
+
+-- Lista del usuario (más nuevas primero) y contador de no leídas.
+create index notifications_recipient_idx on public.notifications (recipient_id, created_at desc, id desc);
+create index notifications_unread_idx on public.notifications (recipient_id) where read_at is null;
+create index notifications_cleanup_idx on public.notifications (read_at) where read_at is not null;
+
+-- Un solo aviso por persona y publicación (me gusta) o por seguimiento.
+create unique index notifications_like_once on public.notifications (recipient_id, actor_id, post_id) where type = 'post_like';
+create unique index notifications_follow_once on public.notifications (recipient_id, actor_id) where type = 'profile_follow';
+create unique index notifications_business_follow_once on public.notifications (recipient_id, actor_id, business_id) where type = 'business_follow';
+
+-- -----------------------------------------------------------------------------
+-- Creación de avisos (solo desde triggers; SECURITY DEFINER)
+-- -----------------------------------------------------------------------------
+create or replace function public.notify(
+  p_recipient uuid,
+  p_actor     uuid,
+  p_type      public.notification_type,
+  p_post      uuid default null,
+  p_comment   uuid default null,
+  p_business  uuid default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if p_recipient is null or p_actor is null or p_recipient = p_actor then
+    return;
+  end if;
+  -- Sin avisos entre personas con bloqueo.
+  if public.is_blocked_between(p_recipient, p_actor) then
+    return;
+  end if;
+  insert into public.notifications (recipient_id, actor_id, type, post_id, comment_id, business_id)
+  values (p_recipient, p_actor, p_type, p_post, p_comment, p_business)
+  on conflict do nothing;
+end;
+$$;
+
+revoke execute on function public.notify(uuid, uuid, public.notification_type, uuid, uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.tg_notify_post_like()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    perform public.notify((select p.author_id from public.posts p where p.id = new.post_id), new.user_id, 'post_like', new.post_id);
+  else
+    delete from public.notifications n
+    where n.type = 'post_like' and n.actor_id = old.user_id and n.post_id = old.post_id;
+  end if;
+  return null;
+end;
+$$;
+
+create trigger post_likes_notify
+  after insert or delete on public.post_likes
+  for each row execute function public.tg_notify_post_like();
+
+create or replace function public.tg_notify_post_comment()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.notify((select p.author_id from public.posts p where p.id = new.post_id), new.author_id, 'post_comment', new.post_id, new.id);
+  return null;
+end;
+$$;
+
+-- Al borrar el comentario, el aviso se borra solo (comment_id on delete cascade).
+create trigger post_comments_notify
+  after insert on public.post_comments
+  for each row execute function public.tg_notify_post_comment();
+
+create or replace function public.tg_notify_profile_follow()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    perform public.notify(new.followed_id, new.follower_id, 'profile_follow');
+  else
+    delete from public.notifications n
+    where n.type = 'profile_follow' and n.actor_id = old.follower_id and n.recipient_id = old.followed_id;
+  end if;
+  return null;
+end;
+$$;
+
+create trigger profile_follows_notify
+  after insert or delete on public.profile_follows
+  for each row execute function public.tg_notify_profile_follow();
+
+-- Seguir un emprendimiento avisa a su dueño.
+create or replace function public.tg_notify_business_follow()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' then
+    perform public.notify((select b.owner_id from public.businesses b where b.id = new.business_id), new.follower_id, 'business_follow', null, null, new.business_id);
+  else
+    delete from public.notifications n
+    where n.type = 'business_follow' and n.actor_id = old.follower_id and n.business_id = old.business_id;
+  end if;
+  return null;
+end;
+$$;
+
+create trigger business_follows_notify
+  after insert or delete on public.business_follows
+  for each row execute function public.tg_notify_business_follow();
+
+-- -----------------------------------------------------------------------------
+-- Seguridad: cada uno ve sus avisos y solo puede marcarlos como leídos.
+-- -----------------------------------------------------------------------------
+alter table public.notifications enable row level security;
+
+create policy "notifications: veo las mías" on public.notifications
+  for select to authenticated
+  using (recipient_id = (select auth.uid()));
+
+create policy "notifications: marco las mías como leídas" on public.notifications
+  for update to authenticated
+  using (recipient_id = (select auth.uid()))
+  with check (recipient_id = (select auth.uid()));
+
+create policy "notifications: borro las mías" on public.notifications
+  for delete to authenticated
+  using (recipient_id = (select auth.uid()));
+
+revoke all on public.notifications from anon, authenticated;
+grant select, delete on public.notifications to authenticated;
+-- Solo la columna read_at se puede modificar.
+grant update (read_at) on public.notifications to authenticated;
+
+-- Marcar todas como leídas (una sola consulta, sin pasar ids).
+create or replace function public.mark_notifications_read()
+returns integer
+language sql
+security invoker
+set search_path = ''
+as $$
+  with updated as (
+    update public.notifications
+    set read_at = now()
+    where recipient_id = (select auth.uid()) and read_at is null
+    returning 1
+  )
+  select count(*)::integer from updated;
+$$;
+
+revoke execute on function public.mark_notifications_read() from public, anon;
+grant execute on function public.mark_notifications_read() to authenticated;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 130 archivos del arreglo instalados."
-echo " Si ya instalaste la Etapa 7: solo git add, commit y push."
-echo " Si no: npx supabase db push y npm run db:localidades antes."
+echo " Listo. 135 archivos de la Etapa 8 instalados."
+echo " Siguientes pasos:"
+echo "   1) npx supabase db push"
+echo "   2) git add . / git commit / git push"
 echo "============================================================"

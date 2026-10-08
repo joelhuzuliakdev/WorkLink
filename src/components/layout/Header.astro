@@ -6,9 +6,12 @@ import { actions } from "astro:actions";
 import { routes } from "../../config/site";
 import { getViewerProfile } from "../../lib/viewer";
 import { displayName } from "../../services/profiles";
+import { countUnread } from "../../services/notifications";
 
 const user = Astro.locals.user;
 const viewer = await getViewerProfile(Astro.locals);
+const unread = user ? await countUnread(Astro.locals.supabase, user.id) : 0;
+const badge = (n: number) => (n > 99 ? "99+" : String(n));
 const logoutAction = `/salir${actions.auth.signOut}`;
 const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
@@ -39,6 +42,23 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
       {
         user ? (
           <>
+            <a
+              href="/notificaciones"
+              class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
+              aria-label={unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones"}
+              data-notifications-link
+            >
+              <svg viewBox="0 0 24 24" class="h-[22px] w-[22px] fill-none stroke-current stroke-2" aria-hidden="true">
+                <path stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16Z" /><path stroke-linecap="round" d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+              </svg>
+              <span
+                data-notifications-badge
+                hidden={unread === 0}
+                class="absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white"
+              >
+                {badge(unread)}
+              </span>
+            </a>
             {viewer && (
               <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
                 <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
@@ -69,3 +89,11 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </nav>
   </div>
 </header>
+
+{
+  user && (
+    <script>
+      import "../../scripts/notifications";
+    </script>
+  )
+}

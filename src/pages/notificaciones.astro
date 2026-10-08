@@ -1,0 +1,99 @@
+---
+/**
+ * Notificaciones del usuario: me gusta, comentarios y nuevos seguidores.
+ * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
+ * esta vez). Ruta protegida por el middleware.
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Avatar from "../components/ui/Avatar.astro";
+import { decodeCursor, getNotifications, markAllRead, type NotificationView } from "../services/notifications";
+import { displayName } from "../services/profiles";
+import { postHeadline } from "../services/posts";
+import { formatDate, formatRelative } from "../lib/format";
+import { postPath, profilePath } from "../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
+const { items, nextCursor } = await getNotifications(supabase, user!.id, cursor);
+if (items.some((n) => !n.read_at)) await markAllRead(supabase);
+
+function describe(n: NotificationView) {
+  const name = n.actor ? displayName(n.actor) : "Alguien";
+  const post = n.post ? `“${postHeadline(n.post, 60)}”` : "tu publicación";
+  switch (n.type) {
+    case "post_like":
+      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "♥", tone: "bg-danger text-white" };
+    case "post_comment":
+      return {
+        name,
+        text: `comentó tu publicación ${post}:`,
+        quote: n.comment?.body,
+        href: n.post ? `${postPath(n.post)}${n.comment ? `#c-${n.comment.id}` : "#comentarios"}` : "#",
+        icon: "💬",
+        tone: "bg-seek text-white",
+      };
+    case "profile_follow":
+      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "+", tone: "bg-success text-white" };
+    case "business_follow":
+      return {
+        name,
+        text: `empezó a seguir a ${n.business?.name ?? "tu emprendimiento"}.`,
+        href: n.actor ? profilePath(n.actor.username) : "#",
+        icon: "+",
+        tone: "bg-offer text-white",
+      };
+  }
+}
+---
+
+<BaseLayout title="Notificaciones" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <h1 class="text-2xl font-bold">Notificaciones</h1>
+
+    {
+      items.length === 0 ? (
+        <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente o te siga, te avisamos acá.</p>
+        </div>
+      ) : (
+        <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+          {items.map((n) => {
+            const d = describe(n);
+            const unread = !n.read_at;
+            return (
+              <li>
+                <a href={d.href} class:list={["flex gap-3 p-4 hover:bg-surface-muted", unread && "bg-seek-soft/60"]}>
+                  <span class="relative shrink-0">
+                    <Avatar name={d.name} path={n.actor?.avatar_path} size={48} />
+                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface text-xs font-bold", d.tone]} aria-hidden="true">
+                      {d.icon}
+                    </span>
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block">
+                      <strong>{d.name}</strong> {d.text}
+                    </span>
+                    {d.quote && <span class="mt-1 line-clamp-2 block text-sm text-ink-muted">“{d.quote}”</span>}
+                    <time datetime={n.created_at} title={formatDate(n.created_at, { dateStyle: "long", timeStyle: "short" })} class:list={["mt-1 block text-xs", unread ? "font-semibold text-seek" : "text-ink-muted"]}>
+                      {formatRelative(n.created_at)}
+                    </time>
+                  </span>
+                  {unread && <span class="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Nueva" />}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+
+    {
+      nextCursor && (
+        <div class="mt-6 text-center">
+          <a href={`/notificaciones?antes=${nextCursor}`} class="font-semibold text-brand hover:underline">Ver anteriores</a>
+        </div>
+      )
+    }
+  </section>
+</BaseLayout>
