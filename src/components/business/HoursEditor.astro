@@ -1,0 +1,48 @@
+---
+/**
+ * Editor de horarios semanal, sin JavaScript: por día, una casilla "Abierto"
+ * y hasta dos franjas (ej. 9 a 13 y 17 a 21, habitual en Argentina).
+ * Campos: hours.mon.open, hours.mon.from1, hours.mon.to1, hours.mon.from2...
+ */
+import { WEEK_DAYS, type BusinessHours } from "../../schemas/business";
+
+interface Props {
+  hours: BusinessHours | null;
+  error?: string;
+}
+
+const { hours, error } = Astro.props;
+const timeClass =
+  "h-10 w-[6.5rem] rounded-wl border border-line bg-surface px-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<fieldset class="flex flex-col gap-2">
+  <legend class="mb-1 text-sm font-medium text-ink">Horarios de atención</legend>
+  <p class="text-xs text-ink-muted">Marcá los días que atendés. La segunda franja es opcional (por ejemplo, de tarde).</p>
+  <div class="divide-y divide-line rounded-wl border border-line bg-surface">
+    {
+      WEEK_DAYS.map(({ key, label }) => {
+        const ranges = hours?.[key] ?? [];
+        const open = ranges.length > 0;
+        return (
+          <div class="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-4">
+            <label class="flex w-32 items-center gap-2 text-sm font-medium">
+              <input type="checkbox" name={`hours.${key}.open`} checked={open} class="h-4 w-4 accent-[var(--wl-brand)]" />
+              {label}
+            </label>
+            <div class="flex flex-wrap items-center gap-2 text-sm text-ink-muted">
+              <input type="time" name={`hours.${key}.from1`} value={ranges[0]?.[0] ?? ""} aria-label={`${label}: abre`} class={timeClass} />
+              a
+              <input type="time" name={`hours.${key}.to1`} value={ranges[0]?.[1] ?? ""} aria-label={`${label}: cierra`} class={timeClass} />
+              <span class="px-1">y</span>
+              <input type="time" name={`hours.${key}.from2`} value={ranges[1]?.[0] ?? ""} aria-label={`${label}: abre (segunda franja)`} class={timeClass} />
+              a
+              <input type="time" name={`hours.${key}.to2`} value={ranges[1]?.[1] ?? ""} aria-label={`${label}: cierra (segunda franja)`} class={timeClass} />
+            </div>
+          </div>
+        );
+      })
+    }
+  </div>
+  {error && <p class="text-sm text-danger" role="alert">{error}</p>}
+</fieldset>

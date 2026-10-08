@@ -1,0 +1,36 @@
+---
+/** Área de texto accesible, con contador opcional de caracteres máximos. */
+import type { HTMLAttributes } from "astro/types";
+
+type Props = {
+  name: string;
+  label: string;
+  value?: string | null;
+  error?: string | undefined;
+  hint?: string;
+  class?: string;
+} & Omit<HTMLAttributes<"textarea">, "name" | "class" | "value">;
+
+const { name, label, value, error, hint, class: className = "", id = name, rows = 4, ...rest } = Astro.props;
+const hintId = hint ? `${id}-hint` : undefined;
+const errorId = error ? `${id}-error` : undefined;
+const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
+---
+
+<div class:list={["flex flex-col gap-1.5", className]}>
+  <label for={id} class="text-sm font-medium text-ink">{label}</label>
+  <textarea
+    id={id}
+    name={name}
+    rows={rows}
+    aria-invalid={error ? "true" : undefined}
+    aria-describedby={describedBy}
+    class:list={[
+      "w-full rounded-wl border bg-surface px-3 py-2.5 text-base text-ink placeholder:text-ink-muted/70",
+      "focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25",
+      error ? "border-danger" : "border-line",
+    ]}
+    {...rest}>{value ?? ""}</textarea>
+  {hint && !error && <p id={hintId} class="text-xs text-ink-muted">{hint}</p>}
+  {error && <p id={errorId} class="text-sm text-danger" role="alert">{error}</p>}
+</div>

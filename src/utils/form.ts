@@ -4,17 +4,23 @@
  * contraseñas.
  */
 export async function getSubmittedValues(request: Request): Promise<Record<string, string>> {
-  if (request.method !== "POST") return {};
-  try {
-    const data = await request.clone().formData();
-    const values: Record<string, string> = {};
-    for (const [key, value] of data.entries()) {
-      if (typeof value === "string" && !key.toLowerCase().includes("password")) {
-        values[key] = value.slice(0, 500);
-      }
+  const data = await getSubmittedForm(request);
+  if (!data) return {};
+  const values: Record<string, string> = {};
+  for (const [key, value] of data.entries()) {
+    if (typeof value === "string" && !key.toLowerCase().includes("password")) {
+      values[key] = value.slice(0, 5000);
     }
-    return values;
+  }
+  return values;
+}
+
+/** El FormData completo enviado (para campos repetidos como casillas múltiples). */
+export async function getSubmittedForm(request: Request): Promise<FormData | null> {
+  if (request.method !== "POST") return null;
+  try {
+    return await request.clone().formData();
   } catch {
-    return {};
+    return null;
   }
 }

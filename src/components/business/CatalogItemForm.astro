@@ -1,0 +1,80 @@
+---
+/** Formulario de servicio o producto (alta y edición). */
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import Field from "../ui/Field.astro";
+import TextArea from "../ui/TextArea.astro";
+import Button from "../ui/Button.astro";
+import ImageUploader from "../../islands/ImageUploader.tsx";
+import type { CatalogItem } from "../../types/domain";
+import { mediaUrl } from "../../lib/media";
+
+interface Props {
+  kind: "service" | "product";
+  action: string;
+  businessId: string;
+  item?: CatalogItem | null;
+  submitted?: FormData | null;
+  fieldErrors?: Record<string, string[] | undefined>;
+}
+
+const { kind, action, businessId, item = null, submitted = null, fieldErrors = {} } = Astro.props;
+const prefix = item ? `item-${item.id}` : `new-${kind}`;
+const v = (name: string, saved: unknown) =>
+  submitted ? String(submitted.get(name) ?? "") : saved === null || saved === undefined ? "" : String(saved);
+const err = (name: string) => fieldErrors[name]?.[0];
+const priceType = v("price_type", item?.price_type ?? (kind === "service" ? "from" : "fixed"));
+const price = v("price", item?.price !== null && item?.price !== undefined ? String(item.price).replace(".", ",") : "");
+const coverPath = v("cover_path", item?.cover_path) || null;
+---
+
+<form method="POST" action={action} class="flex flex-col gap-4" novalidate>
+  <input type="hidden" name="business_id" value={businessId} />
+  {item && <input type="hidden" name="item_id" value={item.id} />}
+
+  <Field
+    id={`${prefix}-name`}
+    name="name"
+    label={kind === "service" ? "Nombre del servicio" : "Nombre del producto"}
+    required
+    maxlength={120}
+    placeholder={kind === "service" ? "Ej.: Cobertura fotográfica de casamiento" : "Ej.: Torta personalizada de 2 pisos"}
+    value={v("name", item?.name)}
+    error={err("name")}
+  />
+  <TextArea id={`${prefix}-description`} name="description" label="Descripción (opcional)" rows={3} maxlength={3000} value={v("description", item?.description)} error={err("description")} />
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="flex flex-col gap-1.5">
+      <label for={`${prefix}-price_type`} class="text-sm font-medium text-ink">Precio</label>
+      <select id={`${prefix}-price_type`} name="price_type" class="h-11 rounded-wl border border-line bg-surface px-3 text-base">
+        <option value="fixed" selected={priceType === "fixed"}>Precio fijo</option>
+        <option value="from" selected={priceType === "from"}>Desde (precio mínimo)</option>
+        <option value="ask" selected={priceType === "ask"}>Consultar precio</option>
+      </select>
+    </div>
+    <Field id={`${prefix}-price`} name="price" label="Importe en pesos" inputmode="decimal" placeholder="Ej.: 25.000" value={price} error={err("price")} hint="Dejalo vacío si elegiste “Consultar precio”." />
+  </div>
+
+  {
+    kind === "service" && (
+      <div class="grid gap-4 sm:grid-cols-2">
+        <Field id={`${prefix}-duration`} name="duration_min" label="Duración en minutos (opcional)" type="number" min={5} inputmode="numeric" value={v("duration_min", item?.duration_min)} error={err("duration_min")} />
+        <Field id={`${prefix}-area`} name="service_area" label="Zona de trabajo (opcional)" maxlength={200} placeholder="Ej.: Córdoba capital y alrededores" value={v("service_area", item?.service_area)} error={err("service_area")} />
+      </div>
+    )
+  }
+
+  <ImageUploader
+    client:visible
+    name="cover_path"
+    purpose="catalog"
+    label="Foto (opcional)"
+    initialPath={coverPath}
+    initialPreview={mediaUrl("catalog", coverPath, 320)}
+    supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+  />
+
+  <div>
+    <Button type="submit">{item ? "Guardar cambios" : kind === "service" ? "Agregar servicio" : "Agregar producto"}</Button>
+  </div>
+</form>

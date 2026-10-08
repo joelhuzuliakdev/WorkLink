@@ -1,0 +1,245 @@
+---
+/**
+ * Formulario de emprendimiento (crear y editar). Funciona sin JavaScript;
+ * un script pequeño agrega dos comodidades: dirección automática a partir del
+ * nombre y mostrar solo las especialidades de la categoría elegida.
+ */
+import Field from "../ui/Field.astro";
+import TextArea from "../ui/TextArea.astro";
+import SelectField from "../ui/SelectField.astro";
+import Button from "../ui/Button.astro";
+import HoursEditor from "./HoursEditor.astro";
+import ImageUploader from "../../islands/ImageUploader.tsx";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import type { Business } from "../../types/domain";
+import type { CategoryTree } from "../../services/categories";
+import type { BusinessHours } from "../../schemas/business";
+import { mediaUrl } from "../../lib/media";
+import type { CityRef } from "../../types/domain";
+
+interface Props {
+  action: string;
+  business?: Business | null;
+  categories: CategoryTree[];
+  /** Datos enviados si hubo un error (para no perder lo escrito). */
+  submitted?: FormData | null;
+  fieldErrors?: Record<string, string[] | undefined>;
+  submitLabel: string;
+  /** Ciudad a mostrar (la enviada si hubo error, o la guardada). */
+  city?: CityRef | null;
+}
+
+const { action, business = null, categories, submitted = null, fieldErrors = {}, submitLabel, city = business?.city ?? null } = Astro.props;
+
+const v = (name: string, fallback: unknown = ""): string => {
+  if (submitted) return String(submitted.get(name) ?? "");
+  return fallback === null || fallback === undefined ? "" : String(fallback);
+};
+
+const categoryId = Number(v("category_id", business?.category?.id ?? "")) || null;
+const selectedSubs = new Set(
+  (submitted ? submitted.getAll("subcategory_ids") : (business?.subcategories ?? []).map((s) => s.id)).map(Number),
+);
+const err = (name: string) => fieldErrors[name]?.[0];
+
+const host = (Astro.site ?? Astro.url).host;
+const status = v("status", business?.status ?? "active");
+const isSuspended = business?.status === "suspended";
+
+// Horarios: los enviados (si hubo error) o los guardados.
+let hours: BusinessHours | null = business?.hours ?? null;
+if (submitted) {
+  hours = {};
+  for (const day of ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const) {
+    if (!submitted.get(`hours.${day}.open`)) continue;
+    const ranges: [string, string][] = [];
+    for (const n of [1, 2]) {
+      const from = String(submitted.get(`hours.${day}.from${n}`) ?? "");
+      const to = String(submitted.get(`hours.${day}.to${n}`) ?? "");
+      if (from || to) ranges.push([from, to]);
+    }
+    hours[day] = ranges.length ? ranges : [["", ""]];
+  }
+}
+
+const instagramValue = v("instagram", business?.instagram ? `@${business.instagram}` : "");
+---
+
+<form method="POST" action={action} class="flex flex-col gap-8" novalidate data-business-form>
+  {business && <input type="hidden" name="business_id" value={business.id} />}
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Lo básico</h2>
+    <Field name="name" label="Nombre del emprendimiento" required maxlength={80} value={v("name", business?.name)} error={err("name")} data-name-input />
+    <div class="flex flex-col gap-1.5">
+      <label for="slug" class="text-sm font-medium text-ink">Dirección de tu página</label>
+      <div class:list={["flex items-stretch overflow-hidden rounded-wl border bg-surface focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/25", err("slug") ? "border-danger" : "border-line"]}>
+        <span class="flex items-center border-r border-line bg-surface-muted px-3 text-sm text-ink-muted">{host}/e/</span>
+        <input
+          id="slug"
+          name="slug"
+          value={v("slug", business?.slug)}
+          maxlength="80"
+          pattern="[a-z0-9]+(-[a-z0-9]+)*"
+          autocomplete="off"
+          placeholder="se-completa-con-el-nombre"
+          class="h-11 min-w-0 flex-1 bg-transparent px-3 text-base text-ink focus:outline-none"
+          data-slug-input
+          data-touched={business ? "true" : undefined}
+        />
+      </div>
+      {err("slug") ? <p class="text-sm text-danger" role="alert">{err("slug")}</p> : <p class="text-xs text-ink-muted">Letras sin tilde, números y guiones. {business && "Si la cambiás, los enlaces viejos dejan de funcionar."}</p>}
+    </div>
+    <Field name="tagline" label="Frase corta (opcional)" maxlength={140} placeholder="Ej.: Tortas personalizadas para tus eventos" value={v("tagline", business?.tagline)} error={err("tagline")} />
+    <TextArea name="description" label="Descripción" rows={5} maxlength={3000} placeholder="Contá qué hacés, cómo trabajás y qué te diferencia." value={v("description", business?.description)} error={err("description")} />
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Categoría</h2>
+    <SelectField
+      name="category_id"
+      label="Categoría principal"
+      placeholder="Elegí una categoría"
+      options={categories.map((c) => ({ value: c.id, label: c.name }))}
+      value={categoryId}
+      required
+      error={err("category_id")}
+      data-category-select
+    />
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 text-sm font-medium text-ink">Especialidades (opcional)</legend>
+      {
+        categories.map((category) => (
+          <div data-subcategories-for={category.id} hidden={categoryId !== null && categoryId !== category.id}>
+            {categoryId === null && <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-muted">{category.name}</p>}
+            <div class="flex flex-wrap gap-2">
+              {category.subcategories.map((sub) => (
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5 text-sm has-[:checked]:border-brand has-[:checked]:bg-seek-soft">
+                  <input type="checkbox" name="subcategory_ids" value={sub.id} checked={selectedSubs.has(sub.id)} class="h-3.5 w-3.5 accent-[var(--wl-brand)]" />
+                  {sub.name}
+                </label>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+      {err("subcategory_ids") && <p class="text-sm text-danger" role="alert">{err("subcategory_ids")}</p>}
+      <p class="text-xs text-ink-muted">¿No encontrás tu rubro? Pronto vas a poder proponer una categoría nueva.</p>
+    </fieldset>
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Imágenes</h2>
+    <ImageUploader
+      client:load
+      name="logo_path"
+      purpose="logo"
+      label="Logo"
+      initialPath={v("logo_path", business?.logo_path) || null}
+      initialPreview={mediaUrl("logo", v("logo_path", business?.logo_path) || null, 256)}
+      supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+      hint="Cuadrado, se ve en las búsquedas. JPG, PNG o WebP."
+    />
+    <ImageUploader
+      client:load
+      name="cover_path"
+      purpose="cover"
+      label="Portada"
+      initialPath={v("cover_path", business?.cover_path) || null}
+      initialPreview={mediaUrl("cover", v("cover_path", business?.cover_path) || null, 800)}
+      supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+      hint="Horizontal (3:1). Una foto de tus trabajos o tu local."
+    />
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Ubicación y contacto</h2>
+    <CityPicker
+      client:load
+      name="city_id"
+      label="Ciudad"
+      initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+      error={err("city_id")}
+      hint="Dónde trabajás o desde dónde atendés."
+    />
+    <div class="grid gap-4 sm:grid-cols-2">
+      <Field name="whatsapp" label="WhatsApp" inputmode="tel" autocomplete="tel" placeholder="351 555-1234" value={v("whatsapp", business?.whatsapp)} error={err("whatsapp")} />
+      <Field name="phone" label="Teléfono fijo (opcional)" inputmode="tel" placeholder="0351 422-1234" value={v("phone", business?.phone)} error={err("phone")} />
+      <Field name="email" label="Email de contacto (opcional)" type="email" inputmode="email" value={v("email", business?.email)} error={err("email")} />
+      <Field name="website" label="Sitio web (opcional)" inputmode="url" placeholder="minegocio.com.ar" value={v("website", business?.website)} error={err("website")} />
+      <Field name="instagram" label="Instagram (opcional)" placeholder="@minegocio" value={instagramValue} error={err("instagram")} />
+      <Field name="facebook" label="Facebook (opcional)" placeholder="facebook.com/minegocio" value={v("facebook", business?.facebook)} error={err("facebook")} />
+      <Field name="tiktok" label="TikTok (opcional)" placeholder="@minegocio" value={v("tiktok", business?.tiktok ? `@${business.tiktok}` : "")} error={err("tiktok")} />
+    </div>
+    <p class="-mt-2 text-xs text-ink-muted">WhatsApp, teléfono y email solo los ven personas con cuenta en WorkLink.</p>
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Disponibilidad</h2>
+    <HoursEditor hours={hours} error={err("hours")} />
+    <Field name="availability" label="Aclaración (opcional)" maxlength={200} placeholder="Ej.: Con turno previo. Hago envíos a todo Córdoba." value={v("availability", business?.availability)} error={err("availability")} />
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-semibold">Visibilidad</h2>
+    {
+      isSuspended ? (
+        <p class="rounded-wl border border-danger/30 bg-danger-soft px-4 py-3 text-sm">Este emprendimiento fue suspendido por moderación y no es visible.</p>
+      ) : (
+        <div class="grid gap-2 sm:grid-cols-3">
+          {[
+            { value: "active", title: "Publicado", text: "Visible para todos." },
+            { value: "draft", title: "Borrador", text: "Solo lo ve tu equipo." },
+            { value: "inactive", title: "Pausado", text: "Oculto temporalmente." },
+          ].map((option) => (
+            <label class="flex cursor-pointer flex-col gap-0.5 rounded-wl border border-line bg-surface p-3 has-[:checked]:border-brand has-[:checked]:bg-seek-soft">
+              <span class="flex items-center gap-2 font-semibold">
+                <input type="radio" name="status" value={option.value} checked={status === option.value} class="accent-[var(--wl-brand)]" />
+                {option.title}
+              </span>
+              <span class="text-sm text-ink-muted">{option.text}</span>
+            </label>
+          ))}
+        </div>
+      )
+    }
+  </section>
+
+  <div class="sticky bottom-0 -mx-4 border-t border-line bg-bg/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
+    <Button type="submit" size="lg" class="w-full sm:w-auto">{submitLabel}</Button>
+  </div>
+</form>
+
+<script>
+  import { slugify } from "../../utils/slug";
+
+  for (const form of document.querySelectorAll<HTMLFormElement>("[data-business-form]")) {
+    const name = form.querySelector<HTMLInputElement>("[data-name-input]");
+    const slug = form.querySelector<HTMLInputElement>("[data-slug-input]");
+    if (name && slug) {
+      if (slug.value) slug.dataset.touched = "true";
+      slug.addEventListener("input", () => (slug.dataset.touched = "true"));
+      name.addEventListener("input", () => {
+        if (slug.dataset.touched !== "true") slug.value = slugify(name.value);
+      });
+    }
+
+    const select = form.querySelector<HTMLSelectElement>("[data-category-select]");
+    const groups = form.querySelectorAll<HTMLElement>("[data-subcategories-for]");
+    const sync = () => {
+      for (const group of groups) {
+        const visible = group.dataset.subcategoriesFor === select?.value;
+        group.hidden = !visible;
+        const label = group.querySelector("p");
+        if (label) label.hidden = true;
+        if (!visible) group.querySelectorAll<HTMLInputElement>("input").forEach((input) => (input.checked = false));
+      }
+    };
+    if (select) {
+      select.addEventListener("change", sync);
+      if (select.value) sync();
+      else groups.forEach((group) => (group.hidden = true));
+    }
+  }
+</script>

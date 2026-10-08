@@ -1,0 +1,86 @@
+---
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../../../layouts/PanelLayout.astro";
+import Alert from "../../../../components/ui/Alert.astro";
+import Button from "../../../../components/ui/Button.astro";
+import Field from "../../../../components/ui/Field.astro";
+import BusinessForm from "../../../../components/business/BusinessForm.astro";
+import { getBusinessForEdit } from "../../../../services/businesses";
+import { getCategoryTree } from "../../../../services/categories";
+import { getCity } from "../../../../services/locations";
+import { getSubmittedForm } from "../../../../utils/form";
+
+const { supabase, user } = Astro.locals;
+const id = Astro.params.id ?? "";
+if (!/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+const removeResult = Astro.getActionResult(actions.business.remove);
+if (removeResult && !removeResult.error) return Astro.redirect("/panel/emprendimientos?eliminado=1");
+
+const result = Astro.getActionResult(actions.business.update);
+if (result && !result.error) return Astro.redirect(`/panel/emprendimientos/${id}?guardado=1`);
+
+const business = await getBusinessForEdit(supabase, id);
+if (!business) return Astro.rewrite("/404");
+
+const { data: membership } = await supabase
+  .from("business_members")
+  .select("role")
+  .eq("business_id", id)
+  .eq("user_id", user!.id)
+  .maybeSingle();
+const isOwner = membership?.role === "owner";
+
+const categories = await getCategoryTree(supabase);
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const submittedCityId = submitted ? Number(submitted.get("city_id")) : 0;
+const city = submitted ? (submittedCityId ? await getCity(supabase, submittedCityId) : null) : business.city;
+const removeError = removeResult?.error?.message;
+---
+
+<PanelLayout
+  title={`Editar ${business.name}`}
+  heading={business.name}
+  description="Datos del emprendimiento"
+  back={{ href: "/panel/emprendimientos", label: "Mis emprendimientos" }}
+>
+  <div slot="actions" class="flex gap-2">
+    <Button href={`/e/${business.slug}`} variant="ghost" size="sm">Ver página</Button>
+    <Button href={`/panel/emprendimientos/${id}/catalogo`} variant="secondary" size="sm">Servicios y productos</Button>
+  </div>
+
+  {Astro.url.searchParams.get("guardado") === "1" && <Alert tone="success" class="mb-6">Guardamos los cambios.</Alert>}
+  {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
+  {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados.</Alert>}
+
+  <div class="max-w-3xl">
+    <BusinessForm
+      action={actions.business.update}
+      business={business}
+      categories={categories}
+      submitted={submitted}
+      fieldErrors={fieldErrors as Record<string, string[] | undefined>}
+      city={city}
+      submitLabel="Guardar cambios"
+    />
+
+    {
+      isOwner && (
+        <details class="mt-12 rounded-wl-lg border border-danger/30 bg-surface p-5">
+          <summary class="cursor-pointer font-semibold text-danger">Eliminar emprendimiento</summary>
+          <p class="mt-3 text-sm text-ink-muted">
+            Se quita de WorkLink junto con su catálogo. Esta acción no se puede deshacer desde el panel.
+          </p>
+          {removeError && <Alert tone="danger" class="mt-3">{removeError}</Alert>}
+          <form method="POST" action={actions.business.remove} class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <input type="hidden" name="business_id" value={business.id} />
+            <Field name="confirm" label="Escribí ELIMINAR para confirmar" autocomplete="off" class="sm:w-72" />
+            <Button type="submit" variant="secondary" class="border-danger text-danger">Eliminar definitivamente</Button>
+          </form>
+        </details>
+      )
+    }
+  </div>
+</PanelLayout>

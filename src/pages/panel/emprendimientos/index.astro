@@ -1,0 +1,61 @@
+---
+import PanelLayout from "../../../layouts/PanelLayout.astro";
+import Button from "../../../components/ui/Button.astro";
+import Alert from "../../../components/ui/Alert.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import { getMyBusinesses } from "../../../services/businesses";
+
+const { supabase, user } = Astro.locals;
+const businesses = await getMyBusinesses(supabase, user!.id);
+const removed = Astro.url.searchParams.get("eliminado") === "1";
+
+const statusLabel = {
+  active: { text: "Publicado", class: "bg-success-soft text-success" },
+  draft: { text: "Borrador", class: "bg-surface-muted text-ink-muted" },
+  inactive: { text: "Pausado", class: "bg-warning-soft text-warning" },
+  suspended: { text: "Suspendido", class: "bg-danger-soft text-danger" },
+} as const;
+---
+
+<PanelLayout title="Mis emprendimientos" description="Tus vidrieras en WorkLink.">
+  <Button slot="actions" href="/panel/emprendimientos/nuevo" variant="offer">Crear emprendimiento</Button>
+
+  {removed && <Alert tone="success" class="mb-6">Eliminamos el emprendimiento.</Alert>}
+
+  {
+    businesses.length === 0 ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
+        <h2 class="text-lg font-semibold">Todavía no tenés emprendimientos</h2>
+        <p class="mx-auto mt-1 max-w-md text-ink-muted">
+          Creá la página de tu emprendimiento: servicios, productos, horarios y contacto, todo en un lugar.
+        </p>
+        <div class="mt-5">
+          <Button href="/panel/emprendimientos/nuevo" variant="offer">Crear mi primer emprendimiento</Button>
+        </div>
+      </div>
+    ) : (
+      <ul class="grid gap-3">
+        {businesses.map((b) => (
+          <li class="flex flex-wrap items-center gap-4 rounded-wl-lg border border-line bg-surface p-4">
+            <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={56} />
+            <div class="min-w-0 flex-1">
+              <p class="flex flex-wrap items-center gap-2">
+                <span class="font-semibold">{b.name}</span>
+                <span class:list={["rounded-full px-2 py-0.5 text-xs font-medium", statusLabel[b.status].class]}>
+                  {statusLabel[b.status].text}
+                </span>
+                {b.role === "editor" && <span class="text-xs text-ink-muted">Editor</span>}
+              </p>
+              <p class="truncate text-sm text-ink-muted">{b.category_name} · /e/{b.slug}</p>
+            </div>
+            <div class="flex gap-2">
+              <Button href={`/e/${b.slug}`} variant="ghost" size="sm">Ver</Button>
+              <Button href={`/panel/emprendimientos/${b.id}/catalogo`} variant="secondary" size="sm">Catálogo</Button>
+              <Button href={`/panel/emprendimientos/${b.id}`} variant="secondary" size="sm">Editar</Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</PanelLayout>

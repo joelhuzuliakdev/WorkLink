@@ -1,0 +1,45 @@
+---
+/** Select nativo accesible (funciona sin JavaScript y es cómodo en celulares). */
+import type { HTMLAttributes } from "astro/types";
+
+interface Option {
+  value: string | number;
+  label: string;
+}
+
+type Props = {
+  name: string;
+  label: string;
+  options: Option[];
+  value?: string | number | null;
+  placeholder?: string;
+  error?: string | undefined;
+  hint?: string;
+  class?: string;
+} & Omit<HTMLAttributes<"select">, "name" | "class" | "value">;
+
+const { name, label, options, value, placeholder, error, hint, class: className = "", id = name, ...rest } = Astro.props;
+const current = value === null || value === undefined ? "" : String(value);
+---
+
+<div class:list={["flex flex-col gap-1.5", className]}>
+  <label for={id} class="text-sm font-medium text-ink">{label}</label>
+  <select
+    id={id}
+    name={name}
+    aria-invalid={error ? "true" : undefined}
+    class:list={[
+      "h-11 w-full rounded-wl border bg-surface px-3 text-base text-ink",
+      "focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25",
+      error ? "border-danger" : "border-line",
+    ]}
+    {...rest}
+  >
+    {placeholder && <option value="" selected={current === ""}>{placeholder}</option>}
+    {options.map((option) => (
+      <option value={option.value} selected={String(option.value) === current}>{option.label}</option>
+    ))}
+  </select>
+  {hint && !error && <p class="text-xs text-ink-muted">{hint}</p>}
+  {error && <p class="text-sm text-danger" role="alert">{error}</p>}
+</div>

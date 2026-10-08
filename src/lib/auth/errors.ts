@@ -28,6 +28,12 @@ export function toActionError(error: AuthError, fallback = "No pudimos completar
         code: "TOO_MANY_REQUESTS",
         message: "Hiciste demasiados intentos. Esperá unos minutos y volvé a probar.",
       });
+    case "user_already_exists":
+    case "email_exists":
+      return new ActionError({
+        code: "CONFLICT",
+        message: "Ya hay una cuenta con ese email. Ingresá o recuperá tu contraseña.",
+      });
     case "signup_disabled":
       return new ActionError({ code: "FORBIDDEN", message: "El registro está deshabilitado temporalmente." });
     case "user_banned":

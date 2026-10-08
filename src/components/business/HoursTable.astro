@@ -1,0 +1,32 @@
+---
+/** Horarios en la página pública: "Lunes 9:00 a 13:00 y 17:00 a 21:00". Resalta el día de hoy. */
+import { WEEK_DAYS, type BusinessHours } from "../../schemas/business";
+
+interface Props {
+  hours: BusinessHours;
+}
+
+const { hours } = Astro.props;
+const todayKey = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Argentina/Cordoba" })
+  .format(new Date())
+  .toLowerCase()
+  .slice(0, 3);
+const fmt = (t: string) => t.replace(/^0/, "");
+---
+
+<dl class="divide-y divide-line text-sm">
+  {
+    WEEK_DAYS.map(({ key, label }) => {
+      const ranges = hours[key] ?? [];
+      const isToday = key === todayKey;
+      return (
+        <div class:list={["flex justify-between gap-4 py-2", isToday && "font-semibold"]}>
+          <dt>{label}{isToday && <span class="ml-1 text-xs font-medium text-brand">(hoy)</span>}</dt>
+          <dd class:list={[ranges.length ? "text-ink" : "text-ink-muted"]}>
+            {ranges.length ? ranges.map(([from, to]) => `${fmt(from)} a ${fmt(to)}`).join(" y ") : "Cerrado"}
+          </dd>
+        </div>
+      );
+    })
+  }
+</dl>

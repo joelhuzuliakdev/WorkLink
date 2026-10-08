@@ -1,0 +1,170 @@
+---
+/**
+ * Servicios y productos de un emprendimiento. Cada acción vuelve a esta
+ * página con un mensaje (?ok=...) para evitar reenvíos al recargar.
+ */
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../../../layouts/PanelLayout.astro";
+import Alert from "../../../../components/ui/Alert.astro";
+import Button from "../../../../components/ui/Button.astro";
+import CatalogItemForm from "../../../../components/business/CatalogItemForm.astro";
+import { getBusinessForEdit, getCatalog } from "../../../../services/businesses";
+import { formatPrice } from "../../../../lib/format";
+import { getSubmittedForm } from "../../../../utils/form";
+import type { CatalogItem } from "../../../../types/domain";
+
+const { supabase } = Astro.locals;
+const id = Astro.params.id ?? "";
+if (!/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+const base = `/panel/emprendimientos/${id}/catalogo`;
+const results = {
+  saveService: Astro.getActionResult(actions.catalog.saveService),
+  saveProduct: Astro.getActionResult(actions.catalog.saveProduct),
+  setStatus: Astro.getActionResult(actions.catalog.setStatus),
+  remove: Astro.getActionResult(actions.catalog.remove),
+};
+const okMessages = { saveService: "servicio", saveProduct: "producto", setStatus: "visibilidad", remove: "eliminado" } as const;
+for (const [key, res] of Object.entries(results)) {
+  if (res && !res.error) return Astro.redirect(`${base}?ok=${okMessages[key as keyof typeof okMessages]}`);
+}
+
+const business = await getBusinessForEdit(supabase, id);
+if (!business) return Astro.rewrite("/404");
+const { services, products } = await getCatalog(supabase, id, { onlyPublic: false });
+
+// Errores de formulario: a qué formulario pertenecen.
+const failed = Object.entries(results).find(([, res]) => res?.error);
+const failedKey = failed?.[0];
+const failedError = failed?.[1]?.error;
+const submitted = failedError ? await getSubmittedForm(Astro.request) : null;
+const failedItemId = submitted ? String(submitted.get("item_id") ?? "") : "";
+const fieldErrors = failedError && isInputError(failedError) ? (failedError.fields as Record<string, string[] | undefined>) : {};
+const formError = failedError && !isInputError(failedError) ? failedError.message : null;
+
+const formStateFor = (kind: "service" | "product", item?: CatalogItem) => {
+  const key = kind === "service" ? "saveService" : "saveProduct";
+  const matches = failedKey === key && (item ? failedItemId === item.id : !failedItemId);
+  return matches ? { submitted, fieldErrors } : { submitted: null, fieldErrors: {} };
+};
+
+const ok = Astro.url.searchParams.get("ok");
+const okText: Record<string, string> = {
+  servicio: "Guardamos el servicio.",
+  producto: "Guardamos el producto.",
+  visibilidad: "Actualizamos la visibilidad.",
+  eliminado: "Eliminamos el ítem.",
+};
+const created = Astro.url.searchParams.get("creado") === "1";
+
+const sections = [
+  { kind: "service" as const, title: "Servicios", items: services, action: actions.catalog.saveService, empty: "Todavía no cargaste servicios." },
+  { kind: "product" as const, title: "Productos", items: products, action: actions.catalog.saveProduct, empty: "Todavía no cargaste productos." },
+];
+---
+
+<PanelLayout
+  title={`Catálogo · ${business.name}`}
+  heading="Servicios y productos"
+  description={business.name}
+  back={{ href: `/panel/emprendimientos/${id}`, label: "Datos del emprendimiento" }}
+>
+  <Button slot="actions" href={`/e/${business.slug}`} variant="secondary" size="sm">Ver página pública</Button>
+
+  {created && (
+    <Alert tone="success" title="¡Tu emprendimiento ya está creado!" class="mb-6">
+      Sumá tus servicios o productos con precio: es lo primero que mira la gente.
+    </Alert>
+  )}
+  {ok && okText[ok] && <Alert tone="success" class="mb-6">{okText[ok]}</Alert>}
+  {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
+  {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados en el formulario.</Alert>}
+
+  <div class="grid gap-10">
+    {
+      sections.map((section) => {
+        const newState = formStateFor(section.kind);
+        return (
+          <section class="flex flex-col gap-4">
+            <h2 class="text-xl font-semibold">{section.title}</h2>
+
+            {section.items.length === 0 ? (
+              <p class="text-ink-muted">{section.empty}</p>
+            ) : (
+              <ul class="grid gap-3">
+                {section.items.map((item) => {
+                  const state = formStateFor(section.kind, item);
+                  return (
+                    <li class="rounded-wl-lg border border-line bg-surface">
+                      <div class="flex flex-wrap items-center gap-3 p-4">
+                        <div class="min-w-0 flex-1">
+                          <p class="flex flex-wrap items-center gap-2 font-semibold">
+                            {item.name}
+                            {item.status === "hidden" && (
+                              <span class="rounded-full bg-surface-muted px-2 py-0.5 text-xs font-medium text-ink-muted">Oculto</span>
+                            )}
+                          </p>
+                          <p class="text-sm text-ink-muted">{formatPrice(item.price, item.price_type)}</p>
+                        </div>
+                        <form method="POST" action={actions.catalog.setStatus}>
+                          <input type="hidden" name="business_id" value={id} />
+                          <input type="hidden" name="item_id" value={item.id} />
+                          <input type="hidden" name="kind" value={section.kind} />
+                          <input type="hidden" name="status" value={item.status === "active" ? "hidden" : "active"} />
+                          <Button type="submit" variant="ghost" size="sm">{item.status === "active" ? "Ocultar" : "Mostrar"}</Button>
+                        </form>
+                        <form method="POST" action={actions.catalog.remove} data-confirm={`¿Eliminar “${item.name}”?`}>
+                          <input type="hidden" name="business_id" value={id} />
+                          <input type="hidden" name="item_id" value={item.id} />
+                          <input type="hidden" name="kind" value={section.kind} />
+                          <Button type="submit" variant="ghost" size="sm" class="text-danger">Eliminar</Button>
+                        </form>
+                      </div>
+                      <details class="border-t border-line px-4 py-3" open={Boolean(state.submitted)}>
+                        <summary class="cursor-pointer text-sm font-semibold text-brand">Editar</summary>
+                        <div class="pt-4">
+                          <CatalogItemForm
+                            kind={section.kind}
+                            action={section.action}
+                            businessId={id}
+                            item={item}
+                            submitted={state.submitted}
+                            fieldErrors={state.fieldErrors}
+                          />
+                        </div>
+                      </details>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <details class="rounded-wl-lg border border-dashed border-line bg-surface p-4" open={section.items.length === 0 || Boolean(newState.submitted)}>
+              <summary class="cursor-pointer font-semibold text-brand">
+                {section.kind === "service" ? "+ Agregar servicio" : "+ Agregar producto"}
+              </summary>
+              <div class="pt-4">
+                <CatalogItemForm
+                  kind={section.kind}
+                  action={section.action}
+                  businessId={id}
+                  submitted={newState.submitted}
+                  fieldErrors={newState.fieldErrors}
+                />
+              </div>
+            </details>
+          </section>
+        );
+      })
+    }
+  </div>
+</PanelLayout>
+
+<script>
+  // Confirmación antes de eliminar (sin JS, se elimina directamente).
+  for (const form of document.querySelectorAll<HTMLFormElement>("form[data-confirm]")) {
+    form.addEventListener("submit", (event) => {
+      if (!window.confirm(form.dataset.confirm ?? "¿Confirmás?")) event.preventDefault();
+    });
+  }
+</script>

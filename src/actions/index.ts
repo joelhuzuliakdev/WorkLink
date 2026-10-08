@@ -1,9 +1,15 @@
 import { auth } from "./auth";
+import { profile } from "./profile";
+import { business } from "./business";
+import { catalog } from "./catalog";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
- *   actions.auth.signIn, actions.posts.create (Etapa 5), etc.
+ *   actions.auth.signIn, actions.profile.update, actions.business.create...
  */
 export const server = {
   auth,
+  profile,
+  business,
+  catalog,
 };

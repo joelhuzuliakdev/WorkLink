@@ -2,7 +2,9 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Button from "../components/ui/Button.astro";
 
-export const prerender = true;
+// Se renderiza en el servidor (no prerender) para que las páginas dinámicas
+// puedan mostrarla con Astro.rewrite("/404") cuando algo no existe.
+Astro.response.status = 404;
 ---
 
 <BaseLayout title="Página no encontrada" noindex>

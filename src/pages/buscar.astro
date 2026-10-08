@@ -11,15 +11,15 @@ const q = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
 ---
 
 <BaseLayout title={q ? `Buscar “${q}”` : "Buscar"} noindex canonicalPath="/buscar">
-    <section class="mx-auto max-w-3xl px-4 py-16 text-center">
-        <h1 class="text-3xl font-bold">Estamos preparando el buscador</h1>
-        <p class="mt-3 text-ink-muted">
-        {q ? <>Muy pronto vas a poder encontrar resultados para <strong class="text-ink">“{q}”</strong>.</> : "Muy pronto vas a poder buscar emprendedores, productos, servicios y necesidades."}
-        Mientras tanto, creá tu cuenta para ser de los primeros.
-        </p>
-        <div class="mt-8 flex justify-center gap-3">
-        <Button href={routes.signup}>Crear cuenta</Button>
-        <Button href={routes.home} variant="secondary">Volver al inicio</Button>
-        </div>
-    </section>
+  <section class="mx-auto max-w-3xl px-4 py-16 text-center">
+    <h1 class="text-3xl font-bold">Estamos preparando el buscador</h1>
+    <p class="mt-3 text-ink-muted">
+      {q ? <>Muy pronto vas a poder encontrar resultados para <strong class="text-ink">“{q}”</strong>.</> : "Muy pronto vas a poder buscar emprendedores, productos, servicios y necesidades."}
+      Mientras tanto, creá tu cuenta para ser de los primeros.
+    </p>
+    <div class="mt-8 flex justify-center gap-3">
+      <Button href={routes.signup}>Crear cuenta</Button>
+      <Button href={routes.home} variant="secondary">Volver al inicio</Button>
+    </div>
+  </section>
 </BaseLayout>

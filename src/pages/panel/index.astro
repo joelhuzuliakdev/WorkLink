@@ -1,70 +1,93 @@
 ---
 /**
- * Panel del usuario (ruta protegida por el middleware).
- * Por ahora: saludo, estado de la cuenta y próximos pasos.
+ * Inicio del panel: saludo, perfil completo y accesos a emprendimientos.
+ * Ruta protegida por el middleware.
  */
-import BaseLayout from "../../layouts/BaseLayout.astro";
+import PanelLayout from "../../layouts/PanelLayout.astro";
 import Alert from "../../components/ui/Alert.astro";
 import Button from "../../components/ui/Button.astro";
+import Avatar from "../../components/ui/Avatar.astro";
 import { hasRole } from "../../lib/auth/session";
+import { displayName, getOwnProfile, profileCompleteness } from "../../services/profiles";
+import { getMyBusinesses } from "../../services/businesses";
 import { routes } from "../../config/site";
 
 const { supabase, user } = Astro.locals;
 
-const [{ data: profile }, isStaff] = await Promise.all([
-  supabase.from("profiles").select("first_name, username, intent").eq("id", user!.id).maybeSingle(),
+const [profile, businesses, isStaff] = await Promise.all([
+  getOwnProfile(supabase, user!.id),
+  getMyBusinesses(supabase, user!.id),
   hasRole(supabase, "moderator"),
 ]);
 
 const name = profile?.first_name ?? profile?.username ?? "";
+const completeness = profile ? profileCompleteness(profile) : { percent: 0, missing: [] };
 const isProvider = profile?.intent === "provider";
 const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
-
-const nextSteps = [
-  {
-    title: "Completá tu perfil",
-    text: "Foto, ciudad y formas de contacto.",
-    stage: "Etapa 4",
-  },
-  {
-    title: isProvider ? "Creá tu emprendimiento" : "Publicá lo que necesitás",
-    text: isProvider
-      ? "Tu vidriera con servicios, productos y reseñas."
-      : "Contá qué buscás y recibí propuestas de emprendedores.",
-    stage: isProvider ? "Etapa 4" : "Etapa 10",
-  },
-  {
-    title: isProvider ? "Encontrá personas que te necesitan" : "Explorá emprendedores",
-    text: isProvider ? "Necesidades publicadas en tu zona." : "Buscá por categoría y ciudad.",
-    stage: "Etapa 7",
-  },
-];
 ---
 
-<BaseLayout title="Mi panel" noindex>
-  <section class="mx-auto max-w-6xl px-4 py-10">
-    {passwordUpdated && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
+<PanelLayout title="Mi panel" heading={`Hola${name ? `, ${name}` : ""} 👋`} description={profile ? `@${profile.username}` : undefined}>
+  {passwordUpdated && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
 
-    <h1 class="text-3xl font-bold">Hola{name ? `, ${name}` : ""} 👋</h1>
-    <p class="mt-2 text-ink-muted">
-      Tu cuenta está activa{profile?.username ? <> como <strong class="text-ink">@{profile.username}</strong></> : null}.
-    </p>
-
-    <h2 class="mt-10 text-lg font-semibold">Próximos pasos</h2>
-    <ul class="mt-4 grid gap-4 md:grid-cols-3">
-      {nextSteps.map((step) => (
-        <li class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
-          <h3 class="font-semibold">{step.title}</h3>
-          <p class="mt-1 text-sm text-ink-muted">{step.text}</p>
-          <p class="mt-4 text-xs font-medium text-ink-muted">Disponible en la {step.stage}</p>
-        </li>
-      ))}
-    </ul>
-
-    {isStaff && (
-      <div class="mt-10">
-        <Button href={routes.admin} variant="secondary">Ir al panel administrativo</Button>
+  <div class="grid gap-4 md:grid-cols-2">
+    <section class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
+      <div class="flex items-center gap-4">
+        {profile && <Avatar name={displayName(profile)} path={profile.avatar_path} size={56} />}
+        <div class="min-w-0 flex-1">
+          <h2 class="font-semibold">Tu perfil</h2>
+          <p class="text-sm text-ink-muted">Completo al {completeness.percent}%</p>
+        </div>
       </div>
-    )}
-  </section>
-</BaseLayout>
+      <div class="mt-4 h-2 overflow-hidden rounded-full bg-surface-muted" role="progressbar" aria-valuenow={completeness.percent} aria-valuemin="0" aria-valuemax="100" aria-label="Perfil completo">
+        <div class="h-full rounded-full bg-brand" style={{ width: `${completeness.percent}%` }}></div>
+      </div>
+      {completeness.missing.length > 0 && (
+        <p class="mt-3 text-sm text-ink-muted">Te falta: {completeness.missing.join(", ")}.</p>
+      )}
+      <div class="mt-auto pt-4">
+        <Button href="/panel/perfil" variant="secondary" size="sm">{completeness.percent < 100 ? "Completar perfil" : "Editar perfil"}</Button>
+      </div>
+    </section>
+
+    <section class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
+      <h2 class="font-semibold">Tus emprendimientos</h2>
+      {
+        businesses.length === 0 ? (
+          <p class="mt-1 text-sm text-ink-muted">
+            {isProvider
+              ? "Creá la página de tu emprendimiento con tus servicios, productos y horarios."
+              : "¿Tenés algo para ofrecer? Podés crear un emprendimiento cuando quieras."}
+          </p>
+        ) : (
+          <ul class="mt-3 flex flex-col gap-2">
+            {businesses.slice(0, 4).map((b) => (
+              <li>
+                <a href={`/panel/emprendimientos/${b.id}`} class="flex items-center gap-3 rounded-wl p-1 hover:bg-surface-muted">
+                  <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={36} />
+                  <span class="truncate font-medium">{b.name}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      <div class="mt-auto flex flex-wrap gap-2 pt-4">
+        <Button href="/panel/emprendimientos/nuevo" variant={businesses.length ? "secondary" : "offer"} size="sm">Crear emprendimiento</Button>
+        {businesses.length > 0 && <Button href="/panel/emprendimientos" variant="ghost" size="sm">Ver todos</Button>}
+      </div>
+    </section>
+  </div>
+
+  <h2 class="mt-10 text-lg font-semibold">Próximamente</h2>
+  <ul class="mt-3 grid gap-3 md:grid-cols-3">
+    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Publicaciones</strong><p class="text-ink-muted">Mostrá trabajos y promociones.</p></li>
+    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Buscador</strong><p class="text-ink-muted">Encontrá por categoría y ciudad.</p></li>
+    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Necesidades</strong><p class="text-ink-muted">Publicá lo que buscás y recibí propuestas.</p></li>
+  </ul>
+
+  {isStaff && (
+    <div class="mt-10">
+      <Button href={routes.admin} variant="secondary">Ir al panel administrativo</Button>
+    </div>
+  )}
+</PanelLayout>

@@ -1,0 +1,42 @@
+---
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../../layouts/PanelLayout.astro";
+import Alert from "../../../components/ui/Alert.astro";
+import BusinessForm from "../../../components/business/BusinessForm.astro";
+import { getCategoryTree } from "../../../services/categories";
+import { getCity } from "../../../services/locations";
+import { getSubmittedForm } from "../../../utils/form";
+
+const { supabase } = Astro.locals;
+
+const result = Astro.getActionResult(actions.business.create);
+if (result && !result.error) {
+  return Astro.redirect(`/panel/emprendimientos/${result.data.id}/catalogo?creado=1`);
+}
+
+const categories = await getCategoryTree(supabase);
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const submittedCityId = submitted ? Number(submitted.get("city_id")) : 0;
+const city = submittedCityId ? await getCity(supabase, submittedCityId) : null;
+---
+
+<PanelLayout
+  title="Crear emprendimiento"
+  description="Completá lo principal ahora; el resto lo podés sumar después."
+  back={{ href: "/panel/emprendimientos", label: "Mis emprendimientos" }}
+>
+  {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
+  {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados.</Alert>}
+  <div class="max-w-3xl">
+    <BusinessForm
+      action={actions.business.create}
+      categories={categories}
+      submitted={submitted}
+      fieldErrors={fieldErrors as Record<string, string[] | undefined>}
+      city={city}
+      submitLabel="Crear emprendimiento"
+    />
+  </div>
+</PanelLayout>

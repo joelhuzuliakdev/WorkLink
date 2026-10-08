@@ -1,0 +1,100 @@
+---
+import { actions, isInputError } from "astro:actions";
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import TextArea from "../../components/ui/TextArea.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import ImageUploader from "../../islands/ImageUploader.tsx";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { getOwnProfile } from "../../services/profiles";
+import { getCity } from "../../services/locations";
+import { mediaUrl } from "../../lib/media";
+import { getSubmittedForm } from "../../utils/form";
+
+const { supabase, user } = Astro.locals;
+
+const result = Astro.getActionResult(actions.profile.update);
+if (result && !result.error) {
+  return Astro.redirect("/panel/perfil?guardado=1");
+}
+
+const profile = await getOwnProfile(supabase, user!.id);
+if (!profile) return Astro.redirect("/panel");
+
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const err = (name: string) => (fieldErrors as Record<string, string[] | undefined>)[name]?.[0];
+const v = (name: string, saved: unknown) =>
+  submitted ? String(submitted.get(name) ?? "") : saved === null || saved === undefined ? "" : String(saved);
+
+const submittedCityId = submitted ? Number(submitted.get("city_id")) : null;
+const city = submittedCityId ? await getCity(supabase, submittedCityId) : profile.city;
+const avatarPath = v("avatar_path", profile.avatar_path) || null;
+const saved = Astro.url.searchParams.get("guardado") === "1";
+---
+
+<PanelLayout title="Mi perfil" description="Así te ven las personas en WorkLink.">
+  <a slot="actions" href={`/u/${profile.username}`} class="text-sm font-semibold text-brand hover:underline">Ver mi perfil público →</a>
+
+  {saved && <Alert tone="success" class="mb-6">Guardamos tu perfil.</Alert>}
+  {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
+
+  <form method="POST" action={actions.profile.update} class="flex max-w-2xl flex-col gap-8" novalidate>
+    <section class="flex flex-col gap-4">
+      <ImageUploader
+        client:load
+        name="avatar_path"
+        purpose="avatar"
+        label="Foto de perfil"
+        initialPath={avatarPath}
+        initialPreview={mediaUrl("avatar", avatarPath, 256)}
+        supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+        hint="Una foto tuya donde se te vea bien la cara."
+      />
+      <div class="grid gap-4 sm:grid-cols-2">
+        <Field name="first_name" label="Nombre" required maxlength={60} autocomplete="given-name" value={v("first_name", profile.first_name)} error={err("first_name")} />
+        <Field name="last_name" label="Apellido" required maxlength={60} autocomplete="family-name" value={v("last_name", profile.last_name)} error={err("last_name")} />
+      </div>
+      <Field
+        name="username"
+        label="Nombre de usuario"
+        required
+        maxlength={30}
+        autocomplete="username"
+        value={v("username", profile.username)}
+        hint="Es tu dirección pública: worklink/u/tu-usuario"
+        error={err("username")}
+      />
+      <TextArea name="bio" label="Sobre vos (opcional)" rows={4} maxlength={500} placeholder="Contá en pocas palabras a qué te dedicás o qué estás buscando." value={v("bio", profile.bio)} error={err("bio")} />
+      <CityPicker
+        client:load
+        name="city_id"
+        label="Ciudad"
+        initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+        error={err("city_id")}
+      />
+    </section>
+
+    <section class="flex flex-col gap-4">
+      <div>
+        <h2 class="text-lg font-semibold">Contacto</h2>
+        <p class="text-sm text-ink-muted">WhatsApp y teléfono solo los ven personas con cuenta en WorkLink.</p>
+      </div>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <Field name="whatsapp" label="WhatsApp" inputmode="tel" autocomplete="tel" placeholder="351 555-1234" value={v("whatsapp", profile.whatsapp)} error={err("whatsapp")} />
+        <Field name="phone" label="Otro teléfono (opcional)" inputmode="tel" placeholder="0351 422-1234" value={v("phone", profile.phone)} error={err("phone")} />
+        <Field name="instagram" label="Instagram" placeholder="@usuario" value={v("instagram", profile.instagram ? `@${profile.instagram}` : "")} error={err("instagram")} />
+        <Field name="facebook" label="Facebook" placeholder="facebook.com/usuario" value={v("facebook", profile.facebook)} error={err("facebook")} />
+        <Field name="tiktok" label="TikTok" placeholder="@usuario" value={v("tiktok", profile.tiktok ? `@${profile.tiktok}` : "")} error={err("tiktok")} />
+        <Field name="website" label="Sitio web" inputmode="url" placeholder="misitio.com.ar" value={v("website", profile.website)} error={err("website")} />
+      </div>
+    </section>
+
+    <div>
+      <Button type="submit" size="lg">Guardar perfil</Button>
+    </div>
+  </form>
+</PanelLayout>

@@ -1,0 +1,46 @@
+---
+/** Tarjeta de producto o servicio en la página pública del emprendimiento. */
+import type { CatalogItem } from "../../types/domain";
+import { formatPrice } from "../../lib/format";
+import { mediaSrcSet, mediaUrl } from "../../lib/media";
+
+interface Props {
+  item: CatalogItem;
+}
+
+const { item } = Astro.props;
+const image = mediaUrl("catalog", item.cover_path, 320);
+const duration =
+  item.duration_min && item.duration_min >= 60
+    ? `${Math.floor(item.duration_min / 60)} h${item.duration_min % 60 ? ` ${item.duration_min % 60} min` : ""}`
+    : item.duration_min
+      ? `${item.duration_min} min`
+      : null;
+---
+
+<article class="flex gap-4 rounded-wl-lg border border-line bg-surface p-4">
+  {
+    image && (
+      <img
+        src={image}
+        srcset={mediaSrcSet("catalog", item.cover_path)}
+        sizes="96px"
+        width="96"
+        height="96"
+        alt={item.name}
+        loading="lazy"
+        decoding="async"
+        class="h-24 w-24 shrink-0 rounded-wl bg-surface-muted object-cover"
+      />
+    )
+  }
+  <div class="flex min-w-0 flex-1 flex-col gap-1">
+    <h3 class="font-semibold leading-snug">{item.name}</h3>
+    {item.description && <p class="line-clamp-3 text-sm text-ink-muted">{item.description}</p>}
+    <div class="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-sm">
+      <span class="font-semibold text-ink">{formatPrice(item.price, item.price_type)}</span>
+      {duration && <span class="text-ink-muted">· {duration}</span>}
+      {item.service_area && <span class="text-ink-muted">· {item.service_area}</span>}
+    </div>
+  </div>
+</article>

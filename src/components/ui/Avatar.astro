@@ -1,0 +1,61 @@
+---
+/**
+ * Avatar o logo: muestra la imagen (variante del tamaño justo) o, si no hay,
+ * las iniciales sobre un color estable derivado del nombre.
+ */
+import { mediaUrl, mediaSrcSet } from "../../lib/media";
+
+interface Props {
+  name: string;
+  path?: string | null;
+  purpose?: "avatar" | "logo";
+  /** Tamaño en píxeles CSS. */
+  size?: number;
+  shape?: "circle" | "rounded";
+  class?: string;
+  /** true para la imagen principal de la página (LCP). */
+  priority?: boolean;
+}
+
+const { name, path, purpose = "avatar", size = 48, shape = "circle", class: className = "", priority = false } = Astro.props;
+
+const initials =
+  name
+    .replace(/^@/, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("") || "?";
+
+const palette = ["bg-seek-soft text-seek", "bg-offer-soft text-offer", "bg-success-soft text-success", "bg-warning-soft text-warning"];
+const color = palette[[...name].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % palette.length];
+const radius = shape === "circle" ? "rounded-full" : "rounded-wl";
+const src = mediaUrl(purpose, path, size * 2);
+---
+
+{
+  src ? (
+    <img
+      src={src}
+      srcset={mediaSrcSet(purpose, path)}
+      sizes={`${size}px`}
+      width={size}
+      height={size}
+      alt={name}
+      loading={priority ? "eager" : "lazy"}
+      fetchpriority={priority ? "high" : undefined}
+      decoding="async"
+      class:list={["shrink-0 bg-surface-muted object-cover", radius, className]}
+      style={{ width: `${size}px`, height: `${size}px` }}
+    />
+  ) : (
+    <span
+      aria-hidden="true"
+      class:list={["inline-grid shrink-0 place-items-center font-bold", radius, color, className]}
+      style={{ width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.38)}px` }}
+    >
+      {initials}
+    </span>
+  )
+}

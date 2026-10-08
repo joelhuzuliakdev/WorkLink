@@ -1,0 +1,54 @@
+---
+/** Layout del área privada: navegación del panel + contenido. Siempre noindex. */
+import BaseLayout from "./BaseLayout.astro";
+
+interface Props {
+  title: string;
+  heading?: string;
+  description?: string;
+  /** Enlace "volver" opcional sobre el título. */
+  back?: { href: string; label: string };
+}
+
+const { title, heading = title, description, back } = Astro.props;
+const path = Astro.url.pathname;
+
+const links = [
+  { href: "/panel", label: "Inicio", active: path === "/panel" },
+  { href: "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
+];
+---
+
+<BaseLayout title={title} noindex>
+  <div class="border-b border-line bg-surface">
+    <nav aria-label="Panel" class="mx-auto flex max-w-5xl gap-1 overflow-x-auto px-4">
+      {
+        links.map((link) => (
+          <a
+            href={link.href}
+            aria-current={link.active ? "page" : undefined}
+            class:list={[
+              "whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium transition-colors",
+              link.active ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink",
+            ]}
+          >
+            {link.label}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+
+  <section class="mx-auto max-w-5xl px-4 py-8">
+    {back && <a href={back.href} class="mb-3 inline-block text-sm font-medium text-ink-muted hover:text-ink">← {back.label}</a>}
+    <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold sm:text-3xl">{heading}</h1>
+        {description && <p class="mt-1 text-ink-muted">{description}</p>}
+      </div>
+      <slot name="actions" />
+    </div>
+    <slot />
+  </section>
+</BaseLayout>
