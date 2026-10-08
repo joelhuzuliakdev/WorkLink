@@ -1,0 +1,32 @@
+---
+/**
+ * Una página del feed: tarjetas + enlace "Cargar más". Se usa en la página
+ * completa y en el fragmento que se agrega con JavaScript (/publicaciones/mas).
+ */
+import PostCard from "./PostCard.astro";
+import type { PostView } from "../../services/posts";
+
+interface Props {
+  posts: PostView[];
+  nextHref: string | null;
+  nextFragmentHref: string | null;
+  priorityCount?: number;
+}
+
+const { posts, nextHref, nextFragmentHref, priorityCount = 0 } = Astro.props;
+---
+
+{posts.map((post, index) => <PostCard post={post} priority={index < priorityCount} />)}
+{
+  nextHref && (
+    <div class="col-span-full flex justify-center pt-2" data-load-more-wrapper>
+      <a
+        href={nextHref}
+        data-load-more={nextFragmentHref}
+        class="inline-flex h-11 items-center rounded-wl border border-line bg-surface px-5 font-semibold text-ink hover:bg-surface-muted"
+      >
+        Cargar más
+      </a>
+    </div>
+  )
+}

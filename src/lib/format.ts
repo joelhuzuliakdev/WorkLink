@@ -61,3 +61,17 @@ export function formatLocation(city: { name: string; province_name: string } | n
   if (city.name === city.province_name) return `${city.name} capital`;
   return city.province_name ? `${city.name}, ${city.province_name}` : city.name;
 }
+
+const relative = new Intl.RelativeTimeFormat("es-AR", { numeric: "auto" });
+
+/** "hace 5 minutos", "ayer", "hace 3 días"; más de 30 días: fecha corta. */
+export function formatRelative(value: string | Date, now: Date = new Date()): string {
+  const date = new Date(value);
+  const seconds = Math.round((date.getTime() - now.getTime()) / 1000);
+  const abs = Math.abs(seconds);
+  if (abs < 60) return "recién";
+  if (abs < 3600) return relative.format(Math.round(seconds / 60), "minute");
+  if (abs < 86400) return relative.format(Math.round(seconds / 3600), "hour");
+  if (abs < 86400 * 30) return relative.format(Math.round(seconds / 86400), "day");
+  return formatDate(date, { day: "numeric", month: "short", year: date.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}

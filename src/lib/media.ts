@@ -39,3 +39,8 @@ export function isOwnMediaPath(basePath: string, userId: string): boolean {
 export function mediaFiles(purpose: MediaPurpose, basePath: string): string[] {
   return mediaPresets[purpose].sizes.map((size) => `${basePath}/${size}.webp`);
 }
+
+/** URL pública de un archivo cualquiera de post-media (video o portada). */
+export function postFileUrl(basePath: string, fileName: string): string {
+  return `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/post-media/${basePath}/${fileName}`;
+}

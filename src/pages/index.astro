@@ -6,8 +6,11 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Button from "../components/ui/Button.astro";
 import { routes } from "../config/site";
+import PostCard from "../components/posts/PostCard.astro";
+import { getFeed } from "../services/posts";
 
 const user = Astro.locals.user;
+const { posts: latest } = await getFeed(Astro.locals.supabase, { limit: 6 });
 
 const seekExamples = ["Fotógrafo para un casamiento", "Electricista", "Tortas personalizadas", "Diseño de logo"];
 const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "Clases particulares"];
@@ -81,4 +84,18 @@ const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "C
       </div>
     </article>
   </section>
+
+  {
+    latest.length > 0 && (
+      <section class="mx-auto max-w-6xl px-4 pb-20" aria-labelledby="ultimas">
+        <div class="mb-5 flex items-end justify-between gap-4">
+          <h2 id="ultimas" class="text-2xl font-bold">Últimas publicaciones</h2>
+          <a href="/publicaciones" class="text-sm font-semibold text-brand hover:underline">Ver todas →</a>
+        </div>
+        <div class="grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {latest.map((post) => <PostCard post={post} />)}
+        </div>
+      </section>
+    )
+  }
 </BaseLayout>

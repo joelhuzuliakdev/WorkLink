@@ -12,6 +12,7 @@
  */
 import { useRef, useState } from "preact/hooks";
 import { acceptedImageTypes, mediaPresets, type MediaPurpose } from "../config/media";
+import { decodeImage, renderVariant, requestUploadUrls, uploadToSignedUrl } from "./lib/image";
 
 interface Props {
   /** Nombre del campo oculto del formulario. */
@@ -38,7 +39,7 @@ export default function ImageUploader(props: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const round = props.purpose === "avatar";
-  const wide = preset.aspect > 1;
+  const wide = (preset.aspect ?? 1) > 1;
   const busy = status === "processing" || status === "uploading";
 
   async function handleFile(file: File) {
@@ -56,34 +57,17 @@ export default function ImageUploader(props: Props) {
 
     try {
       setStatus("processing");
-      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" } as ImageBitmapOptions);
-      const blobs = await Promise.all(preset.sizes.map((size) => renderVariant(bitmap, size, preset.aspect, preset.quality)));
+      const bitmap = await decodeImage(file);
+      const variants = await Promise.all(preset.sizes.map((size) => renderVariant(bitmap, size, preset.aspect, preset.quality)));
       bitmap.close?.();
+      const blobs = variants.map((variant) => variant.blob);
 
       setStatus("uploading");
-      const signRes = await fetch("/api/uploads/sign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purpose: props.purpose }),
-      });
-      const signed = (await signRes.json()) as { basePath?: string; uploads?: { size: number; url: string }[]; error?: string };
-      if (!signRes.ok || !signed.basePath || !signed.uploads) throw new Error(signed.error ?? "No pudimos preparar la subida.");
-
+      const signed = await requestUploadUrls({ purpose: props.purpose });
       await Promise.all(
-        signed.uploads.map(async ({ size, url }) => {
-          const blob = blobs[preset.sizes.indexOf(size)];
-          const res = await fetch(url, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "image/webp",
-              "cache-control": "max-age=31536000",
-              "x-upsert": "false",
-              apikey: props.supabaseAnonKey,
-            },
-            body: blob,
-          });
-          if (!res.ok) throw new Error("La subida falló. Revisá tu conexión y probá de nuevo.");
-        }),
+        signed.uploads.map(({ name, url }) =>
+          uploadToSignedUrl(url, blobs[preset.sizes.indexOf(Number.parseInt(name, 10))], "image/webp", props.supabaseAnonKey),
+        ),
       );
 
       setPath(signed.basePath);
@@ -168,32 +152,4 @@ export default function ImageUploader(props: Props) {
       )}
     </div>
   );
-}
-
-/** Recorta al centro con la relación pedida y escala al ancho indicado (sin agrandar). */
-async function renderVariant(bitmap: ImageBitmap, width: number, aspect: number, quality: number): Promise<Blob> {
-  const srcAspect = bitmap.width / bitmap.height;
-  let sw = bitmap.width;
-  let sh = bitmap.height;
-  if (srcAspect > aspect) sw = Math.round(bitmap.height * aspect);
-  else sh = Math.round(bitmap.width / aspect);
-  const sx = Math.round((bitmap.width - sw) / 2);
-  const sy = Math.round((bitmap.height - sh) / 2);
-
-  const targetWidth = Math.min(width, sw);
-  const targetHeight = Math.round(targetWidth / aspect);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Tu navegador no permite procesar imágenes.");
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, targetWidth, targetHeight);
-
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", quality));
-  if (!blob || blob.type !== "image/webp") {
-    throw new Error("Tu navegador no puede generar imágenes WebP. Probá con Chrome, Edge, Firefox o Safari actualizado.");
-  }
-  return blob;
 }

@@ -1,0 +1,63 @@
+---
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../../layouts/PanelLayout.astro";
+import Alert from "../../../components/ui/Alert.astro";
+import Button from "../../../components/ui/Button.astro";
+import PostForm from "../../../components/posts/PostForm.astro";
+import { getPost } from "../../../services/posts";
+import { getMyBusinesses } from "../../../services/businesses";
+import { getCategoryTree } from "../../../services/categories";
+import { getCity } from "../../../services/locations";
+import { getSubmittedForm } from "../../../utils/form";
+import { mediaItemsFromPost, mediaItemsFromSubmitted } from "../../../lib/post-media";
+import { postPath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const id = Astro.params.id ?? "";
+if (!/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+const result = Astro.getActionResult(actions.posts.update);
+if (result && !result.error) return Astro.redirect("/panel/publicaciones?ok=guardada");
+
+const [post, businesses, categories] = await Promise.all([
+  getPost(supabase, id),
+  getMyBusinesses(supabase, user!.id),
+  getCategoryTree(supabase),
+]);
+
+// Solo el autor o el equipo del emprendimiento pueden editar.
+const canEdit = post && (post.author_id === user!.id || (post.business_id && businesses.some((b) => b.id === post.business_id)));
+if (!post || !canEdit) return Astro.rewrite("/404");
+
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+
+const cityId = submitted ? Number(submitted.get("city_id")) : post.city_id;
+const city = cityId ? await getCity(supabase, cityId) : null;
+const media = submitted ? mediaItemsFromSubmitted(submitted.get("media")) : mediaItemsFromPost(post);
+---
+
+<PanelLayout title="Editar publicación" back={{ href: "/panel/publicaciones", label: "Mis publicaciones" }}>
+  <Button slot="actions" href={postPath(post)} variant="ghost" size="sm">Ver publicación</Button>
+  {post.status === "removed" && <Alert tone="danger" class="mb-6">Esta publicación fue removida por moderación y no se puede editar.</Alert>}
+  {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
+  {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados.</Alert>}
+  {
+    post.status !== "removed" && (
+      <div class="max-w-3xl">
+        <PostForm
+          action={actions.posts.update}
+          post={post}
+          businesses={businesses}
+          categories={categories}
+          submitted={submitted}
+          fieldErrors={fieldErrors}
+          city={city}
+          media={media}
+          submitLabel="Guardar cambios"
+        />
+      </div>
+    )
+  }
+</PanelLayout>

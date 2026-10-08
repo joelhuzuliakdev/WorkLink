@@ -1,0 +1,181 @@
+---
+/**
+ * Formulario de publicación (crear y editar). Funciona sin JavaScript salvo
+ * las islas de fotos y ciudad; un script pequeño habilita los tipos que
+ * requieren emprendimiento y filtra las subcategorías.
+ */
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import Field from "../ui/Field.astro";
+import TextArea from "../ui/TextArea.astro";
+import Button from "../ui/Button.astro";
+import CityPicker from "../../islands/CityPicker.tsx";
+import PostMediaUploader, { type PostMediaItem } from "../../islands/PostMediaUploader.tsx";
+import type { CategoryTree } from "../../services/categories";
+import type { PostView } from "../../services/posts";
+import type { MyBusiness } from "../../services/businesses";
+import type { CityRef } from "../../types/domain";
+import { POST_TYPES } from "../../schemas/post";
+
+interface Props {
+  action: string;
+  post?: PostView | null;
+  businesses: MyBusiness[];
+  categories: CategoryTree[];
+  submitted?: FormData | null;
+  fieldErrors?: Record<string, string[] | undefined>;
+  city?: CityRef | null;
+  media: PostMediaItem[];
+  submitLabel: string;
+  /** Emprendimiento preseleccionado (?emprendimiento=...). */
+  defaultBusinessId?: string | null;
+}
+
+const { action, post = null, businesses, categories, submitted = null, fieldErrors = {}, city = null, media, submitLabel, defaultBusinessId = null } = Astro.props;
+
+const v = (name: string, saved: unknown) =>
+  submitted ? String(submitted.get(name) ?? "") : saved === null || saved === undefined ? "" : String(saved);
+const err = (name: string) => fieldErrors[name]?.[0];
+
+const businessId = v("business_id", post ? post.business_id : (defaultBusinessId ?? (businesses.length ? businesses[0].id : "")));
+const type = v("type", post?.type ?? (businessId ? "offer" : "offer"));
+const categoryId = Number(v("category_id", post?.category_id)) || null;
+const subcategoryId = Number(v("subcategory_id", post?.subcategory_id)) || null;
+const price = v("price", post?.price !== null && post?.price !== undefined ? String(post.price).replace(".", ",") : "");
+const tags = v("tags", post?.tags.join(", "));
+const status = v("status", post?.status === "hidden" ? "hidden" : "published");
+const activeBusinesses = businesses.filter((b) => b.status !== "suspended");
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<form method="POST" action={action} class="flex flex-col gap-7" novalidate data-post-form>
+  {post && <input type="hidden" name="post_id" value={post.id} />}
+
+  <section class="flex flex-col gap-4">
+    {
+      post ? (
+        post.business_id && <input type="hidden" name="business_id" value={post.business_id} />
+      ) : (
+        <div class="flex flex-col gap-1.5">
+          <label for="business_id" class="text-sm font-medium text-ink">Publicar como</label>
+          <select id="business_id" name="business_id" class={selectClass} data-business-select>
+            {activeBusinesses.map((b) => (
+              <option value={b.id} selected={businessId === b.id}>{b.name}</option>
+            ))}
+            <option value="" selected={businessId === ""}>Yo, a título personal</option>
+          </select>
+        </div>
+      )
+    }
+
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 text-sm font-medium text-ink">¿Qué querés publicar?</legend>
+      <div class="flex flex-wrap gap-2">
+        {
+          POST_TYPES.map((option) => (
+            <label
+              class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-seek-soft has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-45"
+              data-needs-business={option.needsBusiness ? "true" : undefined}
+            >
+              <input type="radio" name="type" value={option.value} checked={type === option.value} class="accent-[var(--wl-brand)]" />
+              {option.label}
+            </label>
+          ))
+        }
+      </div>
+      {err("type") ? <p class="text-sm text-danger" role="alert">{err("type")}</p> : <p class="text-xs text-ink-muted">Producto, Servicio y Promoción se publican desde un emprendimiento.</p>}
+    </fieldset>
+
+    <Field name="title" label="Título (opcional)" maxlength={140} placeholder="Ej.: Tortas temáticas para cumpleaños" value={v("title", post?.title)} error={err("title")} />
+    <TextArea name="body" label="Texto" rows={5} maxlength={5000} required placeholder="Contá qué ofrecés o qué estás buscando: detalles, zona, plazos…" value={v("body", post?.body)} error={err("body")} />
+  </section>
+
+  <section class="flex flex-col gap-2">
+    <h2 class="text-sm font-medium text-ink">Fotos o video</h2>
+    <PostMediaUploader client:load initial={media} supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY} />
+    {err("media") && <p class="text-sm text-danger" role="alert">{err("media")}</p>}
+  </section>
+
+  <section class="grid gap-4 sm:grid-cols-2">
+    <Field name="price" label="Precio en pesos (opcional)" inputmode="decimal" placeholder="Ej.: 25.000" value={price} error={err("price")} />
+    <div class="flex flex-col gap-1.5">
+      <label for="category_id" class="text-sm font-medium text-ink">Categoría</label>
+      <select id="category_id" name="category_id" class={selectClass} data-category-select>
+        <option value="">{businessId ? "La de mi emprendimiento" : "Elegí una categoría"}</option>
+        {categories.map((c) => <option value={c.id} selected={categoryId === c.id}>{c.name}</option>)}
+      </select>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for="subcategory_id" class="text-sm font-medium text-ink">Especialidad (opcional)</label>
+      <select id="subcategory_id" name="subcategory_id" class={selectClass} data-subcategory-select>
+        <option value="">Ninguna</option>
+        {categories.map((c) => (
+          <optgroup label={c.name} data-category={c.id}>
+            {c.subcategories.map((s) => <option value={s.id} selected={subcategoryId === s.id}>{s.name}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </div>
+    <CityPicker
+      client:load
+      name="city_id"
+      label="Ciudad"
+      initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+      error={err("city_id")}
+      hint={businessId ? "Si la dejás vacía, se usa la de tu emprendimiento." : undefined}
+    />
+    <Field name="tags" label="Etiquetas (opcional)" placeholder="bodas, eventos, fotografía" value={tags} hint="Separadas por coma. Hasta 10." error={err("tags")} class="sm:col-span-2" />
+  </section>
+
+  <section class="flex flex-col gap-2">
+    <span class="text-sm font-medium text-ink">Visibilidad</span>
+    <div class="flex flex-wrap gap-2">
+      <label class="inline-flex cursor-pointer items-center gap-2 rounded-wl border border-line bg-surface px-3 py-2 text-sm has-[:checked]:border-brand has-[:checked]:bg-seek-soft">
+        <input type="radio" name="status" value="published" checked={status === "published"} class="accent-[var(--wl-brand)]" /> Publicada
+      </label>
+      <label class="inline-flex cursor-pointer items-center gap-2 rounded-wl border border-line bg-surface px-3 py-2 text-sm has-[:checked]:border-brand has-[:checked]:bg-seek-soft">
+        <input type="radio" name="status" value="hidden" checked={status === "hidden"} class="accent-[var(--wl-brand)]" /> Oculta (solo vos la ves)
+      </label>
+    </div>
+  </section>
+
+  <div class="sticky bottom-0 -mx-4 border-t border-line bg-bg/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0">
+    <Button type="submit" size="lg" class="w-full sm:w-auto">{submitLabel}</Button>
+  </div>
+</form>
+
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>("[data-post-form]")) {
+    // Tipos que requieren emprendimiento: deshabilitados si se publica a título personal.
+    const businessSelect = form.querySelector<HTMLSelectElement>("[data-business-select]");
+    const syncTypes = () => {
+      const personal = businessSelect ? businessSelect.value === "" : !form.querySelector('input[name="business_id"]');
+      for (const label of form.querySelectorAll<HTMLElement>("[data-needs-business]")) {
+        const input = label.querySelector("input");
+        if (!input) continue;
+        input.disabled = personal;
+        if (personal && input.checked) {
+          input.checked = false;
+          form.querySelector<HTMLInputElement>('input[name="type"][value="offer"]')!.checked = true;
+        }
+      }
+    };
+    businessSelect?.addEventListener("change", syncTypes);
+    syncTypes();
+
+    // Especialidades: solo las de la categoría elegida.
+    const category = form.querySelector<HTMLSelectElement>("[data-category-select]");
+    const sub = form.querySelector<HTMLSelectElement>("[data-subcategory-select]");
+    const syncSubs = () => {
+      if (!category || !sub) return;
+      for (const group of sub.querySelectorAll<HTMLOptGroupElement>("optgroup")) {
+        const visible = !category.value || group.dataset.category === category.value;
+        group.hidden = !visible;
+        group.disabled = !visible;
+      }
+      const selected = sub.selectedOptions[0];
+      if (selected?.parentElement instanceof HTMLOptGroupElement && selected.parentElement.disabled) sub.value = "";
+    };
+    category?.addEventListener("change", syncSubs);
+    syncSubs();
+  }
+</script>

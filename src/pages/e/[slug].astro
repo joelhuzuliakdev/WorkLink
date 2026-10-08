@@ -9,6 +9,8 @@ import Avatar from "../../components/ui/Avatar.astro";
 import Button from "../../components/ui/Button.astro";
 import HoursTable from "../../components/business/HoursTable.astro";
 import CatalogItemCard from "../../components/business/CatalogItemCard.astro";
+import PostCard from "../../components/posts/PostCard.astro";
+import { getFeed } from "../../services/posts";
 import { getBusinessBySlug, getCatalog } from "../../services/businesses";
 import { mediaSrcSet, mediaUrl } from "../../lib/media";
 import { instagramUrl, tiktokUrl, whatsappUrl } from "../../lib/contact";
@@ -28,7 +30,10 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const catalog = await getCatalog(supabase, business.id, { onlyPublic: true });
+const [catalog, { posts: businessPosts }] = await Promise.all([
+  getCatalog(supabase, business.id, { onlyPublic: true }),
+  getFeed(supabase, { businessId: business.id, limit: 6 }),
+]);
 const isPublic = business.status === "active";
 
 const site = Astro.site ?? new URL(Astro.url.origin);
@@ -147,7 +152,23 @@ const jsonLd = [
             </section>
           )}
 
-          {catalog.services.length === 0 && catalog.products.length === 0 && !business.description && (
+          {(businessPosts.length > 0 || canEdit) && (
+            <section>
+              <div class="mb-4 flex items-center justify-between gap-4">
+                <h2 class="text-xl font-semibold">Publicaciones</h2>
+                {canEdit && <Button href={`/panel/publicaciones/nueva?emprendimiento=${business.id}`} variant="secondary" size="sm">Publicar</Button>}
+              </div>
+              {businessPosts.length > 0 ? (
+                <div class="grid items-start gap-4 sm:grid-cols-2">
+                  {businessPosts.map((post) => <PostCard post={post} />)}
+                </div>
+              ) : (
+                <p class="text-ink-muted">Todavía no hay publicaciones.</p>
+              )}
+            </section>
+          )}
+
+          {catalog.services.length === 0 && catalog.products.length === 0 && !business.description && businessPosts.length === 0 && (
             <p class="text-ink-muted">Este emprendimiento todavía está armando su página.</p>
           )}
         </div>

@@ -1,0 +1,35 @@
+---
+/**
+ * Fragmento HTML con la página siguiente del feed (sin <html> ni layout).
+ * Lo pide el botón "Cargar más" de /publicaciones. No se indexa.
+ */
+import FeedPage from "../../components/posts/FeedPage.astro";
+import { decodeCursor, getFeed } from "../../services/posts";
+import type { PostType } from "../../schemas/post";
+
+export const partial = true;
+
+const TYPE_SLUGS: Record<string, PostType> = {
+  ofrezco: "offer",
+  busco: "seeking",
+  productos: "product",
+  servicios: "service",
+  promociones: "promotion",
+};
+
+const tipo = Astro.url.searchParams.get("tipo") ?? "";
+const type = TYPE_SLUGS[tipo] ?? null;
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+if (!cursor) return new Response(null, { status: 400 });
+
+const { posts, nextCursor } = await getFeed(Astro.locals.supabase, { type, cursor });
+const params = (extra: Record<string, string>) => new URLSearchParams({ ...(type ? { tipo } : {}), ...extra }).toString();
+
+Astro.response.headers.set("X-Robots-Tag", "noindex");
+---
+
+<FeedPage
+  posts={posts}
+  nextHref={nextCursor ? `/publicaciones?${params({ desde: nextCursor })}` : null}
+  nextFragmentHref={nextCursor ? `/publicaciones/mas?${params({ desde: nextCursor })}` : null}
+/>

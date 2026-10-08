@@ -1,0 +1,197 @@
+---
+/**
+ * Página pública de una publicación: /p/texto-legible-<id>
+ * Si el texto de la URL no coincide con el actual, redirige (301) a la URL
+ * canónica: así los enlaces viejos siguen funcionando y Google ve una sola.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Button from "../../components/ui/Button.astro";
+import PostCard from "../../components/posts/PostCard.astro";
+import { getFeed, getPost, POST_TYPE_LABELS, postHeadline } from "../../services/posts";
+import { displayName } from "../../services/profiles";
+import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
+import { businessPath, postIdFromRef, postPath, profilePath } from "../../lib/urls";
+import { jsonLdScript } from "../../lib/seo/business";
+
+const { supabase, user } = Astro.locals;
+const id = postIdFromRef(Astro.params.ref);
+if (!id) return Astro.rewrite("/404");
+
+const post = await getPost(supabase, id);
+if (!post) return Astro.rewrite("/404");
+
+const canonical = postPath(post);
+if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
+
+const isPublic = post.status === "published";
+const isOwner = user?.id === post.author_id;
+const type = POST_TYPE_LABELS[post.type];
+const headline = postHeadline(post, 70);
+const authorName = post.business?.name ?? (post.author ? displayName(post.author) : "");
+const authorHref = post.business ? businessPath(post.business.slug) : post.author ? profilePath(post.author.username) : null;
+const site = Astro.site ?? new URL(Astro.url.origin);
+const absoluteUrl = new URL(canonical, site).toString();
+
+const cover = post.media[0];
+const ogImage = cover ? (cover.kind === "image" ? mediaUrl("post", cover.path, 1600) : postFileUrl(cover.path, "poster.webp")) : null;
+const description = post.body.replace(/\s+/g, " ").slice(0, 155);
+
+const more = post.business_id
+  ? (await getFeed(supabase, { businessId: post.business_id, limit: 4 })).posts.filter((p) => p.id !== post.id).slice(0, 3)
+  : [];
+
+const shareText = `${headline} — en WorkLink`;
+const whatsappShare = `https://wa.me/?text=${encodeURIComponent(`${shareText} ${absoluteUrl}`)}`;
+
+const jsonLd =
+  isPublic && post.type === "product" && post.price !== null
+    ? {
+        "@context": "https://schema.org",
+        "@type": "Product",
+        name: headline,
+        description,
+        image: ogImage ?? undefined,
+        url: absoluteUrl,
+        brand: post.business ? { "@type": "Brand", name: post.business.name } : undefined,
+        offers: { "@type": "Offer", price: post.price, priceCurrency: post.currency, availability: "https://schema.org/InStock", url: absoluteUrl },
+      }
+    : null;
+---
+
+<BaseLayout title={headline} description={description} canonicalPath={canonical} noindex={!isPublic} image={ogImage ?? undefined}>
+  {jsonLd && <script slot="head" type="application/ld+json" set:html={jsonLdScript(jsonLd)} />}
+
+  <article class="mx-auto max-w-3xl px-4 py-6 sm:py-10">
+    {!isPublic && (
+      <p class="mb-4 rounded-wl border border-warning/30 bg-warning-soft px-4 py-2 text-sm">
+        {post.status === "hidden" ? "Publicación oculta: solo la ven vos y tu equipo." : "Esta publicación fue removida por moderación."}
+      </p>
+    )}
+
+    <header class="flex flex-wrap items-center gap-3">
+      {authorHref && (
+        <a href={authorHref} class="flex min-w-0 flex-1 items-center gap-3">
+          <Avatar
+            name={authorName}
+            path={post.business?.logo_path ?? post.author?.avatar_path}
+            purpose={post.business ? "logo" : "avatar"}
+            shape={post.business ? "rounded" : "circle"}
+            size={48}
+          />
+          <span class="min-w-0">
+            <span class="block truncate font-semibold">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
+            <span class="block text-sm text-ink-muted">
+              <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
+              {post.city && ` · ${post.city.name}`}
+            </span>
+          </span>
+        </a>
+      )}
+      <span class:list={["rounded-full px-3 py-1 text-sm font-semibold", type.class]}>{type.label}</span>
+    </header>
+
+    {post.title && <h1 class="mt-6 text-2xl font-bold sm:text-3xl">{post.title}</h1>}
+    {!post.title && <h1 class="sr-only">{headline}</h1>}
+
+    {post.price !== null && <p class="mt-3 text-2xl font-bold">{formatMoney(post.price)}</p>}
+
+    {
+      post.media.length > 0 && (
+        <div class="-mx-4 mt-6 sm:mx-0">
+          {cover.kind === "video" ? (
+            <video
+              controls
+              playsinline
+              preload="none"
+              poster={postFileUrl(cover.path, "poster.webp")}
+              width={cover.width ?? undefined}
+              height={cover.height ?? undefined}
+              class="max-h-[80vh] w-full bg-black sm:rounded-wl-lg"
+            >
+              <source src={postFileUrl(cover.path, `video.${cover.mime === "video/webm" ? "webm" : "mp4"}`)} type={cover.mime} />
+              Tu navegador no puede reproducir este video.
+            </video>
+          ) : (
+            <div class="flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 sm:px-0" aria-label={`${post.media.length} fotos`}>
+              {post.media.map((m, index) => (
+                <img
+                  src={mediaUrl("post", m.path, 960)}
+                  srcset={mediaSrcSet("post", m.path)}
+                  sizes="(min-width: 768px) 720px, 92vw"
+                  width={m.width ?? undefined}
+                  height={m.height ?? undefined}
+                  alt={`${headline} (foto ${index + 1} de ${post.media.length})`}
+                  loading={index === 0 ? "eager" : "lazy"}
+                  fetchpriority={index === 0 ? "high" : undefined}
+                  decoding="async"
+                  class:list={[
+                    "max-h-[75vh] snap-center rounded-wl-lg bg-surface-muted object-contain",
+                    post.media.length > 1 ? "w-[88%] shrink-0 sm:w-[85%]" : "w-full",
+                  ]}
+                />
+              ))}
+            </div>
+          )}
+          {post.media.length > 1 && <p class="mt-2 px-4 text-center text-xs text-ink-muted sm:px-0">Deslizá para ver las {post.media.length} fotos</p>}
+        </div>
+      )
+    }
+
+    <div class="mt-6 whitespace-pre-line text-lg leading-relaxed">{post.body}</div>
+
+    {
+      (post.category || post.tags.length > 0) && (
+        <ul class="mt-6 flex flex-wrap gap-2 text-sm">
+          {post.category && <li class="rounded-full border border-line bg-surface px-3 py-1">{post.subcategory?.name ?? post.category.name}</li>}
+          {post.tags.map((tag) => <li class="rounded-full bg-surface-muted px-3 py-1 text-ink-muted">#{tag}</li>)}
+        </ul>
+      )
+    }
+
+    <div class="mt-8 flex flex-wrap gap-2">
+      {post.business ? (
+        <Button href={`${businessPath(post.business.slug)}#contacto`} size="lg">Contactar a {post.business.name}</Button>
+      ) : post.author ? (
+        <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
+      ) : null}
+      <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
+      <Button variant="ghost" size="lg" data-share={absoluteUrl} data-share-title={shareText}>Copiar enlace</Button>
+      {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
+    </div>
+  </article>
+
+  {
+    more.length > 0 && post.business && (
+      <section class="mx-auto max-w-5xl px-4 pb-16">
+        <h2 class="mb-4 text-lg font-semibold">Más de {post.business.name}</h2>
+        <div class="grid gap-4 md:grid-cols-3">
+          {more.map((item) => <PostCard post={item} />)}
+        </div>
+      </section>
+    )
+  }
+</BaseLayout>
+
+<script>
+  // Compartir: menú nativo del celular si existe; si no, copia el enlace.
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-share]")) {
+    button.addEventListener("click", async () => {
+      const url = button.dataset.share!;
+      const title = button.dataset.shareTitle ?? document.title;
+      try {
+        if (navigator.share) {
+          await navigator.share({ title, url });
+          return;
+        }
+        await navigator.clipboard.writeText(url);
+        const original = button.textContent;
+        button.textContent = "¡Enlace copiado!";
+        setTimeout(() => (button.textContent = original), 2000);
+      } catch {
+        /* el usuario canceló */
+      }
+    });
+  }
+</script>

@@ -1,0 +1,107 @@
+---
+/** Mis publicaciones (propias y de mis emprendimientos), con acciones rápidas. */
+import { actions } from "astro:actions";
+import PanelLayout from "../../../layouts/PanelLayout.astro";
+import Button from "../../../components/ui/Button.astro";
+import Alert from "../../../components/ui/Alert.astro";
+import { getManageablePosts, decodeCursor, POST_TYPE_LABELS, postHeadline } from "../../../services/posts";
+import { getMyBusinesses } from "../../../services/businesses";
+import { mediaUrl, postFileUrl } from "../../../lib/media";
+import { formatMoney, formatRelative } from "../../../lib/format";
+import { postPath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+
+const statusResult = Astro.getActionResult(actions.posts.setStatus);
+const removeResult = Astro.getActionResult(actions.posts.remove);
+if (statusResult && !statusResult.error) return Astro.redirect("/panel/publicaciones?ok=visibilidad");
+if (removeResult && !removeResult.error) return Astro.redirect("/panel/publicaciones?ok=eliminada");
+const actionError = statusResult?.error?.message ?? removeResult?.error?.message;
+
+const businesses = await getMyBusinesses(supabase, user!.id);
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const { posts, nextCursor } = await getManageablePosts(supabase, user!.id, businesses.map((b) => b.id), { cursor });
+
+const ok = Astro.url.searchParams.get("ok");
+const okText: Record<string, string> = {
+  publicada: "¡Listo! Tu publicación ya está en WorkLink.",
+  guardada: "Guardamos los cambios.",
+  visibilidad: "Actualizamos la visibilidad.",
+  eliminada: "Eliminamos la publicación.",
+};
+---
+
+<PanelLayout title="Mis publicaciones" description="Lo que publicaste vos y tus emprendimientos.">
+  <Button slot="actions" href="/panel/publicaciones/nueva">Nueva publicación</Button>
+
+  {ok && okText[ok] && <Alert tone="success" class="mb-6">{okText[ok]}</Alert>}
+  {actionError && <Alert tone="danger" class="mb-6">{actionError}</Alert>}
+
+  {
+    posts.length === 0 && !cursor ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
+        <h2 class="text-lg font-semibold">Todavía no publicaste nada</h2>
+        <p class="mx-auto mt-1 max-w-md text-ink-muted">Mostrá tus trabajos, promociones o contá qué estás buscando.</p>
+        <div class="mt-5"><Button href="/panel/publicaciones/nueva">Crear mi primera publicación</Button></div>
+      </div>
+    ) : (
+      <ul class="grid gap-3">
+        {posts.map((post) => {
+          const cover = post.media[0];
+          const thumb = cover ? (cover.kind === "image" ? mediaUrl("post", cover.path, 480) : postFileUrl(cover.path, "poster.webp")) : null;
+          const type = POST_TYPE_LABELS[post.type];
+          return (
+            <li class="flex flex-wrap items-center gap-4 rounded-wl-lg border border-line bg-surface p-3 sm:flex-nowrap">
+              {thumb ? (
+                <img src={thumb} alt="" width="64" height="64" loading="lazy" class="h-16 w-16 shrink-0 rounded-wl object-cover" />
+              ) : (
+                <span class="grid h-16 w-16 shrink-0 place-items-center rounded-wl bg-surface-muted text-xs text-ink-muted">Sin foto</span>
+              )}
+              <div class="min-w-0 flex-1">
+                <p class="flex flex-wrap items-center gap-2 text-xs">
+                  <span class:list={["rounded-full px-2 py-0.5 font-semibold", type.class]}>{type.label}</span>
+                  {post.status === "hidden" && <span class="rounded-full bg-surface-muted px-2 py-0.5 font-medium text-ink-muted">Oculta</span>}
+                  {post.status === "removed" && <span class="rounded-full bg-danger-soft px-2 py-0.5 font-medium text-danger">Removida por moderación</span>}
+                  <span class="text-ink-muted">{post.business?.name ?? "Personal"} · {formatRelative(post.published_at)}</span>
+                </p>
+                <p class="mt-1 truncate font-medium">{postHeadline(post, 90)}</p>
+                {post.price !== null && <p class="text-sm text-ink-muted">{formatMoney(post.price)}</p>}
+              </div>
+              <div class="flex flex-wrap gap-1">
+                <Button href={postPath(post)} variant="ghost" size="sm">Ver</Button>
+                {post.status !== "removed" && (
+                  <>
+                    <Button href={`/panel/publicaciones/${post.id}`} variant="secondary" size="sm">Editar</Button>
+                    <form method="POST" action={actions.posts.setStatus}>
+                      <input type="hidden" name="post_id" value={post.id} />
+                      <input type="hidden" name="status" value={post.status === "published" ? "hidden" : "published"} />
+                      <Button type="submit" variant="ghost" size="sm">{post.status === "published" ? "Ocultar" : "Publicar"}</Button>
+                    </form>
+                  </>
+                )}
+                <form method="POST" action={actions.posts.remove} data-confirm="¿Eliminar esta publicación?">
+                  <input type="hidden" name="post_id" value={post.id} />
+                  <Button type="submit" variant="ghost" size="sm" class="text-danger">Eliminar</Button>
+                </form>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+
+  {nextCursor && (
+    <div class="mt-6 text-center">
+      <Button href={`/panel/publicaciones?desde=${nextCursor}`} variant="secondary">Ver más antiguas</Button>
+    </div>
+  )}
+</PanelLayout>
+
+<script>
+  for (const form of document.querySelectorAll<HTMLFormElement>("form[data-confirm]")) {
+    form.addEventListener("submit", (event) => {
+      if (!window.confirm(form.dataset.confirm ?? "¿Confirmás?")) event.preventDefault();
+    });
+  }
+</script>

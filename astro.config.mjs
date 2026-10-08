@@ -41,6 +41,8 @@ export default defineConfig({
       }),
       // Solo servidor. Opcional hasta que se use (webhooks, cron, admin).
       SUPABASE_SERVICE_ROLE_KEY: envField.string({ context: "server", access: "secret", optional: true }),
+      // Secreto que Vercel Cron envía para autorizar las tareas programadas.
+      CRON_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
     },
     validateSecrets: true,
   },
