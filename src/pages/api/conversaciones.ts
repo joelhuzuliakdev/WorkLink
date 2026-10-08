@@ -28,6 +28,7 @@ export const GET: APIRoute = async ({ locals }) => {
         mine: c.last_sender_id === user.id,
         when: c.last_message_at ? formatRelative(c.last_message_at) : "",
         unread: c.unread,
+        unreadCount: c.unreadCount,
       })),
     },
     { headers },

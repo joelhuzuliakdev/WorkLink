@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · mensajes estilo Facebook (computadora) e Instagram (celular), incluye la Etapa 9
+# WorkLink · avisos de mensajes legibles y "N mensajes nuevos" (incluye todo lo anterior)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-messenger.sh
+#     bash instalar-avisos.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0017 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0018 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 9..."
+echo "Instalando archivos de los avisos..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -5195,6 +5195,7 @@ export const GET: APIRoute = async ({ locals }) => {
         mine: c.last_sender_id === user.id,
         when: c.last_message_at ? formatRelative(c.last_message_at) : "",
         unread: c.unread,
+        unreadCount: c.unreadCount,
       })),
     },
     { headers },
@@ -5361,7 +5362,7 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/api/notificaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { countUnread } from "../../services/notifications";
-import { countUnreadConversations } from "../../services/messages";
+import { countUnreadConversations, getLatestUnread } from "../../services/messages";
 
 /**
  * Cantidad de notificaciones sin leer del usuario actual (para la campanita).
@@ -5372,7 +5373,9 @@ export const GET: APIRoute = async ({ locals }) => {
   const headers = { "Cache-Control": "private, no-store" };
   if (!locals.user) return Response.json({ unread: 0, messages: 0 }, { status: 401, headers });
   const [unread, messages] = await Promise.all([countUnread(locals.supabase, locals.user.id), countUnreadConversations(locals.supabase)]);
-  return Response.json({ unread, messages }, { headers });
+  // Último mensaje sin leer, para mostrar "Nombre: mensaje" en el aviso.
+  const latest = messages > 0 ? await getLatestUnread(locals.supabase) : null;
+  return Response.json({ unread, messages, latest }, { headers });
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -6455,11 +6458,15 @@ const hidden = Astro.url.searchParams.get("oculta") === "1";
                       {c.other?.verified_at && <VerifiedBadge size={14} />}
                     </span>
                     <span class:list={["flex gap-1 text-sm", c.unread ? "font-semibold text-ink" : "text-ink-muted"]}>
-                      <span class="truncate">{mine && "Vos: "}{c.last_message_preview}</span>
+                      <span class="truncate">{c.unreadCount > 1 ? `${c.unreadCount > 99 ? "+99" : c.unreadCount} mensajes nuevos` : <>{mine && "Vos: "}{c.last_message_preview}</>}</span>
                       {c.last_message_at && <span class="shrink-0">· {formatRelative(c.last_message_at)}</span>}
                     </span>
                   </span>
-                  {c.unread && <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-seek" aria-label="Sin leer" />}
+                  {c.unreadCount > 0 && (
+                    <span class="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand px-1.5 text-[11px] font-bold text-brand-contrast" aria-label={`${c.unreadCount} sin leer`}>
+                      {c.unreadCount > 99 ? "99+" : c.unreadCount}
+                    </span>
+                  )}
                 </a>
               </li>
             );
@@ -9770,6 +9777,7 @@ interface ConversationItem {
   mine: boolean;
   when: string;
   unread: boolean;
+  unreadCount: number;
 }
 
 interface OpenData {
@@ -9891,10 +9899,15 @@ async function openPanel() {
       nameRow.append(el("span", "truncate", c.name));
       if (c.verified) nameRow.append(verifiedIcon());
       const preview = el("span", `flex gap-1 text-sm ${c.unread ? "font-semibold text-ink" : "text-ink-muted"}`);
-      preview.append(el("span", "truncate", `${c.mine ? "Vos: " : ""}${c.preview}`), el("span", "shrink-0", `· ${c.when}`));
+      const summary = c.unreadCount > 1 ? `${c.unreadCount > 99 ? "+99" : c.unreadCount} mensajes nuevos` : `${c.mine ? "Vos: " : ""}${c.preview}`;
+      preview.append(el("span", "truncate", summary), el("span", "shrink-0", `· ${c.when}`));
       textBox.append(nameRow, preview);
       button.append(avatar(c.name, c.avatar, 52), textBox);
-      if (c.unread) button.append(el("span", "h-3 w-3 shrink-0 rounded-full bg-seek"));
+      if (c.unreadCount > 0) {
+        const count = el("span", "grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand px-1.5 text-[11px] font-bold text-brand-contrast", c.unreadCount > 99 ? "99+" : String(c.unreadCount));
+        count.setAttribute("aria-label", `${c.unreadCount} sin leer`);
+        button.append(count);
+      }
       button.addEventListener("click", () => {
         closePanel();
         void openChat(c.id);
@@ -10026,6 +10039,8 @@ async function openChat(id: string, opts: { minimized?: boolean; post?: { id: st
 
   const setMinimized = (value: boolean) => {
     body.hidden = value;
+    if (value) win!.dataset.minimized = "";
+    else delete win!.dataset.minimized;
     minimize.setAttribute("aria-label", value ? "Abrir" : "Minimizar");
     minimize.title = value ? "Abrir" : "Minimizar";
     remember(id, value);
@@ -10089,6 +10104,12 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closePanel();
 });
 
+// El aviso de mensaje nuevo abre la conversación en la ventanita.
+window.addEventListener("wl:open-chat", (event) => {
+  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+  if (id && desktop.matches) void openChat(id);
+});
+
 // Al cambiar de página, la ventanita se vuelve a abrir como estaba.
 if (desktop.matches && !onMessagesPage()) {
   try {
@@ -10104,13 +10125,21 @@ escribir 'src/scripts/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
  * Íconos de mensajes y notificaciones del encabezado: consulta cada 10
  * segundos mientras la pestaña está a la vista (y al volver a ella) cuántos
- * hay sin leer. Si llega un mensaje nuevo y no estás en Mensajes, muestra un
- * aviso abajo con un enlace para leerlo.
- * Es una consulta liviana (solo dos números); sin conexión, no hace nada.
+ * hay sin leer. Si llega un mensaje nuevo, muestra un aviso abajo a la derecha
+ * con quién lo mandó y el texto; al tocarlo se abre la conversación.
+ * Es una consulta liviana; sin conexión, no hace nada.
  */
 const INTERVAL = 10_000;
 let timer: number | undefined;
-let lastMessages: number | null = null;
+let lastSeenAt: string | null = null;
+let primed = false;
+
+interface Latest {
+  conversationId: string;
+  name: string;
+  body: string;
+  at: string;
+}
 
 const enabled = () => Boolean(document.querySelector("[data-notifications-badge]"));
 
@@ -10121,42 +10150,69 @@ function setBadges(selector: string, count: number) {
   }
 }
 
-function initialMessages(): number {
-  const badge = document.querySelector<HTMLElement>("[data-messages-badge]");
-  return badge && !badge.hidden ? Number.parseInt(badge.textContent ?? "0", 10) || 0 : 0;
-}
+/** ¿Ya está mirando esa conversación (página o ventanita)? */
+const isViewing = (id: string) =>
+  location.pathname === `/mensajes/${id}` || Boolean(document.querySelector(`section[data-conversation="${id}"]:not([data-minimized])`));
 
-function announce(text: string, href: string) {
+let hideTimer: number | undefined;
+function announce(latest: Latest) {
   let box = document.getElementById("wl-message-toast") as HTMLAnchorElement | null;
   if (!box) {
     box = document.createElement("a");
     box.id = "wl-message-toast";
     box.setAttribute("role", "status");
     box.className =
-      "fixed bottom-4 right-4 z-50 flex max-w-xs items-center gap-3 rounded-wl-lg bg-ink px-4 py-3 text-sm font-semibold text-white shadow-xl";
+      "fixed bottom-4 left-4 right-4 z-50 flex items-start gap-3 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
     document.body.append(box);
   }
-  box.href = href;
-  box.textContent = text;
+  box.href = `/mensajes/${latest.conversationId}`;
+  box.dataset.conversation = latest.conversationId;
+  const icon = document.createElement("span");
+  icon.className = "grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "💬";
+  const text = document.createElement("span");
+  text.className = "min-w-0 flex-1";
+  const title = document.createElement("strong");
+  title.className = "block truncate text-sm";
+  title.textContent = latest.name;
+  const body = document.createElement("span");
+  body.className = "line-clamp-2 block text-sm text-ink-muted";
+  body.textContent = latest.body;
+  text.append(title, body);
+  box.replaceChildren(icon, text);
   box.hidden = false;
-  window.setTimeout(() => box && (box.hidden = true), 6000);
+  window.clearTimeout(hideTimer);
+  hideTimer = window.setTimeout(() => box && (box.hidden = true), 7000);
 }
+
+// En la computadora, tocar el aviso abre la ventanita en vez de cambiar de página.
+document.addEventListener("click", (event) => {
+  const box = (event.target as HTMLElement).closest<HTMLAnchorElement>("#wl-message-toast");
+  if (!box) return;
+  box.hidden = true;
+  if (matchMedia("(min-width: 768px)").matches && !location.pathname.startsWith("/mensajes")) {
+    event.preventDefault();
+    window.dispatchEvent(new CustomEvent("wl:open-chat", { detail: { id: box.dataset.conversation } }));
+  }
+});
 
 async function refresh() {
   if (document.visibilityState !== "visible" || !enabled()) return;
   try {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
-    const { unread, messages } = (await res.json()) as { unread: number; messages: number };
+    const { unread, messages, latest } = (await res.json()) as { unread: number; messages: number; latest: Latest | null };
     setBadges("[data-notifications-badge]", unread);
     setBadges("[data-messages-badge]", messages);
     for (const link of document.querySelectorAll<HTMLElement>("[data-notifications-link]")) {
       link.setAttribute("aria-label", unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones");
     }
-    if (lastMessages !== null && messages > lastMessages && !location.pathname.startsWith("/mensajes")) {
-      announce("💬 Tenés un mensaje nuevo. Tocá para leerlo.", "/mensajes");
-    }
-    lastMessages = messages;
+    // Aviso solo para mensajes que llegaron después de abrir la página.
+    if (latest && primed && (!lastSeenAt || latest.at > lastSeenAt) && !isViewing(latest.conversationId)) announce(latest);
+    if (latest && (!lastSeenAt || latest.at > lastSeenAt)) lastSeenAt = latest.at;
+    if (!lastSeenAt) lastSeenAt = new Date().toISOString();
+    primed = true;
   } catch {
     /* sin conexión: se reintenta en el próximo ciclo */
   }
@@ -10168,7 +10224,6 @@ function start() {
 }
 
 if (enabled()) {
-  lastMessages = initialMessages();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       void refresh();
@@ -10179,6 +10234,7 @@ if (enabled()) {
   });
   window.addEventListener("focus", () => void refresh());
   window.addEventListener("wl:refresh-badges", () => void refresh());
+  void refresh();
   start();
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -10244,7 +10300,7 @@ function toast(message: string) {
     el.id = "wl-toast";
     el.setAttribute("role", "status");
     el.className =
-      "fixed inset-x-4 bottom-4 z-50 mx-auto max-w-sm rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-white shadow-lg";
+      "fixed inset-x-4 bottom-4 z-50 mx-auto max-w-sm rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-bg shadow-lg";
     document.body.append(el);
   }
   el.textContent = message;
@@ -10844,6 +10900,8 @@ export interface ConversationView {
   otherLastReadAt: string | null;
   hidden: boolean;
   unread: boolean;
+  /** Mensajes de la otra persona sin leer. */
+  unreadCount: number;
 }
 
 export interface MessageView {
@@ -10886,11 +10944,13 @@ function toConversation(row: ConversationRow, me: string): ConversationView {
     otherLastReadAt: theirs?.last_read_at ?? null,
     hidden: Boolean(mine?.hidden_at),
     unread: Boolean(row.last_message_at && row.last_sender_id !== me && row.last_message_at > myLastReadAt),
+    unreadCount: 0,
   };
 }
 
 /** Bandeja: conversaciones con mensajes, de la más reciente a la más vieja. */
 export async function getConversations(supabase: SupabaseClient, me: string, limit = 50): Promise<ConversationView[]> {
+  const counts = getUnreadCounts(supabase);
   const { data, error } = await supabase
     .from("conversations")
     .select(CONVERSATION_COLUMNS)
@@ -10899,9 +10959,37 @@ export async function getConversations(supabase: SupabaseClient, me: string, lim
     .order("last_message_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
+  const unread = await counts;
   return ((data ?? []) as unknown as ConversationRow[])
     .map((row) => toConversation(row, me))
-    .filter((c) => !c.hidden && c.other);
+    .filter((c) => !c.hidden && c.other)
+    .map((c) => ({ ...c, unreadCount: unread.get(c.id) ?? 0, unread: (unread.get(c.id) ?? 0) > 0 }));
+}
+
+/** Cantidad de mensajes sin leer por conversación (del usuario actual). */
+export async function getUnreadCounts(supabase: SupabaseClient): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc("conversation_unread_counts");
+  if (error) {
+    console.error("[mensajes]", error.message);
+    return new Map();
+  }
+  return new Map(((data ?? []) as { conversation_id: string; unread: number }[]).map((r) => [r.conversation_id, Number(r.unread)]));
+}
+
+/** Último mensaje sin leer recibido (para el aviso emergente). */
+export async function getLatestUnread(supabase: SupabaseClient) {
+  const { data, error } = await supabase.rpc("latest_unread_message");
+  if (error) {
+    console.error("[mensajes]", error.message);
+    return null;
+  }
+  const row = ((data ?? []) as { conversation_id: string; sender_name: string; body: string; created_at: string }[])[0];
+  return row ? { conversationId: row.conversation_id, name: row.sender_name, body: row.body, at: row.created_at } : null;
+}
+
+/** "3 mensajes nuevos" (o el texto del último si es uno solo). */
+export function unreadLabel(count: number): string {
+  return `${count > 99 ? "+99" : count} mensajes nuevos`;
 }
 
 export async function getConversation(supabase: SupabaseClient, id: string, me: string): Promise<ConversationView | null> {
@@ -13109,13 +13197,72 @@ on conflict (key) do nothing;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008001800_message_unread_counts.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0018 · Cantidad de mensajes sin leer por conversación
+-- =============================================================================
+-- Para mostrar "3 mensajes nuevos" en la bandeja y en el panel de Chats, y el
+-- aviso "Nombre: mensaje" cuando llega uno nuevo. Solo cuenta mensajes de la
+-- otra persona posteriores a lo que leyó el usuario actual.
+-- =============================================================================
+
+create or replace function public.conversation_unread_counts()
+returns table (conversation_id uuid, unread integer)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.conversation_id, count(msg.id)::integer
+  from public.conversation_members m
+  join public.messages msg
+    on msg.conversation_id = m.conversation_id
+   and msg.sender_id <> m.user_id
+   and msg.created_at > m.last_read_at
+  where m.user_id = (select auth.uid())
+  group by m.conversation_id;
+$$;
+
+revoke execute on function public.conversation_unread_counts() from public, anon;
+grant  execute on function public.conversation_unread_counts() to authenticated;
+
+-- Último mensaje sin leer que recibió el usuario actual (para el aviso emergente).
+create or replace function public.latest_unread_message()
+returns table (conversation_id uuid, sender_name text, sender_username text, body text, created_at timestamptz)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select msg.conversation_id,
+         coalesce(nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), ''), '@' || p.username::text),
+         p.username::text,
+         left(msg.body, 120),
+         msg.created_at
+  from public.conversation_members m
+  join public.messages msg
+    on msg.conversation_id = m.conversation_id
+   and msg.sender_id <> m.user_id
+   and msg.created_at > m.last_read_at
+  join public.profiles p on p.id = msg.sender_id
+  where m.user_id = (select auth.uid())
+  order by msg.created_at desc
+  limit 1;
+$$;
+
+revoke execute on function public.latest_unread_message() from public, anon;
+grant  execute on function public.latest_unread_message() to authenticated;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 149 archivos de la Etapa 9 instalados."
+echo " Listo. 150 archivos de los avisos instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

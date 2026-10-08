@@ -1,13 +1,21 @@
 /**
  * Íconos de mensajes y notificaciones del encabezado: consulta cada 10
  * segundos mientras la pestaña está a la vista (y al volver a ella) cuántos
- * hay sin leer. Si llega un mensaje nuevo y no estás en Mensajes, muestra un
- * aviso abajo con un enlace para leerlo.
- * Es una consulta liviana (solo dos números); sin conexión, no hace nada.
+ * hay sin leer. Si llega un mensaje nuevo, muestra un aviso abajo a la derecha
+ * con quién lo mandó y el texto; al tocarlo se abre la conversación.
+ * Es una consulta liviana; sin conexión, no hace nada.
  */
 const INTERVAL = 10_000;
 let timer: number | undefined;
-let lastMessages: number | null = null;
+let lastSeenAt: string | null = null;
+let primed = false;
+
+interface Latest {
+  conversationId: string;
+  name: string;
+  body: string;
+  at: string;
+}
 
 const enabled = () => Boolean(document.querySelector("[data-notifications-badge]"));
 
@@ -18,42 +26,69 @@ function setBadges(selector: string, count: number) {
   }
 }
 
-function initialMessages(): number {
-  const badge = document.querySelector<HTMLElement>("[data-messages-badge]");
-  return badge && !badge.hidden ? Number.parseInt(badge.textContent ?? "0", 10) || 0 : 0;
-}
+/** ¿Ya está mirando esa conversación (página o ventanita)? */
+const isViewing = (id: string) =>
+  location.pathname === `/mensajes/${id}` || Boolean(document.querySelector(`section[data-conversation="${id}"]:not([data-minimized])`));
 
-function announce(text: string, href: string) {
+let hideTimer: number | undefined;
+function announce(latest: Latest) {
   let box = document.getElementById("wl-message-toast") as HTMLAnchorElement | null;
   if (!box) {
     box = document.createElement("a");
     box.id = "wl-message-toast";
     box.setAttribute("role", "status");
     box.className =
-      "fixed bottom-4 right-4 z-50 flex max-w-xs items-center gap-3 rounded-wl-lg bg-ink px-4 py-3 text-sm font-semibold text-white shadow-xl";
+      "fixed bottom-4 left-4 right-4 z-50 flex items-start gap-3 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
     document.body.append(box);
   }
-  box.href = href;
-  box.textContent = text;
+  box.href = `/mensajes/${latest.conversationId}`;
+  box.dataset.conversation = latest.conversationId;
+  const icon = document.createElement("span");
+  icon.className = "grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "💬";
+  const text = document.createElement("span");
+  text.className = "min-w-0 flex-1";
+  const title = document.createElement("strong");
+  title.className = "block truncate text-sm";
+  title.textContent = latest.name;
+  const body = document.createElement("span");
+  body.className = "line-clamp-2 block text-sm text-ink-muted";
+  body.textContent = latest.body;
+  text.append(title, body);
+  box.replaceChildren(icon, text);
   box.hidden = false;
-  window.setTimeout(() => box && (box.hidden = true), 6000);
+  window.clearTimeout(hideTimer);
+  hideTimer = window.setTimeout(() => box && (box.hidden = true), 7000);
 }
+
+// En la computadora, tocar el aviso abre la ventanita en vez de cambiar de página.
+document.addEventListener("click", (event) => {
+  const box = (event.target as HTMLElement).closest<HTMLAnchorElement>("#wl-message-toast");
+  if (!box) return;
+  box.hidden = true;
+  if (matchMedia("(min-width: 768px)").matches && !location.pathname.startsWith("/mensajes")) {
+    event.preventDefault();
+    window.dispatchEvent(new CustomEvent("wl:open-chat", { detail: { id: box.dataset.conversation } }));
+  }
+});
 
 async function refresh() {
   if (document.visibilityState !== "visible" || !enabled()) return;
   try {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
-    const { unread, messages } = (await res.json()) as { unread: number; messages: number };
+    const { unread, messages, latest } = (await res.json()) as { unread: number; messages: number; latest: Latest | null };
     setBadges("[data-notifications-badge]", unread);
     setBadges("[data-messages-badge]", messages);
     for (const link of document.querySelectorAll<HTMLElement>("[data-notifications-link]")) {
       link.setAttribute("aria-label", unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones");
     }
-    if (lastMessages !== null && messages > lastMessages && !location.pathname.startsWith("/mensajes")) {
-      announce("💬 Tenés un mensaje nuevo. Tocá para leerlo.", "/mensajes");
-    }
-    lastMessages = messages;
+    // Aviso solo para mensajes que llegaron después de abrir la página.
+    if (latest && primed && (!lastSeenAt || latest.at > lastSeenAt) && !isViewing(latest.conversationId)) announce(latest);
+    if (latest && (!lastSeenAt || latest.at > lastSeenAt)) lastSeenAt = latest.at;
+    if (!lastSeenAt) lastSeenAt = new Date().toISOString();
+    primed = true;
   } catch {
     /* sin conexión: se reintenta en el próximo ciclo */
   }
@@ -65,7 +100,6 @@ function start() {
 }
 
 if (enabled()) {
-  lastMessages = initialMessages();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       void refresh();
@@ -76,5 +110,6 @@ if (enabled()) {
   });
   window.addEventListener("focus", () => void refresh());
   window.addEventListener("wl:refresh-badges", () => void refresh());
+  void refresh();
   start();
 }

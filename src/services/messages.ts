@@ -27,6 +27,8 @@ export interface ConversationView {
   otherLastReadAt: string | null;
   hidden: boolean;
   unread: boolean;
+  /** Mensajes de la otra persona sin leer. */
+  unreadCount: number;
 }
 
 export interface MessageView {
@@ -69,11 +71,13 @@ function toConversation(row: ConversationRow, me: string): ConversationView {
     otherLastReadAt: theirs?.last_read_at ?? null,
     hidden: Boolean(mine?.hidden_at),
     unread: Boolean(row.last_message_at && row.last_sender_id !== me && row.last_message_at > myLastReadAt),
+    unreadCount: 0,
   };
 }
 
 /** Bandeja: conversaciones con mensajes, de la más reciente a la más vieja. */
 export async function getConversations(supabase: SupabaseClient, me: string, limit = 50): Promise<ConversationView[]> {
+  const counts = getUnreadCounts(supabase);
   const { data, error } = await supabase
     .from("conversations")
     .select(CONVERSATION_COLUMNS)
@@ -82,9 +86,37 @@ export async function getConversations(supabase: SupabaseClient, me: string, lim
     .order("last_message_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
+  const unread = await counts;
   return ((data ?? []) as unknown as ConversationRow[])
     .map((row) => toConversation(row, me))
-    .filter((c) => !c.hidden && c.other);
+    .filter((c) => !c.hidden && c.other)
+    .map((c) => ({ ...c, unreadCount: unread.get(c.id) ?? 0, unread: (unread.get(c.id) ?? 0) > 0 }));
+}
+
+/** Cantidad de mensajes sin leer por conversación (del usuario actual). */
+export async function getUnreadCounts(supabase: SupabaseClient): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc("conversation_unread_counts");
+  if (error) {
+    console.error("[mensajes]", error.message);
+    return new Map();
+  }
+  return new Map(((data ?? []) as { conversation_id: string; unread: number }[]).map((r) => [r.conversation_id, Number(r.unread)]));
+}
+
+/** Último mensaje sin leer recibido (para el aviso emergente). */
+export async function getLatestUnread(supabase: SupabaseClient) {
+  const { data, error } = await supabase.rpc("latest_unread_message");
+  if (error) {
+    console.error("[mensajes]", error.message);
+    return null;
+  }
+  const row = ((data ?? []) as { conversation_id: string; sender_name: string; body: string; created_at: string }[])[0];
+  return row ? { conversationId: row.conversation_id, name: row.sender_name, body: row.body, at: row.created_at } : null;
+}
+
+/** "3 mensajes nuevos" (o el texto del último si es uno solo). */
+export function unreadLabel(count: number): string {
+  return `${count > 99 ? "+99" : count} mensajes nuevos`;
 }
 
 export async function getConversation(supabase: SupabaseClient, id: string, me: string): Promise<ConversationView | null> {

@@ -24,6 +24,7 @@ interface ConversationItem {
   mine: boolean;
   when: string;
   unread: boolean;
+  unreadCount: number;
 }
 
 interface OpenData {
@@ -145,10 +146,15 @@ async function openPanel() {
       nameRow.append(el("span", "truncate", c.name));
       if (c.verified) nameRow.append(verifiedIcon());
       const preview = el("span", `flex gap-1 text-sm ${c.unread ? "font-semibold text-ink" : "text-ink-muted"}`);
-      preview.append(el("span", "truncate", `${c.mine ? "Vos: " : ""}${c.preview}`), el("span", "shrink-0", `· ${c.when}`));
+      const summary = c.unreadCount > 1 ? `${c.unreadCount > 99 ? "+99" : c.unreadCount} mensajes nuevos` : `${c.mine ? "Vos: " : ""}${c.preview}`;
+      preview.append(el("span", "truncate", summary), el("span", "shrink-0", `· ${c.when}`));
       textBox.append(nameRow, preview);
       button.append(avatar(c.name, c.avatar, 52), textBox);
-      if (c.unread) button.append(el("span", "h-3 w-3 shrink-0 rounded-full bg-seek"));
+      if (c.unreadCount > 0) {
+        const count = el("span", "grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand px-1.5 text-[11px] font-bold text-brand-contrast", c.unreadCount > 99 ? "99+" : String(c.unreadCount));
+        count.setAttribute("aria-label", `${c.unreadCount} sin leer`);
+        button.append(count);
+      }
       button.addEventListener("click", () => {
         closePanel();
         void openChat(c.id);
@@ -280,6 +286,8 @@ async function openChat(id: string, opts: { minimized?: boolean; post?: { id: st
 
   const setMinimized = (value: boolean) => {
     body.hidden = value;
+    if (value) win!.dataset.minimized = "";
+    else delete win!.dataset.minimized;
     minimize.setAttribute("aria-label", value ? "Abrir" : "Minimizar");
     minimize.title = value ? "Abrir" : "Minimizar";
     remember(id, value);
@@ -341,6 +349,12 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closePanel();
+});
+
+// El aviso de mensaje nuevo abre la conversación en la ventanita.
+window.addEventListener("wl:open-chat", (event) => {
+  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+  if (id && desktop.matches) void openChat(id);
 });
 
 // Al cambiar de página, la ventanita se vuelve a abrir como estaba.
