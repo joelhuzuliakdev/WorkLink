@@ -13,7 +13,7 @@ export interface NotificationView {
   type: NotificationType;
   created_at: string;
   read_at: string | null;
-  actor: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  actor: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
   post: { id: string; title: string | null; body: string } | null;
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
@@ -22,7 +22,7 @@ export interface NotificationView {
 export const NOTIFICATIONS_PAGE = 30;
 
 const COLUMNS = `id, type, created_at, read_at,
-  actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path ),
+  actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path, verified_at ),
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
   business:businesses ( slug, name )`;

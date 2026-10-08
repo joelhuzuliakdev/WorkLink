@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · tilde de verificado para personas (incluye todo lo anterior)
+# WorkLink · tilde de verificado también en el inicio y las notificaciones
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-verificado.sh
+#     bash instalar-tilde.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
 # y .env.example, y agrega la migración 0016 (incluye todo lo anterior). NO toca tu .env, node_modules ni
@@ -1521,6 +1521,7 @@ import FeedPage from "../posts/FeedPage.astro";
 import SearchBox from "./SearchBox.astro";
 import Composer from "./Composer.astro";
 import SituationBadge from "../social/SituationBadge.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import type { ViewerProfile } from "../../lib/viewer";
 import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
 import { decodeCursor } from "../../services/posts";
@@ -1617,7 +1618,7 @@ const links = [
         <a href={`/u/${viewer.username}`} class="flex items-center gap-3">
           <Avatar name={name} path={viewer.avatar_path} size={48} />
           <span class="min-w-0">
-            <span class="block truncate font-semibold">{name}</span>
+            <span class="flex items-center gap-1 font-semibold"><span class="truncate">{name}</span>{viewer.verified_at && <VerifiedBadge />}</span>
             {viewer.headline && <span class="block truncate text-sm text-ink-muted">{viewer.headline}</span>}
           </span>
         </a>
@@ -4915,6 +4916,7 @@ export interface ViewerProfile {
   situation: ProfileSituation | null;
   headline: string | null;
   following_count: number;
+  verified_at: string | null;
 }
 
 /**
@@ -4926,7 +4928,7 @@ export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | nu
   locals.viewerProfile ??= (async () => {
     const { data, error } = await locals.supabase
       .from("profiles")
-      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count")
+      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at")
       .eq("id", locals.user!.id)
       .maybeSingle();
     if (error) {
@@ -6031,6 +6033,7 @@ escribir 'src/pages/notificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Avatar from "../components/ui/Avatar.astro";
+import VerifiedBadge from "../components/ui/VerifiedBadge.astro";
 import { decodeCursor, getNotifications, markAllRead, type NotificationView } from "../services/notifications";
 import { displayName } from "../services/profiles";
 import { postHeadline } from "../services/posts";
@@ -6097,7 +6100,7 @@ function describe(n: NotificationView) {
                   </span>
                   <span class="min-w-0 flex-1">
                     <span class="block">
-                      <strong>{d.name}</strong> {d.text}
+                      <strong>{d.name}</strong>{n.actor?.verified_at && <VerifiedBadge size={14} class="ml-1" />} {d.text}
                     </span>
                     {d.quote && <span class="mt-1 line-clamp-2 block text-sm text-ink-muted">“{d.quote}”</span>}
                     <time datetime={n.created_at} title={formatDate(n.created_at, { dateStyle: "long", timeStyle: "short" })} class:list={["mt-1 block text-xs", unread ? "font-semibold text-seek" : "text-ink-muted"]}>
@@ -9627,7 +9630,7 @@ export interface NotificationView {
   type: NotificationType;
   created_at: string;
   read_at: string | null;
-  actor: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  actor: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
   post: { id: string; title: string | null; body: string } | null;
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
@@ -9636,7 +9639,7 @@ export interface NotificationView {
 export const NOTIFICATIONS_PAGE = 30;
 
 const COLUMNS = `id, type, created_at, read_at,
-  actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path ),
+  actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path, verified_at ),
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
   business:businesses ( slug, name )`;

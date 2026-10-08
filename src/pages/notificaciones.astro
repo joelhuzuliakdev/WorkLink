@@ -6,6 +6,7 @@
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Avatar from "../components/ui/Avatar.astro";
+import VerifiedBadge from "../components/ui/VerifiedBadge.astro";
 import { decodeCursor, getNotifications, markAllRead, type NotificationView } from "../services/notifications";
 import { displayName } from "../services/profiles";
 import { postHeadline } from "../services/posts";
@@ -72,7 +73,7 @@ function describe(n: NotificationView) {
                   </span>
                   <span class="min-w-0 flex-1">
                     <span class="block">
-                      <strong>{d.name}</strong> {d.text}
+                      <strong>{d.name}</strong>{n.actor?.verified_at && <VerifiedBadge size={14} class="ml-1" />} {d.text}
                     </span>
                     {d.quote && <span class="mt-1 line-clamp-2 block text-sm text-ink-muted">“{d.quote}”</span>}
                     <time datetime={n.created_at} title={formatDate(n.created_at, { dateStyle: "long", timeStyle: "short" })} class:list={["mt-1 block text-xs", unread ? "font-semibold text-seek" : "text-ink-muted"]}>

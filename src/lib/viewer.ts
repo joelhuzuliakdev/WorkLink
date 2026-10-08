@@ -10,6 +10,7 @@ export interface ViewerProfile {
   situation: ProfileSituation | null;
   headline: string | null;
   following_count: number;
+  verified_at: string | null;
 }
 
 /**
@@ -21,7 +22,7 @@ export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | nu
   locals.viewerProfile ??= (async () => {
     const { data, error } = await locals.supabase
       .from("profiles")
-      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count")
+      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at")
       .eq("id", locals.user!.id)
       .maybeSingle();
     if (error) {

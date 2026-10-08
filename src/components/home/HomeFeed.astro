@@ -10,6 +10,7 @@ import FeedPage from "../posts/FeedPage.astro";
 import SearchBox from "./SearchBox.astro";
 import Composer from "./Composer.astro";
 import SituationBadge from "../social/SituationBadge.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import type { ViewerProfile } from "../../lib/viewer";
 import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
 import { decodeCursor } from "../../services/posts";
@@ -106,7 +107,7 @@ const links = [
         <a href={`/u/${viewer.username}`} class="flex items-center gap-3">
           <Avatar name={name} path={viewer.avatar_path} size={48} />
           <span class="min-w-0">
-            <span class="block truncate font-semibold">{name}</span>
+            <span class="flex items-center gap-1 font-semibold"><span class="truncate">{name}</span>{viewer.verified_at && <VerifiedBadge />}</span>
             {viewer.headline && <span class="block truncate text-sm text-ink-muted">{viewer.headline}</span>}
           </span>
         </a>
