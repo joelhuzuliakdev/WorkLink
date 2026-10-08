@@ -23,6 +23,7 @@ export interface Profile {
   avatar_path: string | null;
   situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
   headline: string | null;
+  verified_at: string | null;
   intent: "seeker" | "provider";
   city: CityRef | null;
   whatsapp?: string | null;

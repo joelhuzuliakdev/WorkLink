@@ -11,6 +11,7 @@ import Button from "../../components/ui/Button.astro";
 import PostCard from "../../components/posts/PostCard.astro";
 import PostActions from "../../components/social/PostActions.astro";
 import SituationBadge from "../../components/social/SituationBadge.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import FollowButton from "../../components/social/FollowButton.astro";
 import CommentsSection from "../../components/social/CommentsSection.astro";
 import { getComments, getViewerReactions, isFollowing } from "../../services/social";
@@ -115,7 +116,10 @@ const jsonLd =
         )}
         <span class="min-w-0">
           <span class="flex flex-wrap items-center gap-x-2 font-semibold">
-            {personHref ? <a href={personHref} class="truncate hover:underline">{personName}</a> : <span class="truncate">{personName}</span>}
+            <span class="inline-flex min-w-0 items-center gap-1">
+              {personHref ? <a href={personHref} class="truncate hover:underline">{personName}</a> : <span class="truncate">{personName}</span>}
+              {post.author?.verified_at && <VerifiedBadge />}
+            </span>
             <SituationBadge situation={post.author?.situation} />
           </span>
           {post.business ? (

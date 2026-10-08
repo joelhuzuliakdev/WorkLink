@@ -8,6 +8,7 @@
  */
 import { actions } from "astro:actions";
 import Avatar from "../ui/Avatar.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import Alert from "../ui/Alert.astro";
 import Button from "../ui/Button.astro";
 import TextArea from "../ui/TextArea.astro";
@@ -69,7 +70,7 @@ const generalError = error && !bodyError ? error.message : null;
                 <div class="rounded-wl-lg bg-surface-muted px-3 py-2">
                   <p class="flex flex-wrap items-baseline gap-x-2 text-sm">
                     {comment.author ? (
-                      <a href={profilePath(comment.author.username)} class="font-semibold hover:underline">{name}</a>
+                      <a href={profilePath(comment.author.username)} class="inline-flex items-center gap-1 font-semibold hover:underline">{name}{comment.author.verified_at && <VerifiedBadge size={14} />}</a>
                     ) : (
                       <span class="font-semibold">{name}</span>
                     )}

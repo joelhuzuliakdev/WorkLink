@@ -24,6 +24,7 @@ export interface PersonResult {
   avatar_path: string | null;
   headline: string | null;
   situation: ProfileSituation | null;
+  verified_at: string | null;
   followers_count: number;
   city: { name: string } | null;
 }
@@ -83,7 +84,7 @@ export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, l
   if (!page.length) return { items: [], hasMore: false };
   const { data: rows, error: rowsError } = await supabase
     .from("profiles")
-    .select("id, username, first_name, last_name, avatar_path, headline, situation, followers_count, city:cities ( name )")
+    .select("id, username, first_name, last_name, avatar_path, headline, situation, verified_at, followers_count, city:cities ( name )")
     .in("id", page);
   if (rowsError) throw rowsError;
   return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };

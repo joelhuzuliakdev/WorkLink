@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 8 (notificaciones)
+# WorkLink · tilde de verificado para personas (incluye todo lo anterior)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa8.sh
+#     bash instalar-verificado.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0015 (incluye también lo de la Etapa 7). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0016 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 8..."
+echo "Instalando archivos del tilde de verificado..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -1439,6 +1439,7 @@ escribir 'src/components/directory/PersonResultRow.astro' << '__WORKLINK_FIN_DEL
 /** Persona en resultados del buscador. */
 import Avatar from "../ui/Avatar.astro";
 import SituationBadge from "../social/SituationBadge.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import type { PersonResult } from "../../services/search";
 import { followersLabel } from "../../services/social";
 import { displayName } from "../../services/profiles";
@@ -1454,7 +1455,7 @@ const { person } = Astro.props;
   <Avatar name={displayName(person)} path={person.avatar_path} size={48} />
   <span class="min-w-0 flex-1">
     <span class="flex flex-wrap items-center gap-2">
-      <span class="font-semibold">{displayName(person)}</span>
+      <span class="inline-flex items-center gap-1 font-semibold">{displayName(person)}{person.verified_at && <VerifiedBadge />}</span>
       <SituationBadge situation={person.situation} />
     </span>
     <span class="block truncate text-sm text-ink-muted">
@@ -2154,6 +2155,7 @@ import Avatar from "../ui/Avatar.astro";
 import PostActions from "../social/PostActions.astro";
 import PostGallery from "./PostGallery.astro";
 import PostOwnerMenu from "./PostOwnerMenu.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
@@ -2195,11 +2197,14 @@ const isOwner = Astro.locals.user?.id === post.author_id;
     }
     <div class="min-w-0 flex-1">
       <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
-        {profileHref ? (
-          <a href={profileHref} class="font-semibold hover:underline">{personName}</a>
-        ) : (
-          <span class="font-semibold">{personName}</span>
-        )}
+        <span class="inline-flex items-center gap-1">
+          {profileHref ? (
+            <a href={profileHref} class="font-semibold hover:underline">{personName}</a>
+          ) : (
+            <span class="font-semibold">{personName}</span>
+          )}
+          {post.author?.verified_at && <VerifiedBadge />}
+        </span>
         <SituationBadge situation={post.author?.situation} />
       </p>
       {
@@ -2591,6 +2596,7 @@ escribir 'src/components/social/CommentsSection.astro' << '__WORKLINK_FIN_DEL_AR
  */
 import { actions } from "astro:actions";
 import Avatar from "../ui/Avatar.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import Alert from "../ui/Alert.astro";
 import Button from "../ui/Button.astro";
 import TextArea from "../ui/TextArea.astro";
@@ -2652,7 +2658,7 @@ const generalError = error && !bodyError ? error.message : null;
                 <div class="rounded-wl-lg bg-surface-muted px-3 py-2">
                   <p class="flex flex-wrap items-baseline gap-x-2 text-sm">
                     {comment.author ? (
-                      <a href={profilePath(comment.author.username)} class="font-semibold hover:underline">{name}</a>
+                      <a href={profilePath(comment.author.username)} class="inline-flex items-center gap-1 font-semibold hover:underline">{name}{comment.author.verified_at && <VerifiedBadge size={14} />}</a>
                     ) : (
                       <span class="font-semibold">{name}</span>
                     )}
@@ -3223,6 +3229,29 @@ const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
   {hint && !error && <p id={hintId} class="text-xs text-ink-muted">{hint}</p>}
   {error && <p id={errorId} class="text-sm text-danger" role="alert">{error}</p>}
 </div>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/ui/VerifiedBadge.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Tilde azul de cuenta verificada por WorkLink. */
+interface Props {
+  size?: number;
+  class?: string;
+}
+
+const { size = 16, class: className = "" } = Astro.props;
+---
+
+<span class:list={["inline-flex shrink-0 align-[-0.15em] text-seek", className]} title="Cuenta verificada por WorkLink">
+  <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+    <path
+      fill="currentColor"
+      d="M12 1.5l2.6 1.9 3.2-.1 1 3.1 2.6 1.9-1 3.1 1 3.1-2.6 1.9-1 3.1-3.2-.1L12 22.5l-2.6-1.9-3.2.1-1-3.1-2.6-1.9 1-3.1-1-3.1 2.6-1.9 1-3.1 3.2.1L12 1.5Z"
+    />
+    <path fill="none" stroke="var(--wl-surface, #fff)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m8 12.2 2.7 2.7L16.2 9.4" />
+  </svg>
+  <span class="sr-only">Cuenta verificada</span>
+</span>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/config/brand.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -6109,6 +6138,7 @@ import Button from "../../components/ui/Button.astro";
 import PostCard from "../../components/posts/PostCard.astro";
 import PostActions from "../../components/social/PostActions.astro";
 import SituationBadge from "../../components/social/SituationBadge.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import FollowButton from "../../components/social/FollowButton.astro";
 import CommentsSection from "../../components/social/CommentsSection.astro";
 import { getComments, getViewerReactions, isFollowing } from "../../services/social";
@@ -6213,7 +6243,10 @@ const jsonLd =
         )}
         <span class="min-w-0">
           <span class="flex flex-wrap items-center gap-x-2 font-semibold">
-            {personHref ? <a href={personHref} class="truncate hover:underline">{personName}</a> : <span class="truncate">{personName}</span>}
+            <span class="inline-flex min-w-0 items-center gap-1">
+              {personHref ? <a href={personHref} class="truncate hover:underline">{personName}</a> : <span class="truncate">{personName}</span>}
+              {post.author?.verified_at && <VerifiedBadge />}
+            </span>
             <SituationBadge situation={post.author?.situation} />
           </span>
           {post.business ? (
@@ -8123,6 +8156,7 @@ import FeedPage from "../../../components/posts/FeedPage.astro";
 import Composer from "../../../components/home/Composer.astro";
 import FollowButton from "../../../components/social/FollowButton.astro";
 import SituationBadge from "../../../components/social/SituationBadge.astro";
+import VerifiedBadge from "../../../components/ui/VerifiedBadge.astro";
 import { decodeCursor, getFeed } from "../../../services/posts";
 import { followersLabel, getViewerReactions, isFollowing } from "../../../services/social";
 import { displayName, getPublicProfile } from "../../../services/profiles";
@@ -8162,7 +8196,7 @@ const firstName = profile.first_name ?? name;
     <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end">
       <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
       <div class="min-w-0 flex-1 sm:pb-2">
-        <h1 class="text-2xl font-bold sm:text-3xl">{name}</h1>
+        <h1 class="flex items-center gap-2 text-2xl font-bold sm:text-3xl">{name}{profile.verified_at && <VerifiedBadge size={24} />}</h1>
         {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
         <p class="mt-1 text-sm text-ink-muted">
           <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
@@ -9687,6 +9721,7 @@ export interface PostAuthor {
   avatar_path: string | null;
   situation: ProfileSituation | null;
   headline: string | null;
+  verified_at: string | null;
 }
 
 export interface PostView {
@@ -9717,7 +9752,7 @@ export interface PostView {
 
 const POST_COLUMNS = `id, type, title, body, price, currency, tags, status, published_at, author_id, business_id,
   category_id, subcategory_id, city_id, likes_count, comments_count, saves_count,
-  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline ),
+  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline, verified_at ),
   business:businesses ( slug, name, logo_path, verification ),
   city:cities ( name, slug, provinces ( name ) ),
   category:categories ( name, slug ),
@@ -9919,7 +9954,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
-const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, intent,
+const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, verified_at, intent,
   instagram, facebook, tiktok, website, followers_count, following_count, created_at, cities ( ${CITY_EMBED} )`;
 
 /** Columnas de contacto directo: solo para usuarios logueados (RLS por columnas). */
@@ -10007,6 +10042,7 @@ export interface PersonResult {
   avatar_path: string | null;
   headline: string | null;
   situation: ProfileSituation | null;
+  verified_at: string | null;
   followers_count: number;
   city: { name: string } | null;
 }
@@ -10066,7 +10102,7 @@ export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, l
   if (!page.length) return { items: [], hasMore: false };
   const { data: rows, error: rowsError } = await supabase
     .from("profiles")
-    .select("id, username, first_name, last_name, avatar_path, headline, situation, followers_count, city:cities ( name )")
+    .select("id, username, first_name, last_name, avatar_path, headline, situation, verified_at, followers_count, city:cities ( name )")
     .in("id", page);
   if (rowsError) throw rowsError;
   return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };
@@ -10182,7 +10218,7 @@ export interface CommentView {
   author_id: string;
   body: string;
   created_at: string;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
 }
 
 export const COMMENTS_PAGE_SIZE = 50;
@@ -10198,7 +10234,7 @@ export async function getComments(
 ): Promise<{ comments: CommentView[]; hasOlder: boolean }> {
   let query = supabase
     .from("post_comments")
-    .select("id, post_id, author_id, body, created_at, author:profiles!post_comments_author_id_fkey ( username, first_name, last_name, avatar_path )")
+    .select("id, post_id, author_id, body, created_at, author:profiles!post_comments_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at )")
     .eq("post_id", postId)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
@@ -10455,6 +10491,7 @@ export interface Profile {
   avatar_path: string | null;
   situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
   headline: string | null;
+  verified_at: string | null;
   intent: "seeker" | "provider";
   city: CityRef | null;
   whatsapp?: string | null;
@@ -11368,13 +11405,62 @@ grant execute on function public.mark_notifications_read() to authenticated;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008001600_profile_verification.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0016 · Verificación de personas (tilde azul)
+-- =============================================================================
+-- * verified_at: fecha en que WorkLink verificó la cuenta (null = no
+--   verificada). Se muestra como tilde azul junto al nombre.
+-- * Solo lo puede cambiar el sistema o un administrador: el usuario no puede
+--   verificarse solo.
+-- =============================================================================
+
+alter table public.profiles add column if not exists verified_at timestamptz;
+
+grant select (verified_at) on public.profiles to anon;
+
+create or replace function public.tg_profiles_protect()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if new.id <> old.id or new.created_at <> old.created_at then
+    raise exception 'No se pueden modificar id ni created_at' using errcode = '42501';
+  end if;
+
+  if new.followers_count <> old.followers_count
+     or new.following_count <> old.following_count
+     or new.plan_tier <> old.plan_tier then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+
+  if new.verified_at is distinct from old.verified_at and not (select public.has_role('admin')) then
+    raise exception 'Solo la administración puede verificar cuentas' using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status and not (select public.has_role('moderator')) then
+    raise exception 'Solo moderación puede cambiar el estado de una cuenta' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 135 archivos de la Etapa 8 instalados."
+echo " Listo. 137 archivos del tilde de verificado instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

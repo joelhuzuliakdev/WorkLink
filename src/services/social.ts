@@ -63,7 +63,7 @@ export interface CommentView {
   author_id: string;
   body: string;
   created_at: string;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
 }
 
 export const COMMENTS_PAGE_SIZE = 50;
@@ -79,7 +79,7 @@ export async function getComments(
 ): Promise<{ comments: CommentView[]; hasOlder: boolean }> {
   let query = supabase
     .from("post_comments")
-    .select("id, post_id, author_id, body, created_at, author:profiles!post_comments_author_id_fkey ( username, first_name, last_name, avatar_path )")
+    .select("id, post_id, author_id, body, created_at, author:profiles!post_comments_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at )")
     .eq("post_id", postId)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })

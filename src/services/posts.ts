@@ -29,6 +29,7 @@ export interface PostAuthor {
   avatar_path: string | null;
   situation: ProfileSituation | null;
   headline: string | null;
+  verified_at: string | null;
 }
 
 export interface PostView {
@@ -59,7 +60,7 @@ export interface PostView {
 
 const POST_COLUMNS = `id, type, title, body, price, currency, tags, status, published_at, author_id, business_id,
   category_id, subcategory_id, city_id, likes_count, comments_count, saves_count,
-  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline ),
+  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline, verified_at ),
   business:businesses ( slug, name, logo_path, verification ),
   city:cities ( name, slug, provinces ( name ) ),
   category:categories ( name, slug ),

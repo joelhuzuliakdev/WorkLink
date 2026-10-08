@@ -8,6 +8,7 @@ import Avatar from "../ui/Avatar.astro";
 import PostActions from "../social/PostActions.astro";
 import PostGallery from "./PostGallery.astro";
 import PostOwnerMenu from "./PostOwnerMenu.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
@@ -49,11 +50,14 @@ const isOwner = Astro.locals.user?.id === post.author_id;
     }
     <div class="min-w-0 flex-1">
       <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
-        {profileHref ? (
-          <a href={profileHref} class="font-semibold hover:underline">{personName}</a>
-        ) : (
-          <span class="font-semibold">{personName}</span>
-        )}
+        <span class="inline-flex items-center gap-1">
+          {profileHref ? (
+            <a href={profileHref} class="font-semibold hover:underline">{personName}</a>
+          ) : (
+            <span class="font-semibold">{personName}</span>
+          )}
+          {post.author?.verified_at && <VerifiedBadge />}
+        </span>
         <SituationBadge situation={post.author?.situation} />
       </p>
       {

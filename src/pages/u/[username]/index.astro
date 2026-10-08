@@ -12,6 +12,7 @@ import FeedPage from "../../../components/posts/FeedPage.astro";
 import Composer from "../../../components/home/Composer.astro";
 import FollowButton from "../../../components/social/FollowButton.astro";
 import SituationBadge from "../../../components/social/SituationBadge.astro";
+import VerifiedBadge from "../../../components/ui/VerifiedBadge.astro";
 import { decodeCursor, getFeed } from "../../../services/posts";
 import { followersLabel, getViewerReactions, isFollowing } from "../../../services/social";
 import { displayName, getPublicProfile } from "../../../services/profiles";
@@ -51,7 +52,7 @@ const firstName = profile.first_name ?? name;
     <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end">
       <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
       <div class="min-w-0 flex-1 sm:pb-2">
-        <h1 class="text-2xl font-bold sm:text-3xl">{name}</h1>
+        <h1 class="flex items-center gap-2 text-2xl font-bold sm:text-3xl">{name}{profile.verified_at && <VerifiedBadge size={24} />}</h1>
         {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
         <p class="mt-1 text-sm text-ink-muted">
           <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
