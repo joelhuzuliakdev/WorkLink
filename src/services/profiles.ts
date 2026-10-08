@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
-const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, intent,
+const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, intent,
   instagram, facebook, tiktok, website, followers_count, following_count, created_at, cities ( ${CITY_EMBED} )`;
 
 /** Columnas de contacto directo: solo para usuarios logueados (RLS por columnas). */

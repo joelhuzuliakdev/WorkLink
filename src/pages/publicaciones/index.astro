@@ -42,7 +42,7 @@ const currentLabel = filters.find((f) => f.active)?.label ?? "Todo";
   canonicalPath={`/publicaciones${type ? `?tipo=${tipo}` : ""}`}
   noindex={Boolean(cursor) || following}
 >
-  <section class="mx-auto max-w-6xl px-4 py-8">
+  <section class="mx-auto max-w-2xl px-4 py-8">
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold">Publicaciones</h1>
@@ -85,7 +85,7 @@ const currentLabel = filters.find((f) => f.active)?.label ?? "Todo";
           )}
         </div>
       ) : (
-        <div class="mt-6 grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3" data-feed>
+        <div class="mt-6 flex flex-col gap-4" data-feed>
           <FeedPage posts={posts} reactions={reactions} nextHref={nextHref} nextFragmentHref={nextFragmentHref} priorityCount={cursor ? 0 : 2} />
         </div>
       )
@@ -93,23 +93,3 @@ const currentLabel = filters.find((f) => f.active)?.label ?? "Todo";
   </section>
 </BaseLayout>
 
-<script>
-  // "Cargar más" sin recargar: pide el fragmento HTML y lo agrega al feed.
-  document.addEventListener("click", async (event) => {
-    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-load-more]");
-    if (!link || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    const wrapper = link.closest("[data-load-more-wrapper]");
-    link.textContent = "Cargando…";
-    link.setAttribute("aria-busy", "true");
-    try {
-      const res = await fetch(link.dataset.loadMore!, { headers: { Accept: "text/html" } });
-      if (!res.ok) throw new Error();
-      const html = await res.text();
-      wrapper?.insertAdjacentHTML("afterend", html);
-      wrapper?.remove();
-    } catch {
-      window.location.href = link.href;
-    }
-  });
-</script>

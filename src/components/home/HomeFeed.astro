@@ -1,0 +1,127 @@
+---
+/**
+ * Inicio para usuarios logueados (estilo Facebook): buscador, caja para
+ * publicar y el feed (quienes sigue → destacadas → lo último).
+ * En pantallas grandes suma una columna con el perfil y accesos rápidos.
+ */
+import Avatar from "../ui/Avatar.astro";
+import Alert from "../ui/Alert.astro";
+import FeedPage from "../posts/FeedPage.astro";
+import SearchBox from "./SearchBox.astro";
+import Composer from "./Composer.astro";
+import SituationBadge from "../social/SituationBadge.astro";
+import type { ViewerProfile } from "../../lib/viewer";
+import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
+import { decodeCursor } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  viewer: ViewerProfile;
+}
+
+const { viewer } = Astro.props;
+const { supabase } = Astro.locals;
+
+// Página siguiente sin JavaScript: /?modo=following&desde=...
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const modeParam = Astro.url.searchParams.get("modo") as HomeMode | null;
+const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
+  followingCount: viewer.following_count,
+  mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
+  cursor,
+});
+const reactions = await getViewerReactions(supabase, viewer.id, posts.map((p) => p.id));
+const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
+
+const headings = {
+  following: { title: "Para vos", text: "Lo que publican las personas y emprendimientos que seguís." },
+  featured: { title: "Destacados", text: "Todavía no seguís a nadie: mirá lo que publican las cuentas destacadas y seguí las que te interesen." },
+  latest: {
+    title: "Lo último en WorkLink",
+    text:
+      viewer.following_count > 0
+        ? "Las cuentas que seguís todavía no publicaron. Mientras tanto, mirá lo último."
+        : "Todavía no seguís a nadie: tocá “Seguir” en las personas y emprendimientos que te interesen.",
+  },
+};
+const heading = headings[mode];
+const published = Astro.url.searchParams.get("publicada") === "1";
+const name = displayName(viewer);
+
+const links = [
+  { href: `/u/${viewer.username}`, label: "Mi perfil" },
+  { href: "/panel/publicaciones", label: "Mis publicaciones" },
+  { href: "/panel/guardados", label: "Guardados" },
+  { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
+  { href: "/publicaciones", label: "Todas las publicaciones" },
+];
+---
+
+<div class="mx-auto grid max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
+    <SearchBox />
+    {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
+    <Composer viewer={viewer} />
+
+    <div class="pt-2">
+      <h1 class="text-xl font-bold">{heading.title}</h1>
+      <p class="text-sm text-ink-muted">{heading.text}</p>
+    </div>
+
+    {
+      posts.length === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">Todavía no hay publicaciones</h2>
+          <p class="mt-1 text-ink-muted">¡Hacé la primera! Contá qué ofrecés o qué estás buscando.</p>
+        </div>
+      ) : (
+        <div class="flex flex-col gap-4" data-feed>
+          <FeedPage
+            posts={posts}
+            reactions={reactions}
+            priorityCount={1}
+            nextHref={nextCursor ? `/?${more(nextCursor)}` : null}
+            nextFragmentHref={nextCursor ? `/inicio/mas?${more(nextCursor)}` : null}
+          />
+        </div>
+      )
+    }
+
+    {
+      !nextCursor && mode === "following" && posts.length > 0 && (
+        <div class="rounded-wl-lg border border-line bg-surface p-6 text-center">
+          <p class="font-semibold">¡Ya estás al día!</p>
+          <p class="mt-1 text-sm text-ink-muted">Viste todo lo nuevo de las cuentas que seguís.</p>
+          <a href="/publicaciones" class="mt-3 inline-block font-semibold text-brand hover:underline">Seguir viendo publicaciones de WorkLink →</a>
+        </div>
+      )
+    }
+  </div>
+
+  <aside class="hidden lg:block" aria-label="Accesos rápidos">
+    <div class="sticky top-20 flex flex-col gap-4">
+      <section class="rounded-wl-lg border border-line bg-surface p-4">
+        <a href={`/u/${viewer.username}`} class="flex items-center gap-3">
+          <Avatar name={name} path={viewer.avatar_path} size={48} />
+          <span class="min-w-0">
+            <span class="block truncate font-semibold">{name}</span>
+            {viewer.headline && <span class="block truncate text-sm text-ink-muted">{viewer.headline}</span>}
+          </span>
+        </a>
+        {viewer.situation ? (
+          <SituationBadge situation={viewer.situation} size="md" class="mt-3" />
+        ) : (
+          <a href="/panel/perfil#situacion" class="mt-3 block rounded-wl bg-surface-muted px-3 py-2 text-sm">
+            <strong>Contá tu situación:</strong> ¿buscás empleo, tenés un emprendimiento u ofrecés servicios?
+          </a>
+        )}
+        <nav class="mt-4 flex flex-col border-t border-line pt-2 text-sm">
+          {links.map((link) => (
+            <a href={link.href} class="rounded-wl px-2 py-2 font-medium text-ink-muted hover:bg-surface-muted hover:text-ink">{link.label}</a>
+          ))}
+        </nav>
+      </section>
+    </div>
+  </aside>
+</div>

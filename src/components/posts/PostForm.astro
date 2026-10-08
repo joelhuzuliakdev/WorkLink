@@ -28,16 +28,23 @@ interface Props {
   submitLabel: string;
   /** Emprendimiento preseleccionado (?emprendimiento=...). */
   defaultBusinessId?: string | null;
+  /** Tipo preseleccionado (?tipo=offer|seeking desde la caja del inicio). */
+  defaultType?: string | null;
+  /** Nombre de la persona, para la opción "Publicar como". */
+  personName?: string;
 }
 
-const { action, post = null, businesses, categories, submitted = null, fieldErrors = {}, city = null, media, submitLabel, defaultBusinessId = null } = Astro.props;
+const { action, post = null, businesses, categories, submitted = null, fieldErrors = {}, city = null, media, submitLabel, defaultBusinessId = null, defaultType = null, personName = "Yo" } = Astro.props;
 
 const v = (name: string, saved: unknown) =>
   submitted ? String(submitted.get(name) ?? "") : saved === null || saved === undefined ? "" : String(saved);
 const err = (name: string) => fieldErrors[name]?.[0];
 
-const businessId = v("business_id", post ? post.business_id : (defaultBusinessId ?? (businesses.length ? businesses[0].id : "")));
-const type = v("type", post?.type ?? (businessId ? "offer" : "offer"));
+// Como en Facebook, por defecto se publica como persona; el emprendimiento se
+// elige en "Publicar como" (o viene preseleccionado desde su página).
+const businessId = v("business_id", post ? post.business_id : (defaultBusinessId ?? ""));
+const validDefaultType = POST_TYPES.some((t) => t.value === defaultType && (!t.needsBusiness || businessId)) ? defaultType : null;
+const type = v("type", post?.type ?? validDefaultType ?? "offer");
 const categoryId = Number(v("category_id", post?.category_id)) || null;
 const subcategoryId = Number(v("subcategory_id", post?.subcategory_id)) || null;
 const price = v("price", post?.price !== null && post?.price !== undefined ? String(post.price).replace(".", ",") : "");
@@ -58,10 +65,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
         <div class="flex flex-col gap-1.5">
           <label for="business_id" class="text-sm font-medium text-ink">Publicar como</label>
           <select id="business_id" name="business_id" class={selectClass} data-business-select>
+            <option value="" selected={businessId === ""}>{personName} (mi perfil)</option>
             {activeBusinesses.map((b) => (
-              <option value={b.id} selected={businessId === b.id}>{b.name}</option>
+              <option value={b.id} selected={businessId === b.id}>{b.name} (emprendimiento)</option>
             ))}
-            <option value="" selected={businessId === ""}>Yo, a título personal</option>
           </select>
         </div>
       )

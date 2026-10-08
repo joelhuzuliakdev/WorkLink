@@ -1,0 +1,91 @@
+---
+/**
+ * Mosaico de fotos de una publicación en el feed (estilo Facebook):
+ *  1 foto  → ocupa todo el ancho, con su proporción (entre 4:5 y 1.91:1)
+ *  2 fotos → dos columnas
+ *  3 fotos → una grande a la izquierda y dos a la derecha
+ *  4 fotos → cuadrícula de 2×2
+ *  5+      → dos arriba y tres abajo; la última muestra "+N"
+ * Un video se muestra con su portada y el ícono de reproducir.
+ * Todo lleva a la página de la publicación.
+ */
+import type { PostMediaView } from "../../services/posts";
+import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
+
+interface Props {
+  media: PostMediaView[];
+  href: string;
+  alt: string;
+  priority?: boolean;
+}
+
+const { media, href, alt, priority = false } = Astro.props;
+const first = media[0];
+const count = media.length;
+const shown = media.slice(0, 5);
+const extra = count - shown.length;
+const ratio = first?.width && first?.height ? Math.min(Math.max(first.width / first.height, 0.8), 1.91) : 4 / 3;
+
+// Posición de cada foto en la grilla según la cantidad.
+const layouts: Record<number, { grid: string; cells: string[]; aspect: string }> = {
+  2: { grid: "grid-cols-2", cells: ["", ""], aspect: "1 / 1" },
+  3: { grid: "grid-cols-2 grid-rows-2", cells: ["row-span-2", "", ""], aspect: "1 / 1" },
+  4: { grid: "grid-cols-2 grid-rows-2", cells: ["", "", "", ""], aspect: "1 / 1" },
+  5: { grid: "grid-cols-6 grid-rows-[3fr_2fr]", cells: ["col-span-3", "col-span-3", "col-span-2", "col-span-2", "col-span-2"], aspect: "6 / 5" },
+};
+const layout = layouts[Math.min(count, 5)];
+const sizes = (cell: string) => (cell.includes("col-span-2") ? "(min-width: 672px) 220px, 33vw" : "(min-width: 672px) 330px, 50vw");
+---
+
+{
+  first &&
+    (first.kind === "video" ? (
+      <a href={href} class="relative block w-full overflow-hidden bg-black" style={{ aspectRatio: String(ratio) }}>
+        <img
+          src={postFileUrl(first.path, "poster.webp")}
+          alt={alt}
+          loading={priority ? "eager" : "lazy"}
+          decoding="async"
+          class="h-full w-full object-contain"
+        />
+        <span class="absolute inset-0 grid place-items-center">
+          <span class="grid h-16 w-16 place-items-center rounded-full bg-black/60 text-3xl text-white" aria-hidden="true">▶</span>
+        </span>
+        <span class="sr-only">Ver video</span>
+      </a>
+    ) : count === 1 ? (
+      <a href={href} class="block w-full overflow-hidden bg-surface-muted" style={{ aspectRatio: String(ratio) }}>
+        <img
+          src={mediaUrl("post", first.path, 960)}
+          srcset={mediaSrcSet("post", first.path)}
+          sizes="(min-width: 672px) 640px, 100vw"
+          width={first.width ?? undefined}
+          height={first.height ?? undefined}
+          alt={alt}
+          loading={priority ? "eager" : "lazy"}
+          fetchpriority={priority ? "high" : undefined}
+          decoding="async"
+          class="h-full w-full object-cover"
+        />
+      </a>
+    ) : (
+      <a href={href} class:list={["grid w-full gap-0.5 bg-surface", layout.grid]} style={{ aspectRatio: layout.aspect }} aria-label={`Ver las ${count} fotos`}>
+        {shown.map((m, index) => (
+          <span class:list={["relative block min-h-0 overflow-hidden bg-surface-muted", layout.cells[index]]}>
+            <img
+              src={mediaUrl("post", m.path, 480)}
+              srcset={mediaSrcSet("post", m.path)}
+              sizes={sizes(layout.cells[index])}
+              alt={index === 0 ? alt : ""}
+              loading={priority && index < 2 ? "eager" : "lazy"}
+              decoding="async"
+              class="h-full w-full object-cover"
+            />
+            {index === shown.length - 1 && extra > 0 && (
+              <span class="absolute inset-0 grid place-items-center bg-black/50 text-3xl font-bold text-white">+{extra}</span>
+            )}
+          </span>
+        ))}
+      </a>
+    ))
+}

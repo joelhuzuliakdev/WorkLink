@@ -20,6 +20,17 @@ export interface PostMediaView {
   bytes: number;
 }
 
+export type ProfileSituation = "job_seeking" | "entrepreneur" | "freelancer" | "hiring";
+
+export interface PostAuthor {
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  situation: ProfileSituation | null;
+  headline: string | null;
+}
+
 export interface PostView {
   id: string;
   type: PostType;
@@ -38,7 +49,7 @@ export interface PostView {
   likes_count: number;
   comments_count: number;
   saves_count: number;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  author: PostAuthor | null;
   business: { slug: string; name: string; logo_path: string | null; verification: string } | null;
   city: { name: string; slug: string; provinces: { name: string } | null } | null;
   category: { name: string; slug: string } | null;
@@ -48,7 +59,7 @@ export interface PostView {
 
 const POST_COLUMNS = `id, type, title, body, price, currency, tags, status, published_at, author_id, business_id,
   category_id, subcategory_id, city_id, likes_count, comments_count, saves_count,
-  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path ),
+  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline ),
   business:businesses ( slug, name, logo_path, verification ),
   city:cities ( name, slug, provinces ( name ) ),
   category:categories ( name, slug ),
@@ -104,26 +115,26 @@ export interface FeedFilters {
   authorId?: string | null;
   /** Solo publicaciones personales (sin emprendimiento). */
   personalOnly?: boolean;
-  /** Solo de personas y emprendimientos que sigue el usuario actual (pestaña "Siguiendo"). */
+  /** Solo de personas y emprendimientos que sigue el usuario actual (y las propias). */
   following?: boolean;
+  /** Solo de cuentas con plan pago (destacadas del inicio). */
+  featured?: boolean;
   cursor?: Cursor | null;
   limit?: number;
 }
 
 export async function getFeed(
   supabase: SupabaseClient,
-  { type, businessId, authorId, personalOnly, following, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
+  { type, businessId, authorId, personalOnly, following, featured, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
 ): Promise<{ posts: PostView[]; nextCursor: string | null }> {
-  // "Siguiendo": la base devuelve los ids de la página (ya filtrados por los
-  // seguimientos del usuario) y después se traen esas publicaciones.
+  // "Siguiendo" y "Destacadas": la base devuelve los ids de la página (ya
+  // filtrados) y después se traen esas publicaciones con todos sus datos.
   let followingIds: string[] | null = null;
-  if (following) {
-    const { data, error } = await supabase.rpc("following_feed_ids", {
-      p_type: type ?? null,
-      p_before_at: cursor?.publishedAt ?? null,
-      p_before_id: cursor?.id ?? null,
-      p_limit: limit + 1,
-    });
+  if (following || featured) {
+    const page = { p_before_at: cursor?.publishedAt ?? null, p_before_id: cursor?.id ?? null, p_limit: limit + 1 };
+    const { data, error } = following
+      ? await supabase.rpc("following_feed_ids", { p_type: type ?? null, ...page })
+      : await supabase.rpc("featured_feed_ids", page);
     if (error) throw error;
     followingIds = ((data ?? []) as { id: string }[]).map((row) => row.id);
     if (!followingIds.length) return { posts: [], nextCursor: null };

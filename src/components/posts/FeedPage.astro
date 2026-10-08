@@ -1,7 +1,7 @@
 ---
 /**
- * Una página del feed: tarjetas + enlace "Cargar más". Se usa en la página
- * completa y en el fragmento que se agrega con JavaScript (/publicaciones/mas).
+ * Una página de publicaciones + enlace "Cargar más". Se usa en las páginas
+ * completas y en los fragmentos que se agregan con JavaScript.
  */
 import PostCard from "./PostCard.astro";
 import type { PostView } from "../../services/posts";
@@ -25,7 +25,7 @@ const { posts, nextHref, nextFragmentHref, priorityCount = 0, reactions } = Astr
 }
 {
   nextHref && (
-    <div class="col-span-full flex justify-center pt-2" data-load-more-wrapper>
+    <div class="flex justify-center pt-2" data-load-more-wrapper>
       <a
         href={nextHref}
         data-load-more={nextFragmentHref}
@@ -36,3 +36,7 @@ const { posts, nextHref, nextFragmentHref, priorityCount = 0, reactions } = Astr
     </div>
   )
 }
+
+<script>
+  import "../../scripts/load-more";
+</script>

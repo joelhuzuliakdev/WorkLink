@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 5 (publicaciones y feed)
+# WorkLink · instalador del rediseño (inicio estilo Facebook, perfil, situación y buscador)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa5.sh
+#     bash instalar-rediseno.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0011. NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0013. NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -23,7 +23,10 @@ escribir() {
 }
 
 echo ""
-echo "Instalando archivos de la Etapa 5..."
+# Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
+rm -f 'src/pages/u/[username].astro'
+
+echo "Instalando archivos del rediseño..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -502,6 +505,7 @@ import { profile } from "./profile";
 import { business } from "./business";
 import { catalog } from "./catalog";
 import { posts } from "./posts";
+import { social } from "./social";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -513,6 +517,7 @@ export const server = {
   business,
   catalog,
   posts,
+  social,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -722,6 +727,8 @@ export const profile = {
           first_name: input.first_name,
           last_name: input.last_name,
           bio: input.bio ?? null,
+          situation: input.situation ?? null,
+          headline: input.headline ?? null,
           city_id: input.city_id ?? null,
           // La provincia la completa la base a partir de la ciudad.
           province_id: null,
@@ -746,7 +753,143 @@ export const profile = {
         await removeMedia(supabase, "avatar", current.avatar_path);
       }
 
-      return { saved: true };
+      return { saved: true, username: input.username };
+    },
+  }),
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { commentRefSchema, commentSchema, followSchema, reactionSchema } from "../schemas/social";
+import { dbError, requireUser } from "../lib/auth/guards";
+
+/**
+ * Interacción social. Me gusta, guardar y seguir reciben el estado deseado
+ * (active: true/false) en vez de "alternar": si el pedido se repite por una
+ * red lenta o un doble toque, el resultado es el mismo.
+ *
+ * Los permisos (publicación visible, bloqueos, cuenta activa) y los
+ * contadores los resuelve la base con RLS y triggers.
+ */
+
+const isDuplicate = (error: { code?: string }) => error.code === "23505";
+
+async function setRow(
+  supabase: SupabaseClient,
+  table: string,
+  row: Record<string, string>,
+  active: boolean,
+  messages: { forbidden: string; fallback: string },
+) {
+  if (active) {
+    const { error } = await supabase.from(table).insert(row);
+    if (error && !isDuplicate(error)) {
+      if (error.code === "42501") throw new ActionError({ code: "FORBIDDEN", message: messages.forbidden });
+      throw dbError(error, messages.fallback);
+    }
+  } else {
+    let query = supabase.from(table).delete();
+    for (const [column, value] of Object.entries(row)) query = query.eq(column, value);
+    const { error } = await query;
+    if (error) throw dbError(error, messages.fallback);
+  }
+}
+
+async function postCounters(supabase: SupabaseClient, postId: string) {
+  const { data } = await supabase.from("posts").select("likes_count, saves_count").eq("id", postId).maybeSingle();
+  return data ?? { likes_count: 0, saves_count: 0 };
+}
+
+export const social = {
+  like: defineAction({
+    input: reactionSchema,
+    handler: async ({ post_id, active }, context) => {
+      const user = requireUser(context.locals.user);
+      await setRow(context.locals.supabase, "post_likes", { post_id, user_id: user.id }, active, {
+        forbidden: "No podés reaccionar a esta publicación.",
+        fallback: "No pudimos guardar tu me gusta.",
+      });
+      const counters = await postCounters(context.locals.supabase, post_id);
+      return { active, count: counters.likes_count };
+    },
+  }),
+
+  save: defineAction({
+    input: reactionSchema,
+    handler: async ({ post_id, active }, context) => {
+      const user = requireUser(context.locals.user);
+      await setRow(context.locals.supabase, "post_saves", { post_id, user_id: user.id }, active, {
+        forbidden: "No podés guardar esta publicación.",
+        fallback: "No pudimos guardar la publicación.",
+      });
+      const counters = await postCounters(context.locals.supabase, post_id);
+      return { active, count: counters.saves_count };
+    },
+  }),
+
+  follow: defineAction({
+    input: followSchema,
+    handler: async ({ kind, id, active }, context) => {
+      const user = requireUser(context.locals.user);
+      const { supabase } = context.locals;
+      if (kind === "profile" && id === user.id) {
+        throw new ActionError({ code: "BAD_REQUEST", message: "No podés seguirte a vos." });
+      }
+
+      const table = kind === "profile" ? "profile_follows" : "business_follows";
+      const row: Record<string, string> =
+        kind === "profile" ? { follower_id: user.id, followed_id: id } : { follower_id: user.id, business_id: id };
+      await setRow(supabase, table, row, active, {
+        forbidden: "No podés seguir a esta cuenta.",
+        fallback: "No pudimos actualizar a quién seguís.",
+      });
+
+      const { data } = await supabase
+        .from(kind === "profile" ? "profiles" : "businesses")
+        .select("followers_count")
+        .eq("id", id)
+        .maybeSingle();
+      return { active, count: (data?.followers_count as number | undefined) ?? 0 };
+    },
+  }),
+
+  comment: defineAction({
+    accept: "form",
+    input: commentSchema,
+    handler: async ({ post_id, body }, context) => {
+      const user = requireUser(context.locals.user);
+      const { data, error } = await context.locals.supabase
+        .from("post_comments")
+        .insert({ post_id, author_id: user.id, body })
+        .select("id")
+        .single();
+      if (error) {
+        if (error.code === "42501") {
+          throw new ActionError({ code: "FORBIDDEN", message: "No podés comentar en esta publicación." });
+        }
+        throw dbError(error, "No pudimos publicar tu comentario.");
+      }
+      return { id: data.id as string };
+    },
+  }),
+
+  removeComment: defineAction({
+    accept: "form",
+    input: commentRefSchema,
+    handler: async ({ comment_id }, context) => {
+      requireUser(context.locals.user);
+      const { data, error } = await context.locals.supabase
+        .from("post_comments")
+        .delete()
+        .eq("id", comment_id)
+        .select("id");
+      if (error) throw dbError(error, "No pudimos borrar el comentario.");
+      if (!data?.length) {
+        throw new ActionError({ code: "FORBIDDEN", message: "No podés borrar este comentario." });
+      }
+      return { ok: true };
     },
   }),
 };
@@ -1256,6 +1399,214 @@ const fmt = (t: string) => t.replace(/^0/, "");
 </dl>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/home/Composer.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Caja "¿Qué querés publicar?" (estilo Facebook). Lleva al formulario de
+ * publicación; los atajos abren el formulario con el tipo ya elegido.
+ */
+import Avatar from "../ui/Avatar.astro";
+import type { ViewerProfile } from "../../lib/viewer";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  viewer: ViewerProfile;
+  class?: string;
+}
+
+const { viewer, class: className = "" } = Astro.props;
+const name = viewer.first_name ?? viewer.username;
+const href = "/panel/publicaciones/nueva";
+const shortcut = "flex h-10 flex-1 items-center justify-center gap-2 rounded-wl text-sm font-semibold text-ink-muted hover:bg-surface-muted";
+---
+
+<section class:list={["rounded-wl-lg border border-line bg-surface p-3", className]} aria-label="Crear publicación">
+  <div class="flex items-center gap-3">
+    <a href={`/u/${viewer.username}`} class="shrink-0"><Avatar name={displayName(viewer)} path={viewer.avatar_path} size={40} /></a>
+    <a href={href} class="flex h-10 flex-1 items-center rounded-full bg-surface-muted px-4 text-ink-muted hover:bg-line/60">
+      ¿Qué querés publicar, {name}?
+    </a>
+  </div>
+  <div class="mt-2 flex gap-1 border-t border-line pt-2">
+    <a href={href} class={shortcut}>
+      <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-success stroke-2" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path stroke-linejoin="round" d="m4 17 5-4.5 3.5 3 3-2.5 4.5 4" /></svg>
+      Foto o video
+    </a>
+    <a href={`${href}?tipo=offer`} class={shortcut}>
+      <span class="text-offer" aria-hidden="true">●</span> Ofrezco
+    </a>
+    <a href={`${href}?tipo=seeking`} class={shortcut}>
+      <span class="text-seek" aria-hidden="true">●</span> Busco
+    </a>
+  </div>
+</section>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/home/HomeFeed.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Inicio para usuarios logueados (estilo Facebook): buscador, caja para
+ * publicar y el feed (quienes sigue → destacadas → lo último).
+ * En pantallas grandes suma una columna con el perfil y accesos rápidos.
+ */
+import Avatar from "../ui/Avatar.astro";
+import Alert from "../ui/Alert.astro";
+import FeedPage from "../posts/FeedPage.astro";
+import SearchBox from "./SearchBox.astro";
+import Composer from "./Composer.astro";
+import SituationBadge from "../social/SituationBadge.astro";
+import type { ViewerProfile } from "../../lib/viewer";
+import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
+import { decodeCursor } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  viewer: ViewerProfile;
+}
+
+const { viewer } = Astro.props;
+const { supabase } = Astro.locals;
+
+// Página siguiente sin JavaScript: /?modo=following&desde=...
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const modeParam = Astro.url.searchParams.get("modo") as HomeMode | null;
+const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
+  followingCount: viewer.following_count,
+  mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
+  cursor,
+});
+const reactions = await getViewerReactions(supabase, viewer.id, posts.map((p) => p.id));
+const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
+
+const headings = {
+  following: { title: "Para vos", text: "Lo que publican las personas y emprendimientos que seguís." },
+  featured: { title: "Destacados", text: "Todavía no seguís a nadie: mirá lo que publican las cuentas destacadas y seguí las que te interesen." },
+  latest: {
+    title: "Lo último en WorkLink",
+    text:
+      viewer.following_count > 0
+        ? "Las cuentas que seguís todavía no publicaron. Mientras tanto, mirá lo último."
+        : "Todavía no seguís a nadie: tocá “Seguir” en las personas y emprendimientos que te interesen.",
+  },
+};
+const heading = headings[mode];
+const published = Astro.url.searchParams.get("publicada") === "1";
+const name = displayName(viewer);
+
+const links = [
+  { href: `/u/${viewer.username}`, label: "Mi perfil" },
+  { href: "/panel/publicaciones", label: "Mis publicaciones" },
+  { href: "/panel/guardados", label: "Guardados" },
+  { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
+  { href: "/publicaciones", label: "Todas las publicaciones" },
+];
+---
+
+<div class="mx-auto grid max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+  <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
+    <SearchBox />
+    {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
+    <Composer viewer={viewer} />
+
+    <div class="pt-2">
+      <h1 class="text-xl font-bold">{heading.title}</h1>
+      <p class="text-sm text-ink-muted">{heading.text}</p>
+    </div>
+
+    {
+      posts.length === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">Todavía no hay publicaciones</h2>
+          <p class="mt-1 text-ink-muted">¡Hacé la primera! Contá qué ofrecés o qué estás buscando.</p>
+        </div>
+      ) : (
+        <div class="flex flex-col gap-4" data-feed>
+          <FeedPage
+            posts={posts}
+            reactions={reactions}
+            priorityCount={1}
+            nextHref={nextCursor ? `/?${more(nextCursor)}` : null}
+            nextFragmentHref={nextCursor ? `/inicio/mas?${more(nextCursor)}` : null}
+          />
+        </div>
+      )
+    }
+
+    {
+      !nextCursor && mode === "following" && posts.length > 0 && (
+        <div class="rounded-wl-lg border border-line bg-surface p-6 text-center">
+          <p class="font-semibold">¡Ya estás al día!</p>
+          <p class="mt-1 text-sm text-ink-muted">Viste todo lo nuevo de las cuentas que seguís.</p>
+          <a href="/publicaciones" class="mt-3 inline-block font-semibold text-brand hover:underline">Seguir viendo publicaciones de WorkLink →</a>
+        </div>
+      )
+    }
+  </div>
+
+  <aside class="hidden lg:block" aria-label="Accesos rápidos">
+    <div class="sticky top-20 flex flex-col gap-4">
+      <section class="rounded-wl-lg border border-line bg-surface p-4">
+        <a href={`/u/${viewer.username}`} class="flex items-center gap-3">
+          <Avatar name={name} path={viewer.avatar_path} size={48} />
+          <span class="min-w-0">
+            <span class="block truncate font-semibold">{name}</span>
+            {viewer.headline && <span class="block truncate text-sm text-ink-muted">{viewer.headline}</span>}
+          </span>
+        </a>
+        {viewer.situation ? (
+          <SituationBadge situation={viewer.situation} size="md" class="mt-3" />
+        ) : (
+          <a href="/panel/perfil#situacion" class="mt-3 block rounded-wl bg-surface-muted px-3 py-2 text-sm">
+            <strong>Contá tu situación:</strong> ¿buscás empleo, tenés un emprendimiento u ofrecés servicios?
+          </a>
+        )}
+        <nav class="mt-4 flex flex-col border-t border-line pt-2 text-sm">
+          {links.map((link) => (
+            <a href={link.href} class="rounded-wl px-2 py-2 font-medium text-ink-muted hover:bg-surface-muted hover:text-ink">{link.label}</a>
+          ))}
+        </nav>
+      </section>
+    </div>
+  </aside>
+</div>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/home/SearchBox.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Caja de búsqueda grande (inicio y /buscar). Funciona sin JavaScript. */
+interface Props {
+  value?: string;
+  autofocus?: boolean;
+  class?: string;
+}
+
+const { value = "", autofocus = false, class: className = "" } = Astro.props;
+---
+
+<form action="/buscar" method="GET" role="search" class:list={["relative", className]}>
+  <label for="search-q" class="sr-only">Buscar en WorkLink</label>
+  <svg viewBox="0 0 24 24" class="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-ink-muted stroke-2" aria-hidden="true">
+    <circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" />
+  </svg>
+  <input
+    id="search-q"
+    type="search"
+    name="q"
+    value={value}
+    maxlength={100}
+    autofocus={autofocus}
+    autocomplete="off"
+    enterkeyhint="search"
+    placeholder="Buscá personas, emprendimientos o servicios"
+    class="h-12 w-full rounded-full border border-line bg-surface pl-12 pr-28 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+  />
+  <button type="submit" class="absolute right-1.5 top-1/2 h-9 -translate-y-1/2 rounded-full bg-brand px-4 text-sm font-semibold text-brand-contrast hover:bg-brand-hover">
+    Buscar
+  </button>
+</form>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/layout/Footer.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import Logo from "../brand/Logo.astro";
@@ -1279,28 +1630,54 @@ escribir 'src/components/layout/Header.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import Logo from "../brand/Logo.astro";
 import Button from "../ui/Button.astro";
+import Avatar from "../ui/Avatar.astro";
 import { actions } from "astro:actions";
 import { routes } from "../../config/site";
+import { getViewerProfile } from "../../lib/viewer";
+import { displayName } from "../../services/profiles";
 
 const user = Astro.locals.user;
+const viewer = await getViewerProfile(Astro.locals);
 const logoutAction = `/salir${actions.auth.signOut}`;
+const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
 
 <header class="sticky top-0 z-30 border-b border-line bg-bg/85 backdrop-blur supports-[backdrop-filter]:bg-bg/70">
-  <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4">
-    <a href={routes.home} class="rounded-wl" aria-label="WorkLink, ir al inicio">
+  <div class="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4">
+    <a href={routes.home} class="shrink-0 rounded-wl" aria-label="WorkLink, ir al inicio">
       <Logo />
     </a>
 
-    <nav aria-label="Cuenta" class="flex items-center gap-2">
-      <a href="/publicaciones" class="hidden rounded-wl px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink sm:inline-block">Publicaciones</a>
+    <form action="/buscar" method="GET" role="search" class="hidden max-w-xs flex-1 md:block">
+      <label for="header-search" class="sr-only">Buscar en WorkLink</label>
+      <input
+        id="header-search"
+        type="search"
+        name="q"
+        value={query}
+        maxlength={100}
+        placeholder="Buscar personas, servicios…"
+        class="h-10 w-full rounded-full border border-line bg-surface-muted px-4 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+      />
+    </form>
+
+    <nav aria-label="Cuenta" class="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <a href="/buscar" class="grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden" aria-label="Buscar">
+        <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" /></svg>
+      </a>
       {
         user ? (
           <>
+            {viewer && (
+              <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
+                <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
+                <span class="hidden text-sm font-semibold sm:inline">{viewer.first_name ?? viewer.username}</span>
+              </a>
+            )}
             <Button href={routes.dashboard} variant="ghost" size="sm">
               Mi panel
             </Button>
-            <form method="POST" action={logoutAction}>
+            <form method="POST" action={logoutAction} class="hidden sm:block">
               <Button type="submit" variant="secondary" size="sm">
                 Salir
               </Button>
@@ -1308,6 +1685,7 @@ const logoutAction = `/salir${actions.auth.signOut}`;
           </>
         ) : (
           <>
+            <a href="/publicaciones" class="hidden rounded-wl px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink sm:inline-block">Publicaciones</a>
             <Button href={routes.login} variant="ghost" size="sm">
               Ingresar
             </Button>
@@ -1325,26 +1703,32 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/components/posts/FeedPage.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Una página del feed: tarjetas + enlace "Cargar más". Se usa en la página
- * completa y en el fragmento que se agrega con JavaScript (/publicaciones/mas).
+ * Una página de publicaciones + enlace "Cargar más". Se usa en las páginas
+ * completas y en los fragmentos que se agregan con JavaScript.
  */
 import PostCard from "./PostCard.astro";
 import type { PostView } from "../../services/posts";
+import type { ViewerReactions } from "../../services/social";
 
 interface Props {
   posts: PostView[];
   nextHref: string | null;
   nextFragmentHref: string | null;
   priorityCount?: number;
+  reactions?: ViewerReactions;
 }
 
-const { posts, nextHref, nextFragmentHref, priorityCount = 0 } = Astro.props;
+const { posts, nextHref, nextFragmentHref, priorityCount = 0, reactions } = Astro.props;
 ---
 
-{posts.map((post, index) => <PostCard post={post} priority={index < priorityCount} />)}
+{
+  posts.map((post, index) => (
+    <PostCard post={post} priority={index < priorityCount} liked={reactions?.liked.has(post.id)} saved={reactions?.saved.has(post.id)} />
+  ))
+}
 {
   nextHref && (
-    <div class="col-span-full flex justify-center pt-2" data-load-more-wrapper>
+    <div class="flex justify-center pt-2" data-load-more-wrapper>
       <a
         href={nextHref}
         data-load-more={nextFragmentHref}
@@ -1355,119 +1739,112 @@ const { posts, nextHref, nextFragmentHref, priorityCount = 0 } = Astro.props;
     </div>
   )
 }
+
+<script>
+  import "../../scripts/load-more";
+</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/posts/PostCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Tarjeta de publicación para el feed: quién publica, tipo, texto, primera
- * foto (o portada del video), precio y ciudad. Toda la tarjeta lleva a /p/...
+ * Publicación en el feed, estilo Facebook: quién publica (con su situación),
+ * cuándo y dónde, el texto con "Ver más", el mosaico de fotos o el video, y
+ * el pie con me gusta, comentar, compartir y guardar.
  */
 import Avatar from "../ui/Avatar.astro";
+import PostActions from "../social/PostActions.astro";
+import PostGallery from "./PostGallery.astro";
+import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
-import { postFileUrl, mediaSrcSet, mediaUrl } from "../../lib/media";
-import { formatMoney, formatRelative } from "../../lib/format";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
 import { businessPath, postPath, profilePath } from "../../lib/urls";
 import { displayName } from "../../services/profiles";
 
 interface Props {
   post: PostView;
-  /** true para las primeras tarjetas visibles (carga prioritaria de la imagen). */
+  /** true para las primeras publicaciones visibles (carga prioritaria de la imagen). */
   priority?: boolean;
+  /** Estado del usuario actual (me gusta / guardada). */
+  liked?: boolean;
+  saved?: boolean;
 }
 
-const { post, priority = false } = Astro.props;
+const { post, priority = false, liked = false, saved = false } = Astro.props;
 const href = postPath(post);
 const type = POST_TYPE_LABELS[post.type];
-const cover = post.media[0];
+const isBusiness = Boolean(post.business);
 const authorName = post.business?.name ?? (post.author ? displayName(post.author) : "");
 const authorHref = post.business ? businessPath(post.business.slug) : post.author ? profilePath(post.author.username) : null;
-const extraMedia = post.media.length - 1;
-const ratio = cover?.width && cover?.height ? Math.min(Math.max(cover.width / cover.height, 0.8), 1.91) : 4 / 3;
+const site = Astro.site ?? new URL(Astro.url.origin);
+const shareUrl = new URL(href, site).toString();
+const headline = postHeadline(post, 120);
 ---
 
-<article class="flex flex-col overflow-hidden rounded-wl-lg border border-line bg-surface">
-  <header class="flex items-center gap-3 px-4 pt-4">
+<article class="overflow-hidden rounded-wl-lg border border-line bg-surface">
+  <header class="flex items-start gap-3 px-4 pt-3">
     {
-      authorHref ? (
-        <a href={authorHref} class="flex min-w-0 flex-1 items-center gap-3">
+      authorHref && (
+        <a href={authorHref} class="shrink-0">
           <Avatar
             name={authorName}
             path={post.business?.logo_path ?? post.author?.avatar_path}
-            purpose={post.business ? "logo" : "avatar"}
-            shape={post.business ? "rounded" : "circle"}
-            size={40}
+            purpose={isBusiness ? "logo" : "avatar"}
+            shape={isBusiness ? "rounded" : "circle"}
+            size={42}
           />
-          <span class="min-w-0">
-            <span class="block truncate font-semibold">
-              {authorName}
-              {post.business?.verification === "verified" && <span class="text-seek" title="Verificado"> ✓</span>}
-            </span>
-            <span class="block truncate text-xs text-ink-muted">
-              {formatRelative(post.published_at)}{post.city && ` · ${post.city.name}`}
-            </span>
-          </span>
         </a>
-      ) : null
+      )
     }
+    <div class="min-w-0 flex-1">
+      <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
+        {authorHref ? (
+          <a href={authorHref} class="font-semibold hover:underline">{authorName}</a>
+        ) : (
+          <span class="font-semibold">{authorName}</span>
+        )}
+        {post.business?.verification === "verified" && <span class="text-seek" title="Verificado">✓</span>}
+        {!isBusiness && <SituationBadge situation={post.author?.situation} />}
+      </p>
+      <p class="mt-0.5 truncate text-xs text-ink-muted">
+        {!isBusiness && post.author?.headline && <>{post.author.headline} · </>}
+        <a href={href} class="hover:underline">
+          <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
+        </a>
+        {post.city && ` · ${post.city.name}`}
+      </p>
+    </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
   </header>
 
-  <a href={href} class="mt-3 flex flex-1 flex-col">
-    <div class="px-4">
-      {post.title && <h2 class="font-semibold leading-snug">{post.title}</h2>}
-      <p class:list={["whitespace-pre-line text-sm", post.title ? "mt-1 line-clamp-3 text-ink-muted" : "line-clamp-4 text-ink"]}>{post.body}</p>
-    </div>
-
+  <div class="px-4 pt-3">
+    {post.title && (
+      <h2 class="font-semibold leading-snug">
+        <a href={href} class="hover:underline">{post.title}</a>
+      </h2>
+    )}
+    <p class:list={["line-clamp-5 whitespace-pre-line break-words", post.title && "mt-1"]} data-clamp>{post.body}</p>
+    <button type="button" data-expand hidden class="mt-0.5 text-sm font-semibold text-ink-muted hover:underline">Ver más</button>
     {
-      cover && (
-        <div class="relative mt-3 w-full overflow-hidden bg-surface-muted" style={{ aspectRatio: String(ratio) }}>
-          {cover.kind === "image" ? (
-            <img
-              src={mediaUrl("post", cover.path, 960)}
-              srcset={mediaSrcSet("post", cover.path)}
-              sizes="(min-width: 768px) 600px, 100vw"
-              width={cover.width ?? undefined}
-              height={cover.height ?? undefined}
-              alt={postHeadline(post, 120)}
-              loading={priority ? "eager" : "lazy"}
-              fetchpriority={priority ? "high" : undefined}
-              decoding="async"
-              class="h-full w-full object-cover"
-            />
-          ) : (
-            <>
-              <img
-                src={postFileUrl(cover.path, "poster.webp")}
-                alt={postHeadline(post, 120)}
-                loading={priority ? "eager" : "lazy"}
-                decoding="async"
-                class="h-full w-full object-cover"
-              />
-              <span class="absolute inset-0 grid place-items-center">
-                <span class="grid h-14 w-14 place-items-center rounded-full bg-black/60 text-2xl text-white" aria-hidden="true">▶</span>
-              </span>
-              <span class="sr-only">Video</span>
-            </>
-          )}
-          {extraMedia > 0 && (
-            <span class="absolute right-2 top-2 rounded-full bg-black/65 px-2 py-0.5 text-xs font-semibold text-white">+{extraMedia} {extraMedia === 1 ? "foto" : "fotos"}</span>
-          )}
-        </div>
+      post.price !== null && (
+        <p class="mt-2 font-semibold">
+          {formatMoney(post.price)}
+          {post.category && <span class="ml-2 text-sm font-normal text-ink-muted">{post.subcategory?.name ?? post.category.name}</span>}
+        </p>
       )
     }
+  </div>
 
-    {
-      (post.price !== null || post.category) && (
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 text-sm">
-          {post.price !== null && <span class="font-semibold">{formatMoney(post.price)}</span>}
-          {post.category && <span class="text-ink-muted">{post.subcategory?.name ?? post.category.name}</span>}
-        </div>
-      )
-    }
-    <span class="px-4 pb-4 pt-3 text-sm font-semibold text-brand">Ver publicación →</span>
-  </a>
+  {
+    post.media.length > 0 && (
+      <div class="mt-3">
+        <PostGallery media={post.media} href={href} alt={headline} priority={priority} />
+      </div>
+    )
+  }
+
+  <PostActions post={post} liked={liked} saved={saved} postHref={href} shareUrl={shareUrl} shareTitle={`${headline} — en WorkLink`} class="mt-1" />
 </article>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -1502,16 +1879,23 @@ interface Props {
   submitLabel: string;
   /** Emprendimiento preseleccionado (?emprendimiento=...). */
   defaultBusinessId?: string | null;
+  /** Tipo preseleccionado (?tipo=offer|seeking desde la caja del inicio). */
+  defaultType?: string | null;
+  /** Nombre de la persona, para la opción "Publicar como". */
+  personName?: string;
 }
 
-const { action, post = null, businesses, categories, submitted = null, fieldErrors = {}, city = null, media, submitLabel, defaultBusinessId = null } = Astro.props;
+const { action, post = null, businesses, categories, submitted = null, fieldErrors = {}, city = null, media, submitLabel, defaultBusinessId = null, defaultType = null, personName = "Yo" } = Astro.props;
 
 const v = (name: string, saved: unknown) =>
   submitted ? String(submitted.get(name) ?? "") : saved === null || saved === undefined ? "" : String(saved);
 const err = (name: string) => fieldErrors[name]?.[0];
 
-const businessId = v("business_id", post ? post.business_id : (defaultBusinessId ?? (businesses.length ? businesses[0].id : "")));
-const type = v("type", post?.type ?? (businessId ? "offer" : "offer"));
+// Como en Facebook, por defecto se publica como persona; el emprendimiento se
+// elige en "Publicar como" (o viene preseleccionado desde su página).
+const businessId = v("business_id", post ? post.business_id : (defaultBusinessId ?? ""));
+const validDefaultType = POST_TYPES.some((t) => t.value === defaultType && (!t.needsBusiness || businessId)) ? defaultType : null;
+const type = v("type", post?.type ?? validDefaultType ?? "offer");
 const categoryId = Number(v("category_id", post?.category_id)) || null;
 const subcategoryId = Number(v("subcategory_id", post?.subcategory_id)) || null;
 const price = v("price", post?.price !== null && post?.price !== undefined ? String(post.price).replace(".", ",") : "");
@@ -1532,10 +1916,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
         <div class="flex flex-col gap-1.5">
           <label for="business_id" class="text-sm font-medium text-ink">Publicar como</label>
           <select id="business_id" name="business_id" class={selectClass} data-business-select>
+            <option value="" selected={businessId === ""}>{personName} (mi perfil)</option>
             {activeBusinesses.map((b) => (
-              <option value={b.id} selected={businessId === b.id}>{b.name}</option>
+              <option value={b.id} selected={businessId === b.id}>{b.name} (emprendimiento)</option>
             ))}
-            <option value="" selected={businessId === ""}>Yo, a título personal</option>
           </select>
         </div>
       )
@@ -1653,6 +2037,456 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
     syncSubs();
   }
 </script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/posts/PostGallery.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Mosaico de fotos de una publicación en el feed (estilo Facebook):
+ *  1 foto  → ocupa todo el ancho, con su proporción (entre 4:5 y 1.91:1)
+ *  2 fotos → dos columnas
+ *  3 fotos → una grande a la izquierda y dos a la derecha
+ *  4 fotos → cuadrícula de 2×2
+ *  5+      → dos arriba y tres abajo; la última muestra "+N"
+ * Un video se muestra con su portada y el ícono de reproducir.
+ * Todo lleva a la página de la publicación.
+ */
+import type { PostMediaView } from "../../services/posts";
+import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
+
+interface Props {
+  media: PostMediaView[];
+  href: string;
+  alt: string;
+  priority?: boolean;
+}
+
+const { media, href, alt, priority = false } = Astro.props;
+const first = media[0];
+const count = media.length;
+const shown = media.slice(0, 5);
+const extra = count - shown.length;
+const ratio = first?.width && first?.height ? Math.min(Math.max(first.width / first.height, 0.8), 1.91) : 4 / 3;
+
+// Posición de cada foto en la grilla según la cantidad.
+const layouts: Record<number, { grid: string; cells: string[]; aspect: string }> = {
+  2: { grid: "grid-cols-2", cells: ["", ""], aspect: "1 / 1" },
+  3: { grid: "grid-cols-2 grid-rows-2", cells: ["row-span-2", "", ""], aspect: "1 / 1" },
+  4: { grid: "grid-cols-2 grid-rows-2", cells: ["", "", "", ""], aspect: "1 / 1" },
+  5: { grid: "grid-cols-6 grid-rows-[3fr_2fr]", cells: ["col-span-3", "col-span-3", "col-span-2", "col-span-2", "col-span-2"], aspect: "6 / 5" },
+};
+const layout = layouts[Math.min(count, 5)];
+const sizes = (cell: string) => (cell.includes("col-span-2") ? "(min-width: 672px) 220px, 33vw" : "(min-width: 672px) 330px, 50vw");
+---
+
+{
+  first &&
+    (first.kind === "video" ? (
+      <a href={href} class="relative block w-full overflow-hidden bg-black" style={{ aspectRatio: String(ratio) }}>
+        <img
+          src={postFileUrl(first.path, "poster.webp")}
+          alt={alt}
+          loading={priority ? "eager" : "lazy"}
+          decoding="async"
+          class="h-full w-full object-contain"
+        />
+        <span class="absolute inset-0 grid place-items-center">
+          <span class="grid h-16 w-16 place-items-center rounded-full bg-black/60 text-3xl text-white" aria-hidden="true">▶</span>
+        </span>
+        <span class="sr-only">Ver video</span>
+      </a>
+    ) : count === 1 ? (
+      <a href={href} class="block w-full overflow-hidden bg-surface-muted" style={{ aspectRatio: String(ratio) }}>
+        <img
+          src={mediaUrl("post", first.path, 960)}
+          srcset={mediaSrcSet("post", first.path)}
+          sizes="(min-width: 672px) 640px, 100vw"
+          width={first.width ?? undefined}
+          height={first.height ?? undefined}
+          alt={alt}
+          loading={priority ? "eager" : "lazy"}
+          fetchpriority={priority ? "high" : undefined}
+          decoding="async"
+          class="h-full w-full object-cover"
+        />
+      </a>
+    ) : (
+      <a href={href} class:list={["grid w-full gap-0.5 bg-surface", layout.grid]} style={{ aspectRatio: layout.aspect }} aria-label={`Ver las ${count} fotos`}>
+        {shown.map((m, index) => (
+          <span class:list={["relative block min-h-0 overflow-hidden bg-surface-muted", layout.cells[index]]}>
+            <img
+              src={mediaUrl("post", m.path, 480)}
+              srcset={mediaSrcSet("post", m.path)}
+              sizes={sizes(layout.cells[index])}
+              alt={index === 0 ? alt : ""}
+              loading={priority && index < 2 ? "eager" : "lazy"}
+              decoding="async"
+              class="h-full w-full object-cover"
+            />
+            {index === shown.length - 1 && extra > 0 && (
+              <span class="absolute inset-0 grid place-items-center bg-black/50 text-3xl font-bold text-white">+{extra}</span>
+            )}
+          </span>
+        ))}
+      </a>
+    ))
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/social/CommentsSection.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Comentarios de una publicación: lista (del más viejo al más nuevo) y
+ * formulario para comentar. Funciona sin JavaScript (formularios comunes).
+ *
+ * Borrar: quien escribió el comentario, o quien gestiona la publicación
+ * (para moderar su propia conversación). Lo verifica la base.
+ */
+import { actions } from "astro:actions";
+import Avatar from "../ui/Avatar.astro";
+import Alert from "../ui/Alert.astro";
+import Button from "../ui/Button.astro";
+import TextArea from "../ui/TextArea.astro";
+import type { CommentView } from "../../services/social";
+import { COMMENT_MAX } from "../../schemas/social";
+import { displayName } from "../../services/profiles";
+import { formatDate, formatRelative } from "../../lib/format";
+import { profilePath } from "../../lib/urls";
+import { routes } from "../../config/site";
+
+interface Props {
+  postId: string;
+  total: number;
+  comments: CommentView[];
+  /** Enlace a los comentarios anteriores, si hay. */
+  olderHref: string | null;
+  /** El usuario gestiona la publicación (puede borrar cualquier comentario). */
+  canModerate: boolean;
+  /** La publicación admite comentarios nuevos (está publicada). */
+  open: boolean;
+  returnTo: string;
+  error?: { message: string; fields?: Record<string, string[] | undefined> } | null;
+  draft?: string;
+}
+
+const { postId, total, comments, olderHref, canModerate, open, returnTo, error, draft } = Astro.props;
+const { user } = Astro.locals;
+const bodyError = error?.fields?.body?.[0];
+const generalError = error && !bodyError ? error.message : null;
+---
+
+<section id="comentarios" class="scroll-mt-20">
+  <h2 class="text-lg font-semibold">
+    Comentarios {total > 0 && <span class="font-normal text-ink-muted">({total.toLocaleString("es-AR")})</span>}
+  </h2>
+
+  {generalError && <Alert tone="danger" class="mt-4">{generalError}</Alert>}
+
+  {
+    olderHref && (
+      <a href={olderHref} class="mt-4 inline-block text-sm font-semibold text-brand">
+        Ver comentarios anteriores
+      </a>
+    )
+  }
+
+  {
+    comments.length > 0 ? (
+      <ol class="mt-4 flex flex-col gap-4">
+        {comments.map((comment) => {
+          const name = comment.author ? displayName(comment.author) : "Usuario";
+          const canDelete = Boolean(user) && (comment.author_id === user!.id || canModerate);
+          return (
+            <li id={`c-${comment.id}`} class="flex scroll-mt-24 gap-3">
+              <a href={comment.author ? profilePath(comment.author.username) : undefined} class="shrink-0">
+                <Avatar name={name} path={comment.author?.avatar_path} size={36} />
+              </a>
+              <div class="min-w-0 flex-1">
+                <div class="rounded-wl-lg bg-surface-muted px-3 py-2">
+                  <p class="flex flex-wrap items-baseline gap-x-2 text-sm">
+                    {comment.author ? (
+                      <a href={profilePath(comment.author.username)} class="font-semibold hover:underline">{name}</a>
+                    ) : (
+                      <span class="font-semibold">{name}</span>
+                    )}
+                    <time
+                      datetime={comment.created_at}
+                      title={formatDate(comment.created_at, { dateStyle: "long", timeStyle: "short" })}
+                      class="text-xs text-ink-muted"
+                    >
+                      {formatRelative(comment.created_at)}
+                    </time>
+                  </p>
+                  <p class="mt-0.5 whitespace-pre-line break-words">{comment.body}</p>
+                </div>
+                {canDelete && (
+                  <form method="POST" action={actions.social.removeComment} data-confirm="¿Borrar este comentario?" class="mt-1">
+                    <input type="hidden" name="comment_id" value={comment.id} />
+                    <button type="submit" class="px-3 text-xs font-semibold text-ink-muted hover:text-danger">Borrar</button>
+                  </form>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    ) : (
+      open && <p class="mt-3 text-ink-muted">Todavía no hay comentarios. ¿Querés preguntar algo?</p>
+    )
+  }
+
+  {
+    open &&
+      (user ? (
+        <form method="POST" action={actions.social.comment} class="mt-6 flex flex-col gap-3" data-comment-form>
+          <input type="hidden" name="post_id" value={postId} />
+          <TextArea
+            name="body"
+            label="Escribí un comentario"
+            rows={3}
+            maxlength={COMMENT_MAX}
+            required
+            value={draft}
+            error={bodyError}
+            placeholder="Preguntá por precio, disponibilidad, zona…"
+            hint="Para datos personales (teléfono, dirección), mejor usá el contacto directo."
+          />
+          <div>
+            <Button type="submit">Comentar</Button>
+          </div>
+        </form>
+      ) : (
+        <p class="mt-6 rounded-wl border border-line bg-surface px-4 py-3 text-sm">
+          <a href={`${routes.login}?next=${encodeURIComponent(`${returnTo}#comentarios`)}`} class="font-semibold text-brand">Ingresá</a>
+          {" "}o{" "}
+          <a href={routes.signup} class="font-semibold text-brand">creá tu cuenta</a> para comentar.
+        </p>
+      ))
+  }
+</section>
+
+<script>
+  // Confirmación antes de borrar y evitar el doble envío del comentario.
+  for (const form of document.querySelectorAll<HTMLFormElement>("#comentarios form[data-confirm]")) {
+    form.addEventListener("submit", (event) => {
+      if (!window.confirm(form.dataset.confirm ?? "¿Confirmás?")) event.preventDefault();
+    });
+  }
+  for (const form of document.querySelectorAll<HTMLFormElement>("form[data-comment-form]")) {
+    form.addEventListener("submit", () => {
+      const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+      if (button) setTimeout(() => (button.disabled = true), 0);
+    });
+  }
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/social/FollowButton.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Botón Seguir / Siguiendo para una persona o un emprendimiento.
+ * El contador de seguidores se muestra aparte con FollowersCount (mismo id),
+ * y el script lo actualiza al tocar el botón.
+ */
+import { routes } from "../../config/site";
+
+interface Props {
+  kind: "profile" | "business";
+  id: string;
+  following: boolean;
+  /** Página a la que vuelve después de ingresar. */
+  returnTo: string;
+  class?: string;
+}
+
+const { kind, id, following, returnTo, class: className = "" } = Astro.props;
+const loggedIn = Boolean(Astro.locals.user);
+const loginHref = `${routes.login}?next=${encodeURIComponent(returnTo)}`;
+
+const base =
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-wl px-4 text-sm font-semibold transition-colors";
+---
+
+{
+  loggedIn ? (
+    <button
+      type="button"
+      data-social="follow"
+      data-kind={kind}
+      data-id={id}
+      data-label-on="Siguiendo"
+      data-label-off="Seguir"
+      aria-pressed={following ? "true" : "false"}
+      class:list={[
+        base,
+        "bg-brand text-brand-contrast hover:bg-brand-hover",
+        "aria-pressed:border aria-pressed:border-line aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:hover:bg-surface-muted",
+        className,
+      ]}
+    >
+      <span data-label>{following ? "Siguiendo" : "Seguir"}</span>
+    </button>
+  ) : (
+    <a href={loginHref} class:list={[base, "bg-brand text-brand-contrast hover:bg-brand-hover", className]}>
+      Seguir
+    </a>
+  )
+}
+
+<script>
+  import "../../scripts/social";
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/social/PostActions.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Pie de una publicación (estilo Facebook):
+ *  - fila de totales: ♥ cantidad de me gusta · N comentarios
+ *  - botones: Me gusta · Comentar · Compartir · Guardar
+ * Con sesión, Me gusta y Guardar son botones (los maneja scripts/social.ts);
+ * sin sesión, llevan a /ingresar y vuelven a la publicación.
+ */
+import { routes } from "../../config/site";
+
+interface Props {
+  post: { id: string; likes_count: number; comments_count: number };
+  liked?: boolean;
+  saved?: boolean;
+  /** Página de la publicación (sin #). */
+  postHref: string;
+  /** URL absoluta para compartir. */
+  shareUrl: string;
+  shareTitle: string;
+  /** En la página de la publicación, "Comentar" baja al formulario. */
+  commentsHref?: string;
+  class?: string;
+}
+
+const { post, liked = false, saved = false, postHref, shareUrl, shareTitle, commentsHref = `${postHref}#comentarios`, class: className = "" } =
+  Astro.props;
+const loggedIn = Boolean(Astro.locals.user);
+const loginHref = `${routes.login}?next=${encodeURIComponent(postHref)}`;
+const fmt = (n: number) => n.toLocaleString("es-AR");
+
+const action =
+  "group flex h-10 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-wl text-[13px] font-semibold text-ink-muted transition-colors hover:bg-surface-muted sm:gap-1.5 sm:text-sm";
+const icon = "h-[18px] w-[18px] shrink-0 fill-none stroke-current stroke-2 sm:h-5 sm:w-5";
+const heart = "M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.9 4.5 7.3 4.5c2 0 3.6 1.1 4.7 2.8 1.1-1.7 2.7-2.8 4.7-2.8 3.4 0 5.7 3.3 4.5 6.7-1.7 4.7-9.2 9.3-9.2 9.3Z";
+const bookmark = "M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1Z";
+---
+
+<div class:list={["px-1.5 sm:px-3", className]}>
+  <div class="flex min-h-9 items-center justify-between gap-3 px-1 text-sm text-ink-muted">
+    <span data-likes-wrap={post.id} hidden={post.likes_count === 0} class="inline-flex items-center gap-1.5">
+      <span class="grid h-5 w-5 place-items-center rounded-full bg-danger text-white" aria-hidden="true">
+        <svg viewBox="0 0 24 24" class="h-3 w-3 fill-current"><path d={heart} /></svg>
+      </span>
+      <span data-likes-for={post.id}>{fmt(post.likes_count)}</span>
+      <span class="sr-only">me gusta</span>
+    </span>
+    <span></span>
+    {
+      post.comments_count > 0 && (
+        <a href={commentsHref} class="hover:underline">
+          {fmt(post.comments_count)} {post.comments_count === 1 ? "comentario" : "comentarios"}
+        </a>
+      )
+    }
+  </div>
+
+  <div class="flex items-center border-t border-line py-1">
+    {
+      loggedIn ? (
+        <button type="button" class:list={[action, "aria-pressed:text-danger"]} data-social="like" data-id={post.id} aria-pressed={liked ? "true" : "false"}>
+          <svg viewBox="0 0 24 24" class:list={[icon, "group-aria-pressed:fill-current"]} aria-hidden="true">
+            <path stroke-linejoin="round" d={heart} />
+          </svg>
+          <span>Me gusta</span>
+        </button>
+      ) : (
+        <a href={loginHref} class={action}>
+          <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linejoin="round" d={heart} /></svg>
+          <span>Me gusta</span>
+        </a>
+      )
+    }
+
+    <a href={commentsHref} class={action}>
+      <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
+        <path stroke-linejoin="round" d="M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z" />
+      </svg>
+      <span>Comentar</span>
+    </a>
+
+    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle}>
+      <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L8 8m4-4 4 4M6 12v6.5a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V12" />
+      </svg>
+      <span>Compartir</span>
+    </button>
+
+    {
+      loggedIn ? (
+        <button
+          type="button"
+          class:list={[action, "aria-pressed:text-brand"]}
+          data-social="save"
+          data-id={post.id}
+          aria-pressed={saved ? "true" : "false"}
+          data-label-on="Guardada"
+          data-label-off="Guardar"
+        >
+          <svg viewBox="0 0 24 24" class:list={[icon, "group-aria-pressed:fill-current"]} aria-hidden="true">
+            <path stroke-linejoin="round" d={bookmark} />
+          </svg>
+          <span data-label>{saved ? "Guardada" : "Guardar"}</span>
+        </button>
+      ) : (
+        <a href={loginHref} class={action}>
+          <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linejoin="round" d={bookmark} /></svg>
+          <span>Guardar</span>
+        </a>
+      )
+    }
+  </div>
+</div>
+
+<script>
+  import "../../scripts/social";
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/social/SituationBadge.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Etiqueta con la situación de una persona: "Busca empleo", "Emprendedor/a"... */
+import type { ProfileSituation } from "../../services/posts";
+import { situationInfo } from "../../config/situations";
+
+interface Props {
+  situation: ProfileSituation | null | undefined;
+  size?: "sm" | "md";
+  class?: string;
+}
+
+const { situation, size = "sm", class: className = "" } = Astro.props;
+const info = situationInfo(situation);
+---
+
+{
+  info && (
+    <span
+      class:list={[
+        "inline-flex shrink-0 items-center rounded-full font-semibold",
+        size === "md" ? "px-3 py-1 text-sm" : "px-2 py-0.5 text-xs",
+        info.class,
+        className,
+      ]}
+    >
+      {info.badge}
+    </span>
+  )
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/ui/Alert.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -2057,11 +2891,57 @@ export function safeNextPath(value: string | null | undefined, fallback: string 
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/config/situations.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { ProfileSituation } from "../services/posts";
+
+/**
+ * Situación laboral que cada persona puede mostrar en su perfil y en sus
+ * publicaciones. El orden es el del formulario.
+ */
+export const SITUATIONS: { value: ProfileSituation; label: string; badge: string; hint: string; class: string }[] = [
+  {
+    value: "job_seeking",
+    label: "Busco empleo",
+    badge: "Busca empleo",
+    hint: "Estás buscando trabajo en relación de dependencia.",
+    class: "bg-seek-soft text-seek",
+  },
+  {
+    value: "entrepreneur",
+    label: "Tengo un emprendimiento",
+    badge: "Emprendedor/a",
+    hint: "Vendés productos o servicios con tu propio emprendimiento.",
+    class: "bg-offer-soft text-offer",
+  },
+  {
+    value: "freelancer",
+    label: "Ofrezco mis servicios",
+    badge: "Ofrece servicios",
+    hint: "Trabajás por tu cuenta: oficios, profesiones, changas.",
+    class: "bg-success-soft text-success",
+  },
+  {
+    value: "hiring",
+    label: "Busco contratar",
+    badge: "Busca contratar",
+    hint: "Necesitás sumar personas a tu equipo o contratar un servicio.",
+    class: "bg-warning-soft text-warning",
+  },
+];
+
+export const SITUATION_VALUES = SITUATIONS.map((s) => s.value) as [ProfileSituation, ...ProfileSituation[]];
+
+export function situationInfo(value: ProfileSituation | null | undefined) {
+  return value ? (SITUATIONS.find((s) => s.value === value) ?? null) : null;
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/env.d.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /// <reference types="astro/client" />
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SessionUser } from "./lib/auth/session";
+import type { ViewerProfile } from "./lib/viewer";
 
 declare global {
   namespace App {
@@ -2070,6 +2950,8 @@ declare global {
       supabase: SupabaseClient;
       /** Usuario autenticado, o null si es un visitante. */
       user: SessionUser | null;
+      /** Perfil del usuario actual (se carga una vez, al pedirlo). Usar getViewerProfile(). */
+      viewerProfile?: Promise<ViewerProfile | null>;
     }
   }
 }
@@ -2876,6 +3758,7 @@ escribir 'src/layouts/PanelLayout.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /** Layout del área privada: navegación del panel + contenido. Siempre noindex. */
 import BaseLayout from "./BaseLayout.astro";
+import { getViewerProfile } from "../lib/viewer";
 
 interface Props {
   title: string;
@@ -2888,10 +3771,13 @@ interface Props {
 const { title, heading = title, description, back } = Astro.props;
 const path = Astro.url.pathname;
 
+const viewer = await getViewerProfile(Astro.locals);
+
 const links = [
-  { href: "/panel", label: "Inicio", active: path === "/panel" },
-  { href: "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
-  { href: "/panel/publicaciones", label: "Publicaciones", active: path.startsWith("/panel/publicaciones") },
+  { href: "/panel", label: "Resumen", active: path === "/panel" },
+  { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
+  { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
 ];
 ---
@@ -3126,6 +4012,54 @@ export function normalizeWebsite(input: string): string | null {
 
 export const instagramUrl = (handle: string) => `https://instagram.com/${handle}`;
 export const tiktokUrl = (handle: string) => `https://www.tiktok.com/@${handle}`;
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/lib/feed-params.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { PostType } from "../schemas/post";
+import { decodeCursor, type Cursor } from "../services/posts";
+
+/**
+ * Parámetros del feed /publicaciones, compartidos por la página completa y el
+ * fragmento de "Cargar más":
+ *   ?tipo=busco      filtra por tipo
+ *   ?ver=siguiendo   solo cuentas que sigue el usuario (requiere sesión)
+ *   ?desde=...       cursor de la página siguiente
+ */
+export const TYPE_SLUGS: Record<string, PostType> = {
+  ofrezco: "offer",
+  busco: "seeking",
+  productos: "product",
+  servicios: "service",
+  promociones: "promotion",
+};
+
+export interface FeedParams {
+  tipo: string;
+  type: PostType | null;
+  following: boolean;
+  cursor: Cursor | null;
+  /** Arma el query string conservando los filtros actuales ("" o "?..."). */
+  query: (extra?: Record<string, string>) => string;
+}
+
+export function parseFeedParams(url: URL): FeedParams {
+  const following = url.searchParams.get("ver") === "siguiendo";
+  const rawTipo = url.searchParams.get("tipo") ?? "";
+  const type = following ? null : (TYPE_SLUGS[rawTipo] ?? null);
+  const tipo = type ? rawTipo : "";
+  const cursor = decodeCursor(url.searchParams.get("desde"));
+
+  const query = (extra: Record<string, string> = {}) => {
+    const params = new URLSearchParams({
+      ...(following ? { ver: "siguiendo" } : {}),
+      ...(type ? { tipo } : {}),
+      ...extra,
+    }).toString();
+    return params ? `?${params}` : "";
+  };
+
+  return { tipo, type, following, cursor, query };
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/lib/format.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -3488,6 +4422,43 @@ export const businessPath = (slug: string) => `/e/${slug}`;
 export const profilePath = (username: string) => `/u/${username}`;
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/lib/viewer.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { ProfileSituation } from "../services/posts";
+
+/** Datos básicos del perfil del usuario logueado (encabezado, inicio, panel). */
+export interface ViewerProfile {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  situation: ProfileSituation | null;
+  headline: string | null;
+  following_count: number;
+}
+
+/**
+ * Perfil del usuario actual, consultado una sola vez por request aunque lo
+ * pidan varios componentes (queda guardado en locals).
+ */
+export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | null> {
+  if (!locals.user) return Promise.resolve(null);
+  locals.viewerProfile ??= (async () => {
+    const { data, error } = await locals.supabase
+      .from("profiles")
+      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count")
+      .eq("id", locals.user!.id)
+      .maybeSingle();
+    if (error) {
+      console.error("[viewer]", error.message);
+      return null;
+    }
+    return (data as ViewerProfile | null) ?? null;
+  })();
+  return locals.viewerProfile;
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/middleware/index.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import { defineMiddleware } from "astro:middleware";
 import { createSupabaseServerClient } from "../lib/supabase/server";
@@ -3811,27 +4782,104 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/buscar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Buscador (provisional). El buscador real con Full Text Search, filtros y
- * paginación llega en la Etapa 7. Las búsquedas nunca se indexan.
+ * Buscador básico: personas, emprendimientos y publicaciones por palabra.
+ * Los resultados nunca se indexan (contenido variable y duplicado).
+ * La Etapa 7 suma filtros por rubro y ciudad, y páginas indexables.
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
-import Button from "../components/ui/Button.astro";
-import { routes } from "../config/site";
+import Avatar from "../components/ui/Avatar.astro";
+import PostCard from "../components/posts/PostCard.astro";
+import SearchBox from "../components/home/SearchBox.astro";
+import SituationBadge from "../components/social/SituationBadge.astro";
+import { normalizeQuery, search, SEARCH_MIN } from "../services/search";
+import { getViewerReactions, followersLabel } from "../services/social";
+import { displayName } from "../services/profiles";
 
-const q = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
+const { supabase, user } = Astro.locals;
+const q = normalizeQuery(Astro.url.searchParams.get("q"));
+const results = await search(supabase, q);
+const reactions = await getViewerReactions(supabase, user?.id, results.posts.map((p) => p.id));
+const total = results.people.length + results.businesses.length + results.posts.length;
+const tooShort = q.length > 0 && q.length < SEARCH_MIN;
 ---
 
 <BaseLayout title={q ? `Buscar “${q}”` : "Buscar"} noindex canonicalPath="/buscar">
-  <section class="mx-auto max-w-3xl px-4 py-16 text-center">
-    <h1 class="text-3xl font-bold">Estamos preparando el buscador</h1>
-    <p class="mt-3 text-ink-muted">
-      {q ? <>Muy pronto vas a poder encontrar resultados para <strong class="text-ink">“{q}”</strong>.</> : "Muy pronto vas a poder buscar emprendedores, productos, servicios y necesidades."}
-      Mientras tanto, creá tu cuenta para ser de los primeros.
-    </p>
-    <div class="mt-8 flex justify-center gap-3">
-      <Button href={routes.signup}>Crear cuenta</Button>
-      <Button href={routes.home} variant="secondary">Volver al inicio</Button>
+  <section class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6">
+    <div>
+      <h1 class="sr-only">Buscar en WorkLink</h1>
+      <SearchBox value={q} autofocus={!q} />
     </div>
+
+    {
+      !q ? (
+        <p class="text-center text-ink-muted">Buscá por nombre, rubro o lo que necesitás: “electricista”, “tortas”, “diseño web”…</p>
+      ) : tooShort ? (
+        <p class="text-center text-ink-muted">Escribí al menos {SEARCH_MIN} letras.</p>
+      ) : total === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">No encontramos resultados para “{q}”</h2>
+          <p class="mt-1 text-ink-muted">Probá con otra palabra, o más corta (por ejemplo “foto” en vez de “fotógrafa profesional”).</p>
+        </div>
+      ) : (
+        <>
+          {results.people.length > 0 && (
+            <section aria-labelledby="r-personas">
+              <h2 id="r-personas" class="mb-3 text-lg font-semibold">Personas</h2>
+              <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+                {results.people.map((person) => (
+                  <li>
+                    <a href={`/u/${person.username}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
+                      <Avatar name={displayName(person)} path={person.avatar_path} size={48} />
+                      <span class="min-w-0 flex-1">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="font-semibold">{displayName(person)}</span>
+                          <SituationBadge situation={person.situation} />
+                        </span>
+                        <span class="block truncate text-sm text-ink-muted">
+                          {[person.headline, person.city?.name, followersLabel(person.followers_count)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {results.businesses.length > 0 && (
+            <section aria-labelledby="r-emprendimientos">
+              <h2 id="r-emprendimientos" class="mb-3 text-lg font-semibold">Emprendimientos</h2>
+              <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+                {results.businesses.map((b) => (
+                  <li>
+                    <a href={`/e/${b.slug}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
+                      <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={48} />
+                      <span class="min-w-0 flex-1">
+                        <span class="font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</span>
+                        <span class="block truncate text-sm text-ink-muted">
+                          {[b.category?.name, b.city?.name, followersLabel(b.followers_count)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {results.posts.length > 0 && (
+            <section aria-labelledby="r-publicaciones">
+              <h2 id="r-publicaciones" class="mb-3 text-lg font-semibold">Publicaciones</h2>
+              <div class="flex flex-col gap-4">
+                {results.posts.map((post) => (
+                  <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
+      )
+    }
   </section>
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -3900,6 +4948,8 @@ import Button from "../../components/ui/Button.astro";
 import HoursTable from "../../components/business/HoursTable.astro";
 import CatalogItemCard from "../../components/business/CatalogItemCard.astro";
 import PostCard from "../../components/posts/PostCard.astro";
+import FollowButton from "../../components/social/FollowButton.astro";
+import { followersLabel, getViewerReactions, isFollowing } from "../../services/social";
 import { getFeed } from "../../services/posts";
 import { getBusinessBySlug, getCatalog } from "../../services/businesses";
 import { mediaSrcSet, mediaUrl } from "../../lib/media";
@@ -3920,10 +4970,12 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }] = await Promise.all([
+const [catalog, { posts: businessPosts }, following] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
+  isFollowing(supabase, user?.id, "business", business.id),
 ]);
+const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
 const isPublic = business.status === "active";
 
 const site = Astro.site ?? new URL(Astro.url.origin);
@@ -3998,8 +5050,13 @@ const jsonLd = [
           <p class="mt-1 text-ink-muted">
             {[business.category?.name, location].filter(Boolean).join(" · ")}
           </p>
+          <p class="mt-1 text-sm text-ink-muted">
+            <span data-followers={business.id}>{followersLabel(business.followers_count)}</span>
+            {business.posts_count > 0 && <span> · {business.posts_count} {business.posts_count === 1 ? "publicación" : "publicaciones"}</span>}
+          </p>
         </div>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
+          {!canEdit && isPublic && <FollowButton kind="business" id={business.id} following={following} returnTo={`/e/${business.slug}`} />}
           <Button href="#contacto" class="lg:hidden">Contactar</Button>
           {canEdit && <Button href={`/panel/emprendimientos/${business.id}`} variant="secondary">Editar</Button>}
         </div>
@@ -4049,8 +5106,8 @@ const jsonLd = [
                 {canEdit && <Button href={`/panel/publicaciones/nueva?emprendimiento=${business.id}`} variant="secondary" size="sm">Publicar</Button>}
               </div>
               {businessPosts.length > 0 ? (
-                <div class="grid items-start gap-4 sm:grid-cols-2">
-                  {businessPosts.map((post) => <PostCard post={post} />)}
+                <div class="flex flex-col gap-4">
+                  {businessPosts.map((post) => <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />)}
                 </div>
               ) : (
                 <p class="text-ink-muted">Todavía no hay publicaciones.</p>
@@ -4121,22 +5178,33 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Home provisional de WorkLink: explica el concepto (necesito / ofrezco) y
- * lleva al buscador o al registro. El buscador real llega en la Etapa 7.
+ * Inicio.
+ *  - Con sesión: el feed personal (buscador, caja para publicar, publicaciones
+ *    de quienes sigue). No se indexa: es distinto para cada persona.
+ *  - Sin sesión: presentación de WorkLink, buscador y últimas publicaciones.
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Button from "../components/ui/Button.astro";
 import { routes } from "../config/site";
 import PostCard from "../components/posts/PostCard.astro";
+import HomeFeed from "../components/home/HomeFeed.astro";
 import { getFeed } from "../services/posts";
+import { getViewerProfile } from "../lib/viewer";
 
 const user = Astro.locals.user;
-const { posts: latest } = await getFeed(Astro.locals.supabase, { limit: 6 });
+const viewer = await getViewerProfile(Astro.locals);
+const latest = viewer ? [] : (await getFeed(Astro.locals.supabase, { limit: 4 })).posts;
 
 const seekExamples = ["Fotógrafo para un casamiento", "Electricista", "Tortas personalizadas", "Diseño de logo"];
 const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "Clases particulares"];
 ---
 
+{
+  viewer ? (
+    <BaseLayout title="Inicio" noindex>
+      <HomeFeed viewer={viewer} />
+    </BaseLayout>
+  ) : (
 <BaseLayout>
   <section class="mx-auto max-w-6xl px-4 pb-12 pt-10 sm:pt-16">
     <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">Córdoba, Argentina</p>
@@ -4208,18 +5276,20 @@ const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "C
 
   {
     latest.length > 0 && (
-      <section class="mx-auto max-w-6xl px-4 pb-20" aria-labelledby="ultimas">
+      <section class="mx-auto max-w-2xl px-4 pb-20" aria-labelledby="ultimas">
         <div class="mb-5 flex items-end justify-between gap-4">
           <h2 id="ultimas" class="text-2xl font-bold">Últimas publicaciones</h2>
           <a href="/publicaciones" class="text-sm font-semibold text-brand hover:underline">Ver todas →</a>
         </div>
-        <div class="grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div class="flex flex-col gap-4">
           {latest.map((post) => <PostCard post={post} />)}
         </div>
       </section>
     )
   }
 </BaseLayout>
+  )
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/ingresar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -4296,6 +5366,39 @@ const passwordChanged = Astro.url.searchParams.get("password") === "updated";
 </AuthLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/inicio/mas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Fragmento HTML con la página siguiente del inicio (lo pide "Cargar más").
+ * Solo para usuarios logueados. No se indexa.
+ */
+import FeedPage from "../../components/posts/FeedPage.astro";
+import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
+import { decodeCursor } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+
+export const partial = true;
+
+const { supabase, user } = Astro.locals;
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const mode = Astro.url.searchParams.get("modo") as HomeMode | null;
+if (!user || !cursor || !mode || !HOME_MODES.includes(mode)) return new Response(null, { status: 400 });
+
+const page = await getHomeFeed(supabase, { followingCount: 0, mode, cursor });
+const reactions = await getViewerReactions(supabase, user.id, page.posts.map((p) => p.id));
+const more = (next: string) => `modo=${mode}&desde=${next}`;
+
+Astro.response.headers.set("X-Robots-Tag", "noindex");
+---
+
+<FeedPage
+  posts={page.posts}
+  reactions={reactions}
+  nextHref={page.nextCursor ? `/?${more(page.nextCursor)}` : null}
+  nextFragmentHref={page.nextCursor ? `/inicio/mas?${more(page.nextCursor)}` : null}
+/>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/p/[ref].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -4303,10 +5406,16 @@ escribir 'src/pages/p/[ref].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Si el texto de la URL no coincide con el actual, redirige (301) a la URL
  * canónica: así los enlaces viejos siguen funcionando y Google ve una sola.
  */
+import { actions, isInputError } from "astro:actions";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import Button from "../../components/ui/Button.astro";
 import PostCard from "../../components/posts/PostCard.astro";
+import PostActions from "../../components/social/PostActions.astro";
+import SituationBadge from "../../components/social/SituationBadge.astro";
+import FollowButton from "../../components/social/FollowButton.astro";
+import CommentsSection from "../../components/social/CommentsSection.astro";
+import { getComments, getViewerReactions, isFollowing } from "../../services/social";
 import { getFeed, getPost, POST_TYPE_LABELS, postHeadline } from "../../services/posts";
 import { displayName } from "../../services/profiles";
 import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
@@ -4324,6 +5433,26 @@ if (!post) return Astro.rewrite("/404");
 const canonical = postPath(post);
 if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
 
+// Comentar / borrar comentario (formularios): si salió bien, volver a la
+// publicación con GET (así recargar no reenvía el formulario).
+const commentResult = Astro.getActionResult(actions.social.comment);
+const removeResult = Astro.getActionResult(actions.social.removeComment);
+if (commentResult && !commentResult.error) return Astro.redirect(`${canonical}#c-${commentResult.data.id}`, 303);
+if (removeResult && !removeResult.error) return Astro.redirect(`${canonical}#comentarios`, 303);
+const commentError = commentResult?.error
+  ? { message: commentResult.error.message, fields: isInputError(commentResult.error) ? commentResult.error.fields : undefined }
+  : removeResult?.error
+    ? { message: removeResult.error.message }
+    : null;
+let draft: string | undefined;
+if (commentResult?.error) {
+  try {
+    draft = String((await Astro.request.clone().formData()).get("body") ?? "");
+  } catch {
+    draft = undefined;
+  }
+}
+
 const isPublic = post.status === "published";
 const isOwner = user?.id === post.author_id;
 const type = POST_TYPE_LABELS[post.type];
@@ -4337,9 +5466,22 @@ const cover = post.media[0];
 const ogImage = cover ? (cover.kind === "image" ? mediaUrl("post", cover.path, 1600) : postFileUrl(cover.path, "poster.webp")) : null;
 const description = post.body.replace(/\s+/g, " ").slice(0, 155);
 
-const more = post.business_id
-  ? (await getFeed(supabase, { businessId: post.business_id, limit: 4 })).posts.filter((p) => p.id !== post.id).slice(0, 3)
-  : [];
+const before = Astro.url.searchParams.get("comentarios_antes");
+const [more, { comments, hasOlder }, following, canModerateComments] = await Promise.all([
+  post.business_id
+    ? getFeed(supabase, { businessId: post.business_id, limit: 4 }).then((r) => r.posts.filter((p) => p.id !== post.id).slice(0, 3))
+    : Promise.resolve([]),
+  getComments(supabase, post.id, { before }),
+  user
+    ? post.business_id
+      ? isFollowing(supabase, user.id, "business", post.business_id)
+      : isFollowing(supabase, user.id, "profile", post.author_id)
+    : Promise.resolve(false),
+  user ? supabase.rpc("can_edit_post", { p_post_id: post.id }).then((r) => Boolean(r.data)) : Promise.resolve(false),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, [post.id, ...more.map((p) => p.id)]);
+const olderHref = hasOlder && comments[0] ? `${canonical}?comentarios_antes=${encodeURIComponent(comments[0].created_at)}#comentarios` : null;
+const showFollow = isPublic && !canModerateComments && user?.id !== post.author_id;
 
 const shareText = `${headline} — en WorkLink`;
 const whatsappShare = `https://wa.me/?text=${encodeURIComponent(`${shareText} ${absoluteUrl}`)}`;
@@ -4371,7 +5513,7 @@ const jsonLd =
 
     <header class="flex flex-wrap items-center gap-3">
       {authorHref && (
-        <a href={authorHref} class="flex min-w-0 flex-1 items-center gap-3">
+        <a href={authorHref} class="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
           <Avatar
             name={authorName}
             path={post.business?.logo_path ?? post.author?.avatar_path}
@@ -4380,7 +5522,11 @@ const jsonLd =
             size={48}
           />
           <span class="min-w-0">
-            <span class="block truncate font-semibold">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
+            <span class="flex flex-wrap items-center gap-x-2 font-semibold">
+              <span class="truncate">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
+              {!post.business && <SituationBadge situation={post.author?.situation} />}
+            </span>
+            {!post.business && post.author?.headline && <span class="block truncate text-sm text-ink-muted">{post.author.headline}</span>}
             <span class="block text-sm text-ink-muted">
               <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
               {post.city && ` · ${post.city.name}`}
@@ -4389,6 +5535,14 @@ const jsonLd =
         </a>
       )}
       <span class:list={["rounded-full px-3 py-1 text-sm font-semibold", type.class]}>{type.label}</span>
+      {showFollow && (
+        <FollowButton
+          kind={post.business_id ? "business" : "profile"}
+          id={post.business_id ?? post.author_id}
+          following={following}
+          returnTo={canonical}
+        />
+      )}
     </header>
 
     {post.title && <h1 class="mt-6 text-2xl font-bold sm:text-3xl">{post.title}</h1>}
@@ -4449,51 +5603,56 @@ const jsonLd =
       )
     }
 
-    <div class="mt-8 flex flex-wrap gap-2">
+    {isPublic && (
+      <PostActions
+        post={post}
+        liked={reactions.liked.has(post.id)}
+        saved={reactions.saved.has(post.id)}
+        postHref={canonical}
+        shareUrl={absoluteUrl}
+        shareTitle={shareText}
+        commentsHref="#comentarios"
+        class="-mx-3 mt-6 border-b border-line"
+      />
+    )}
+
+    <div class="mt-6 flex flex-wrap gap-2">
       {post.business ? (
         <Button href={`${businessPath(post.business.slug)}#contacto`} size="lg">Contactar a {post.business.name}</Button>
       ) : post.author ? (
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
-      <Button variant="ghost" size="lg" data-share={absoluteUrl} data-share-title={shareText}>Copiar enlace</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
+    </div>
+
+    <div class="mt-10">
+      <CommentsSection
+        postId={post.id}
+        total={post.comments_count}
+        comments={comments}
+        olderHref={olderHref}
+        canModerate={canModerateComments}
+        open={isPublic}
+        returnTo={canonical}
+        error={commentError}
+        draft={draft}
+      />
     </div>
   </article>
 
   {
     more.length > 0 && post.business && (
-      <section class="mx-auto max-w-5xl px-4 pb-16">
+      <section class="mx-auto max-w-2xl px-4 pb-16">
         <h2 class="mb-4 text-lg font-semibold">Más de {post.business.name}</h2>
-        <div class="grid gap-4 md:grid-cols-3">
-          {more.map((item) => <PostCard post={item} />)}
+        <div class="flex flex-col gap-4">
+          {more.map((item) => <PostCard post={item} liked={reactions.liked.has(item.id)} saved={reactions.saved.has(item.id)} />)}
         </div>
       </section>
     )
   }
 </BaseLayout>
 
-<script>
-  // Compartir: menú nativo del celular si existe; si no, copia el enlace.
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-share]")) {
-    button.addEventListener("click", async () => {
-      const url = button.dataset.share!;
-      const title = button.dataset.shareTitle ?? document.title;
-      try {
-        if (navigator.share) {
-          await navigator.share({ title, url });
-          return;
-        }
-        await navigator.clipboard.writeText(url);
-        const original = button.textContent;
-        button.textContent = "¡Enlace copiado!";
-        setTimeout(() => (button.textContent = original), 2000);
-      } catch {
-        /* el usuario canceló */
-      }
-    });
-  }
-</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/panel/emprendimientos/[id]/catalogo.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -4867,11 +6026,60 @@ const city = submittedCityId ? await getCity(supabase, submittedCityId) : null;
 </PanelLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/panel/guardados.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Publicaciones guardadas por el usuario, de la más reciente a la más vieja.
+ * Solo las ve él (RLS). Las que se ocultaron o eliminaron no aparecen.
+ */
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import PostCard from "../../components/posts/PostCard.astro";
+import { getPostsByIds } from "../../services/posts";
+import { getSavedPostIds, getViewerReactions } from "../../services/social";
+
+const { supabase, user } = Astro.locals;
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const { ids, hasMore } = await getSavedPostIds(supabase, user!.id, page);
+const posts = await getPostsByIds(supabase, ids);
+const reactions = await getViewerReactions(supabase, user!.id, posts.map((p) => p.id));
+---
+
+<PanelLayout title="Guardados" description="Las publicaciones que guardaste para ver después. Solo vos ves esta lista.">
+  {
+    posts.length === 0 && page === 1 ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <h2 class="text-lg font-semibold">Todavía no guardaste publicaciones</h2>
+        <p class="mt-1 text-ink-muted">Tocá el ícono de guardar en cualquier publicación y la vas a encontrar acá.</p>
+        <div class="mt-4">
+          <Button href="/publicaciones" variant="secondary">Ver publicaciones</Button>
+        </div>
+      </div>
+    ) : (
+      <>
+        <div class="flex max-w-2xl flex-col gap-4">
+          {posts.map((post) => (
+            <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
+          ))}
+        </div>
+        {posts.length < ids.length && (
+          <p class="mt-4 text-sm text-ink-muted">Algunas publicaciones guardadas ya no están disponibles.</p>
+        )}
+        <nav class="mt-6 flex justify-between gap-4" aria-label="Páginas">
+          {page > 1 ? <Button href={`/panel/guardados?pagina=${page - 1}`} variant="secondary">← Anteriores</Button> : <span />}
+          {hasMore && <Button href={`/panel/guardados?pagina=${page + 1}`} variant="secondary">Más guardados →</Button>}
+        </nav>
+      </>
+    )
+  }
+</PanelLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/panel/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Inicio del panel: saludo, perfil completo y accesos a emprendimientos.
- * Ruta protegida por el middleware.
+ * Resumen del panel: perfil, páginas de emprendimiento y accesos.
+ * (El feed está en el inicio "/".) Ruta protegida por el middleware.
  */
 import PanelLayout from "../../layouts/PanelLayout.astro";
 import Alert from "../../components/ui/Alert.astro";
@@ -4881,6 +6089,7 @@ import { hasRole } from "../../lib/auth/session";
 import { displayName, getOwnProfile, profileCompleteness } from "../../services/profiles";
 import { getMyBusinesses } from "../../services/businesses";
 import { routes } from "../../config/site";
+import { actions } from "astro:actions";
 
 const { supabase, user } = Astro.locals;
 
@@ -4894,6 +6103,7 @@ const name = profile?.first_name ?? profile?.username ?? "";
 const completeness = profile ? profileCompleteness(profile) : { percent: 0, missing: [] };
 const isProvider = profile?.intent === "provider";
 const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
+const logoutAction = `/salir${actions.auth.signOut}`;
 ---
 
 <PanelLayout title="Mi panel" heading={`Hola${name ? `, ${name}` : ""} 👋`} description={profile ? `@${profile.username}` : undefined}>
@@ -4914,19 +6124,20 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
       {completeness.missing.length > 0 && (
         <p class="mt-3 text-sm text-ink-muted">Te falta: {completeness.missing.join(", ")}.</p>
       )}
-      <div class="mt-auto pt-4">
-        <Button href="/panel/perfil" variant="secondary" size="sm">{completeness.percent < 100 ? "Completar perfil" : "Editar perfil"}</Button>
+      <div class="mt-auto flex flex-wrap gap-2 pt-4">
+        {profile && <Button href={`/u/${profile.username}`} variant="secondary" size="sm">Ver mi perfil</Button>}
+        <Button href="/panel/perfil" variant="ghost" size="sm">{completeness.percent < 100 ? "Completar perfil" : "Editar perfil"}</Button>
       </div>
     </section>
 
     <section class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
-      <h2 class="font-semibold">Tus emprendimientos</h2>
+      <h2 class="font-semibold">Páginas de emprendimiento</h2>
       {
         businesses.length === 0 ? (
           <p class="mt-1 text-sm text-ink-muted">
-            {isProvider
-              ? "Creá la página de tu emprendimiento con tus servicios, productos y horarios."
-              : "¿Tenés algo para ofrecer? Podés crear un emprendimiento cuando quieras."}
+            Como una página de Facebook: si tenés un negocio o emprendimiento, creale su página con logo, catálogo de
+            productos y servicios, horarios y contacto. Podés publicar en nombre de la página y la gente la puede seguir.
+            {isProvider ? "" : " Es opcional: también podés publicar solo desde tu perfil."}
           </p>
         ) : (
           <ul class="mt-3 flex flex-col gap-2">
@@ -4948,11 +6159,10 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
     </section>
   </div>
 
-  <h2 class="mt-10 text-lg font-semibold">Más para hacer</h2>
-  <ul class="mt-3 grid gap-3 md:grid-cols-3">
-    <li class="rounded-wl-lg border border-line bg-surface p-4 text-sm"><strong>Publicaciones</strong><p class="text-ink-muted">Mostrá trabajos y promociones.</p><a href="/panel/publicaciones/nueva" class="mt-2 inline-block font-semibold text-brand hover:underline">Publicar ahora →</a></li>
-    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Buscador</strong><p class="text-ink-muted">Encontrá por categoría y ciudad.</p></li>
-    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Necesidades</strong><p class="text-ink-muted">Publicá lo que buscás y recibí propuestas.</p></li>
+  <ul class="mt-6 grid gap-3 sm:grid-cols-3">
+    <li><a href="/" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Inicio</strong><span class="block text-ink-muted">Lo que publican las cuentas que seguís.</span></a></li>
+    <li><a href="/panel/publicaciones/nueva" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Crear publicación</strong><span class="block text-ink-muted">Contá qué ofrecés o qué buscás.</span></a></li>
+    <li><a href="/panel/guardados" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Guardados</strong><span class="block text-ink-muted">Publicaciones para ver después.</span></a></li>
   </ul>
 
   {isStaff && (
@@ -4960,6 +6170,10 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
       <Button href={routes.admin} variant="secondary">Ir al panel administrativo</Button>
     </div>
   )}
+
+  <form method="POST" action={logoutAction} class="mt-10 border-t border-line pt-6">
+    <Button type="submit" variant="ghost" size="sm">Cerrar sesión</Button>
+  </form>
 </PanelLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -4978,12 +6192,13 @@ import { getOwnProfile } from "../../services/profiles";
 import { getCity } from "../../services/locations";
 import { mediaUrl } from "../../lib/media";
 import { getSubmittedForm } from "../../utils/form";
+import { SITUATIONS } from "../../config/situations";
 
 const { supabase, user } = Astro.locals;
 
 const result = Astro.getActionResult(actions.profile.update);
 if (result && !result.error) {
-  return Astro.redirect("/panel/perfil?guardado=1");
+  return Astro.redirect(`/u/${result.data.username}?guardado=1`);
 }
 
 const profile = await getOwnProfile(supabase, user!.id);
@@ -4999,13 +6214,10 @@ const v = (name: string, saved: unknown) =>
 const submittedCityId = submitted ? Number(submitted.get("city_id")) : null;
 const city = submittedCityId ? await getCity(supabase, submittedCityId) : profile.city;
 const avatarPath = v("avatar_path", profile.avatar_path) || null;
-const saved = Astro.url.searchParams.get("guardado") === "1";
+const situation = v("situation", profile.situation);
 ---
 
-<PanelLayout title="Mi perfil" description="Así te ven las personas en WorkLink.">
-  <a slot="actions" href={`/u/${profile.username}`} class="text-sm font-semibold text-brand hover:underline">Ver mi perfil público →</a>
-
-  {saved && <Alert tone="success" class="mb-6">Guardamos tu perfil.</Alert>}
+<PanelLayout title="Editar perfil" description="Así te ven las personas en WorkLink." back={{ href: `/u/${profile.username}`, label: "Volver a mi perfil" }}>
   {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
 
   <form method="POST" action={actions.profile.update} class="flex max-w-2xl flex-col gap-8" novalidate>
@@ -5034,6 +6246,15 @@ const saved = Astro.url.searchParams.get("guardado") === "1";
         hint="Es tu dirección pública: worklink/u/tu-usuario"
         error={err("username")}
       />
+      <Field
+        name="headline"
+        label="Tu rubro o profesión (opcional)"
+        maxlength={80}
+        placeholder="Ej.: Electricista matriculado, Diseñadora gráfica, Estudiante de enfermería"
+        value={v("headline", profile.headline)}
+        hint="Aparece debajo de tu nombre en tu perfil y en tus publicaciones."
+        error={err("headline")}
+      />
       <TextArea name="bio" label="Sobre vos (opcional)" rows={4} maxlength={500} placeholder="Contá en pocas palabras a qué te dedicás o qué estás buscando." value={v("bio", profile.bio)} error={err("bio")} />
       <CityPicker
         client:load
@@ -5042,6 +6263,30 @@ const saved = Astro.url.searchParams.get("guardado") === "1";
         initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
         error={err("city_id")}
       />
+    </section>
+
+    <section id="situacion" class="flex scroll-mt-24 flex-col gap-3">
+      <div>
+        <h2 class="text-lg font-semibold">Tu situación</h2>
+        <p class="text-sm text-ink-muted">Se muestra como etiqueta en tu perfil y en tus publicaciones, para que te encuentren quienes te necesitan.</p>
+      </div>
+      <fieldset class="grid gap-2 sm:grid-cols-2">
+        <legend class="sr-only">Situación</legend>
+        {SITUATIONS.map((option) => (
+          <label class="flex cursor-pointer gap-3 rounded-wl border border-line bg-surface p-3 has-[:checked]:border-brand has-[:checked]:bg-brand/5">
+            <input type="radio" name="situation" value={option.value} checked={situation === option.value} class="mt-1 accent-[var(--wl-brand)]" />
+            <span>
+              <span class="block font-semibold">{option.label}</span>
+              <span class="block text-sm text-ink-muted">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+        <label class="flex cursor-pointer items-center gap-3 rounded-wl border border-line bg-surface p-3 has-[:checked]:border-brand has-[:checked]:bg-brand/5 sm:col-span-2">
+          <input type="radio" name="situation" value="" checked={!situation} class="accent-[var(--wl-brand)]" />
+          <span class="text-sm">Prefiero no mostrarlo</span>
+        </label>
+      </fieldset>
+      {err("situation") && <p class="text-sm text-danger" role="alert">{err("situation")}</p>}
     </section>
 
     <section class="flex flex-col gap-4">
@@ -5201,6 +6446,9 @@ const okText: Record<string, string> = {
                 </p>
                 <p class="mt-1 truncate font-medium">{postHeadline(post, 90)}</p>
                 {post.price !== null && <p class="text-sm text-ink-muted">{formatMoney(post.price)}</p>}
+                <p class="text-xs text-ink-muted">
+                  {post.likes_count} me gusta · {post.comments_count} {post.comments_count === 1 ? "comentario" : "comentarios"} · {post.saves_count} {post.saves_count === 1 ? "guardado" : "guardados"}
+                </p>
               </div>
               <div class="flex flex-wrap gap-1">
                 <Button href={postPath(post)} variant="ghost" size="sm">Ver</Button>
@@ -5251,14 +6499,14 @@ import PostForm from "../../../components/posts/PostForm.astro";
 import { getMyBusinesses } from "../../../services/businesses";
 import { getCategoryTree } from "../../../services/categories";
 import { getCity } from "../../../services/locations";
-import { getOwnProfile } from "../../../services/profiles";
+import { displayName, getOwnProfile } from "../../../services/profiles";
 import { getSubmittedForm } from "../../../utils/form";
 import { mediaItemsFromSubmitted } from "../../../lib/post-media";
 
 const { supabase, user } = Astro.locals;
 
 const result = Astro.getActionResult(actions.posts.create);
-if (result && !result.error) return Astro.redirect("/panel/publicaciones?ok=publicada");
+if (result && !result.error) return Astro.redirect("/?publicada=1");
 
 const [businesses, categories, profile] = await Promise.all([
   getMyBusinesses(supabase, user!.id),
@@ -5273,10 +6521,12 @@ const formError = result?.error && !isInputError(result.error) ? result.error.me
 const submittedCity = submitted ? Number(submitted.get("city_id")) : 0;
 const city = submitted ? (submittedCity ? await getCity(supabase, submittedCity) : null) : null;
 const defaultBusinessId = Astro.url.searchParams.get("emprendimiento");
-const personalCity = !businesses.length ? profile?.city ?? null : null;
+const defaultType = Astro.url.searchParams.get("tipo");
+// Por defecto se publica como persona: se usa la ciudad del perfil.
+const personalCity = defaultBusinessId ? null : (profile?.city ?? null);
 ---
 
-<PanelLayout title="Nueva publicación" back={{ href: "/panel/publicaciones", label: "Mis publicaciones" }}>
+<PanelLayout title="Crear publicación" back={{ href: "/", label: "Inicio" }}>
   {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
   {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados.</Alert>}
   <div class="max-w-3xl">
@@ -5290,6 +6540,8 @@ const personalCity = !businesses.length ? profile?.city ?? null : null;
       media={submitted ? mediaItemsFromSubmitted(submitted.get("media")) : []}
       submitLabel="Publicar"
       defaultBusinessId={defaultBusinessId}
+      defaultType={defaultType}
+      personName={profile ? displayName(profile) : "Yo"}
     />
   </div>
 </PanelLayout>
@@ -5316,114 +6568,99 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/publicaciones/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Feed público de publicaciones, del más nuevo al más viejo, 20 por página.
- * Filtro por tipo (?tipo=busco). La primera página se indexa; las siguientes
- * (?desde=...) no, para no duplicar contenido en buscadores.
+ * Feed de publicaciones, del más nuevo al más viejo, 20 por página.
+ * Filtros: por tipo (?tipo=busco) o "Siguiendo" (?ver=siguiendo, con sesión).
+ * La primera página pública se indexa; las siguientes (?desde=...) y
+ * "Siguiendo" no, para no duplicar contenido en buscadores.
  */
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Button from "../../components/ui/Button.astro";
 import FeedPage from "../../components/posts/FeedPage.astro";
-import { decodeCursor, getFeed } from "../../services/posts";
-import { POST_TYPES, type PostType } from "../../schemas/post";
+import { getFeed } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { parseFeedParams, TYPE_SLUGS } from "../../lib/feed-params";
+import { POST_TYPES } from "../../schemas/post";
+import { routes } from "../../config/site";
 
-const TYPE_SLUGS: Record<string, PostType> = {
-  ofrezco: "offer",
-  busco: "seeking",
-  productos: "product",
-  servicios: "service",
-  promociones: "promotion",
-};
+const { supabase, user } = Astro.locals;
+const { tipo, type, following, cursor, query } = parseFeedParams(Astro.url);
+if (following && !user) return Astro.redirect(`${routes.login}?next=${encodeURIComponent("/publicaciones?ver=siguiendo")}`);
 
-const tipo = Astro.url.searchParams.get("tipo") ?? "";
-const type = TYPE_SLUGS[tipo] ?? null;
-const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-const { posts, nextCursor } = await getFeed(Astro.locals.supabase, { type, cursor });
+const { posts, nextCursor } = await getFeed(supabase, { type, following, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 
-const query = (extra: Record<string, string>) => {
-  const params = new URLSearchParams({ ...(type ? { tipo } : {}), ...extra });
-  const s = params.toString();
-  return s ? `?${s}` : "";
-};
 const nextHref = nextCursor ? `/publicaciones${query({ desde: nextCursor })}` : null;
 const nextFragmentHref = nextCursor ? `/publicaciones/mas${query({ desde: nextCursor })}` : null;
 
 const filters = [
-  { slug: "", label: "Todo" },
-  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({ slug, label: POST_TYPES.find((t) => t.value === value)!.label })),
+  { href: "/publicaciones", label: "Todo", active: !type && !following },
+  ...(user ? [{ href: "/publicaciones?ver=siguiendo", label: "Siguiendo", active: following }] : []),
+  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({
+    href: `/publicaciones?tipo=${slug}`,
+    label: POST_TYPES.find((t) => t.value === value)!.label,
+    active: type === value,
+  })),
 ];
-const currentLabel = filters.find((f) => f.slug === (type ? tipo : ""))?.label ?? "Todo";
+const currentLabel = filters.find((f) => f.active)?.label ?? "Todo";
 ---
 
 <BaseLayout
-  title={type ? `Publicaciones: ${currentLabel}` : "Publicaciones"}
+  title={type || following ? `Publicaciones: ${currentLabel}` : "Publicaciones"}
   description="Lo último que publicaron emprendedores y personas en WorkLink: servicios, productos, promociones y pedidos."
   canonicalPath={`/publicaciones${type ? `?tipo=${tipo}` : ""}`}
-  noindex={Boolean(cursor)}
+  noindex={Boolean(cursor) || following}
 >
-  <section class="mx-auto max-w-6xl px-4 py-8">
+  <section class="mx-auto max-w-2xl px-4 py-8">
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <h1 class="text-3xl font-bold">Publicaciones</h1>
         <p class="mt-1 text-ink-muted">Lo último que se publicó en WorkLink.</p>
       </div>
-      <Button href={Astro.locals.user ? "/panel/publicaciones/nueva" : "/registrarse"}>Publicar</Button>
+      <Button href={user ? "/panel/publicaciones/nueva" : "/registrarse"}>Publicar</Button>
     </div>
 
     <nav aria-label="Filtrar por tipo" class="mt-6 flex gap-2 overflow-x-auto pb-1">
       {
-        filters.map((filter) => {
-          const active = filter.slug === (type ? tipo : "");
-          return (
-            <a
-              href={`/publicaciones${filter.slug ? `?tipo=${filter.slug}` : ""}`}
-              aria-current={active ? "page" : undefined}
-              class:list={[
-                "whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium",
-                active ? "border-brand bg-brand text-brand-contrast" : "border-line bg-surface text-ink hover:bg-surface-muted",
-              ]}
-            >
-              {filter.label}
-            </a>
-          );
-        })
+        filters.map((filter) => (
+          <a
+            href={filter.href}
+            aria-current={filter.active ? "page" : undefined}
+            class:list={[
+              "whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium",
+              filter.active ? "border-brand bg-brand text-brand-contrast" : "border-line bg-surface text-ink hover:bg-surface-muted",
+            ]}
+          >
+            {filter.label}
+          </a>
+        ))
       }
     </nav>
 
     {
       posts.length === 0 ? (
         <div class="mt-10 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
-          <h2 class="text-lg font-semibold">Todavía no hay publicaciones {type && `de tipo “${currentLabel}”`}</h2>
-          <p class="mt-1 text-ink-muted">¡Podés ser la primera persona en publicar!</p>
+          {following ? (
+            <>
+              <h2 class="text-lg font-semibold">Todavía no hay publicaciones de las cuentas que seguís</h2>
+              <p class="mt-1 text-ink-muted">Tocá “Seguir” en los emprendimientos y personas que te interesan y vas a ver acá lo que publiquen.</p>
+              <a href="/publicaciones" class="mt-4 inline-block font-semibold text-brand">Ver todas las publicaciones →</a>
+            </>
+          ) : (
+            <>
+              <h2 class="text-lg font-semibold">Todavía no hay publicaciones {type && `de tipo “${currentLabel}”`}</h2>
+              <p class="mt-1 text-ink-muted">¡Podés ser la primera persona en publicar!</p>
+            </>
+          )}
         </div>
       ) : (
-        <div class="mt-6 grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3" data-feed>
-          <FeedPage posts={posts} nextHref={nextHref} nextFragmentHref={nextFragmentHref} priorityCount={cursor ? 0 : 2} />
+        <div class="mt-6 flex flex-col gap-4" data-feed>
+          <FeedPage posts={posts} reactions={reactions} nextHref={nextHref} nextFragmentHref={nextFragmentHref} priorityCount={cursor ? 0 : 2} />
         </div>
       )
     }
   </section>
 </BaseLayout>
 
-<script>
-  // "Cargar más" sin recargar: pide el fragmento HTML y lo agrega al feed.
-  document.addEventListener("click", async (event) => {
-    const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-load-more]");
-    if (!link || event.metaKey || event.ctrlKey) return;
-    event.preventDefault();
-    const wrapper = link.closest("[data-load-more-wrapper]");
-    link.textContent = "Cargando…";
-    link.setAttribute("aria-busy", "true");
-    try {
-      const res = await fetch(link.dataset.loadMore!, { headers: { Accept: "text/html" } });
-      if (!res.ok) throw new Error();
-      const html = await res.text();
-      wrapper?.insertAdjacentHTML("afterend", html);
-      wrapper?.remove();
-    } catch {
-      window.location.href = link.href;
-    }
-  });
-</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/publicaciones/mas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -5433,34 +6670,27 @@ escribir 'src/pages/publicaciones/mas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Lo pide el botón "Cargar más" de /publicaciones. No se indexa.
  */
 import FeedPage from "../../components/posts/FeedPage.astro";
-import { decodeCursor, getFeed } from "../../services/posts";
-import type { PostType } from "../../schemas/post";
+import { getFeed } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { parseFeedParams } from "../../lib/feed-params";
 
 export const partial = true;
 
-const TYPE_SLUGS: Record<string, PostType> = {
-  ofrezco: "offer",
-  busco: "seeking",
-  productos: "product",
-  servicios: "service",
-  promociones: "promotion",
-};
+const { supabase, user } = Astro.locals;
+const { type, following, cursor, query } = parseFeedParams(Astro.url);
+if (!cursor || (following && !user)) return new Response(null, { status: 400 });
 
-const tipo = Astro.url.searchParams.get("tipo") ?? "";
-const type = TYPE_SLUGS[tipo] ?? null;
-const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-if (!cursor) return new Response(null, { status: 400 });
-
-const { posts, nextCursor } = await getFeed(Astro.locals.supabase, { type, cursor });
-const params = (extra: Record<string, string>) => new URLSearchParams({ ...(type ? { tipo } : {}), ...extra }).toString();
+const { posts, nextCursor } = await getFeed(supabase, { type, following, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 
 Astro.response.headers.set("X-Robots-Tag", "noindex");
 ---
 
 <FeedPage
   posts={posts}
-  nextHref={nextCursor ? `/publicaciones?${params({ desde: nextCursor })}` : null}
-  nextFragmentHref={nextCursor ? `/publicaciones/mas?${params({ desde: nextCursor })}` : null}
+  reactions={reactions}
+  nextHref={nextCursor ? `/publicaciones${query({ desde: nextCursor })}` : null}
+  nextFragmentHref={nextCursor ? `/publicaciones/mas${query({ desde: nextCursor })}` : null}
 />
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -5714,81 +6944,195 @@ export const prerender = true;
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
-escribir 'src/pages/u/[username].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+escribir 'src/pages/u/[username]/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Perfil público de una persona: /u/[username]. No se indexa en buscadores
- * (privacidad): lo indexable son los emprendimientos.
+ * Perfil de una persona (estilo Facebook): foto, nombre, rubro y situación,
+ * datos, emprendimientos y todo lo que publicó (con "Cargar más").
+ * Si es el propio perfil: botones "Editar perfil" y caja para publicar.
+ * No se indexa en buscadores (privacidad): lo indexable son los emprendimientos.
  */
-import BaseLayout from "../../layouts/BaseLayout.astro";
-import Avatar from "../../components/ui/Avatar.astro";
-import Button from "../../components/ui/Button.astro";
-import { displayName, getPublicProfile } from "../../services/profiles";
-import { getPublicBusinessesByOwner } from "../../services/businesses";
-import { instagramUrl, tiktokUrl } from "../../lib/contact";
-import { formatLocation, formatMonthYear } from "../../lib/format";
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import Button from "../../../components/ui/Button.astro";
+import FeedPage from "../../../components/posts/FeedPage.astro";
+import Composer from "../../../components/home/Composer.astro";
+import FollowButton from "../../../components/social/FollowButton.astro";
+import SituationBadge from "../../../components/social/SituationBadge.astro";
+import { decodeCursor, getFeed } from "../../../services/posts";
+import { followersLabel, getViewerReactions, isFollowing } from "../../../services/social";
+import { displayName, getPublicProfile } from "../../../services/profiles";
+import { getPublicBusinessesByOwner } from "../../../services/businesses";
+import { instagramUrl, tiktokUrl, whatsappUrl } from "../../../lib/contact";
+import { formatLocation, formatMonthYear } from "../../../lib/format";
+import { getViewerProfile } from "../../../lib/viewer";
+import { routes } from "../../../config/site";
+import Alert from "../../../components/ui/Alert.astro";
 
 const { supabase, user } = Astro.locals;
 const username = (Astro.params.username ?? "").toLowerCase();
 if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Astro.rewrite("/404");
 
-const profile = await getPublicProfile(supabase, username, { withContact: false });
+const profile = await getPublicProfile(supabase, username, { withContact: Boolean(user) });
 if (!profile) return Astro.rewrite("/404");
 
-const businesses = await getPublicBusinessesByOwner(supabase, profile.id);
-const name = displayName(profile);
 const isMe = user?.id === profile.id;
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const [businesses, { posts, nextCursor }, following, viewer] = await Promise.all([
+  getPublicBusinessesByOwner(supabase, profile.id),
+  getFeed(supabase, { authorId: profile.id, cursor }),
+  isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
+  isMe ? getViewerProfile(Astro.locals) : Promise.resolve(null),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
+const name = displayName(profile);
+const base = `/u/${profile.username}`;
+const location = formatLocation(profile.city);
+const firstName = profile.first_name ?? name;
 ---
 
-<BaseLayout title={name} description={profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
-  <section class="mx-auto max-w-3xl px-4 py-10">
-    <header class="flex flex-wrap items-center gap-5">
-      <Avatar name={name} path={profile.avatar_path} size={96} priority />
-      <div class="min-w-0 flex-1">
-        <h1 class="text-2xl font-bold">{name}</h1>
-        <p class="text-ink-muted">
-          @{profile.username}{profile.city && ` · ${formatLocation(profile.city)}`}
+<BaseLayout title={name} description={profile.headline ?? profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
+  <div class="h-28 bg-gradient-to-r from-brand via-seek to-offer sm:h-40" aria-hidden="true"></div>
+
+  <section class="mx-auto max-w-3xl px-4">
+    <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end">
+      <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
+      <div class="min-w-0 flex-1 sm:pb-2">
+        <h1 class="text-2xl font-bold sm:text-3xl">{name}</h1>
+        {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
+        <p class="mt-1 text-sm text-ink-muted">
+          <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
+          {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
         </p>
-        <p class="mt-1 text-sm text-ink-muted">En WorkLink desde {formatMonthYear(profile.created_at)}</p>
       </div>
-      {isMe && <Button href="/panel/perfil" variant="secondary" size="sm">Editar perfil</Button>}
-    </header>
+      <div class="flex flex-wrap gap-2 sm:pb-2">
+        {
+          isMe ? (
+            <>
+              <Button href="/panel/perfil">Editar perfil</Button>
+              <Button href="/panel/publicaciones/nueva" variant="secondary">Publicar</Button>
+            </>
+          ) : (
+            <>
+              <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
+              {profile.whatsapp ? (
+                <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
+                  WhatsApp
+                </Button>
+              ) : (
+                !user && <Button href={`${routes.login}?next=${encodeURIComponent(base)}`} variant="secondary">Contactar</Button>
+              )}
+            </>
+          )
+        }
+      </div>
+    </div>
 
-    {profile.bio && <p class="mt-6 whitespace-pre-line">{profile.bio}</p>}
+    {isMe && Astro.url.searchParams.get("guardado") === "1" && <Alert tone="success" class="mt-6">Guardamos los cambios de tu perfil.</Alert>}
 
-    {
-      (profile.instagram || profile.tiktok || profile.website) && (
-        <ul class="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram</a></li>}
-          {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok</a></li>}
-          {profile.website && <li><a href={profile.website} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Sitio web</a></li>}
-        </ul>
-      )
-    }
-
-    {
-      businesses.length > 0 && (
-        <section class="mt-10">
-          <h2 class="mb-4 text-lg font-semibold">Emprendimientos</h2>
-          <ul class="grid gap-3">
-            {businesses.map((b) => (
-              <li>
-                <a href={`/e/${b.slug}`} class="flex items-center gap-4 rounded-wl-lg border border-line bg-surface p-4 hover:border-brand">
-                  <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={56} />
-                  <div class="min-w-0">
-                    <p class="font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</p>
-                    <p class="truncate text-sm text-ink-muted">{[b.categories?.name, b.cities?.name].filter(Boolean).join(" · ")}</p>
-                    {b.tagline && <p class="truncate text-sm">{b.tagline}</p>}
-                  </div>
-                </a>
-              </li>
-            ))}
+    <div class="mt-6 grid gap-6 md:grid-cols-[260px_minmax(0,1fr)]">
+      <aside class="flex flex-col gap-4">
+        <section class="rounded-wl-lg border border-line bg-surface p-4">
+          <h2 class="font-semibold">Información</h2>
+          {profile.situation && <SituationBadge situation={profile.situation} size="md" class="mt-3" />}
+          {profile.bio && <p class="mt-3 whitespace-pre-line text-sm">{profile.bio}</p>}
+          <ul class="mt-3 flex flex-col gap-1.5 text-sm text-ink-muted">
+            {location && <li>📍 {location}</li>}
+            <li>📅 En WorkLink desde {formatMonthYear(profile.created_at)}</li>
+            {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram @{profile.instagram}</a></li>}
+            {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok @{profile.tiktok}</a></li>}
+            {profile.facebook && <li><a href={profile.facebook.startsWith("http") ? profile.facebook : `https://${profile.facebook}`} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Facebook</a></li>}
+            {profile.website && <li><a href={profile.website} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Sitio web</a></li>}
           </ul>
+          {isMe && !profile.situation && (
+            <a href="/panel/perfil#situacion" class="mt-3 block rounded-wl bg-surface-muted px-3 py-2 text-sm">
+              <strong>Completá tu situación:</strong> ¿buscás empleo, tenés un emprendimiento u ofrecés servicios?
+            </a>
+          )}
         </section>
-      )
-    }
+
+        {(businesses.length > 0 || isMe) && (
+          <section class="rounded-wl-lg border border-line bg-surface p-4">
+            <h2 class="font-semibold">Emprendimientos</h2>
+            {businesses.length > 0 ? (
+              <ul class="mt-3 flex flex-col gap-2">
+                {businesses.map((b) => (
+                  <li>
+                    <a href={`/e/${b.slug}`} class="flex items-center gap-3 rounded-wl p-1 hover:bg-surface-muted">
+                      <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={40} />
+                      <span class="min-w-0">
+                        <span class="block truncate text-sm font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</span>
+                        <span class="block truncate text-xs text-ink-muted">{[b.categories?.name, b.cities?.name].filter(Boolean).join(" · ")}</span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p class="mt-2 text-sm text-ink-muted">
+                Si tenés un emprendimiento, creale su página con catálogo, horarios y contacto.
+                <a href="/panel/emprendimientos/nuevo" class="font-semibold text-brand hover:underline">Crear página</a>
+              </p>
+            )}
+          </section>
+        )}
+      </aside>
+
+      <div class="flex min-w-0 flex-col gap-4 pb-16">
+        {isMe && viewer && !cursor && <Composer viewer={viewer} />}
+        <h2 class="text-lg font-semibold">Publicaciones</h2>
+        {
+          posts.length === 0 ? (
+            <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
+              {isMe ? "Todavía no publicaste nada. ¡Contá qué ofrecés o qué estás buscando!" : `${firstName} todavía no publicó nada.`}
+            </p>
+          ) : (
+            <div class="flex flex-col gap-4" data-feed>
+              <FeedPage
+                posts={posts}
+                reactions={reactions}
+                nextHref={nextCursor ? `${base}?desde=${nextCursor}` : null}
+                nextFragmentHref={nextCursor ? `${base}/mas?desde=${nextCursor}` : null}
+              />
+            </div>
+          )
+        }
+      </div>
+    </div>
   </section>
 </BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/u/[username]/mas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Fragmento con la página siguiente de publicaciones de un perfil ("Cargar más"). */
+import FeedPage from "../../../components/posts/FeedPage.astro";
+import { decodeCursor, getFeed } from "../../../services/posts";
+import { getViewerReactions } from "../../../services/social";
+
+export const partial = true;
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.params.username ?? "").toLowerCase();
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+if (!/^[a-z0-9_.]{3,30}$/.test(username) || !cursor) return new Response(null, { status: 400 });
+
+const { data: profile } = await supabase.from("profiles").select("id").eq("username", username).eq("status", "active").maybeSingle();
+if (!profile) return new Response(null, { status: 404 });
+
+const { posts, nextCursor } = await getFeed(supabase, { authorId: profile.id, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
+const base = `/u/${username}`;
+
+Astro.response.headers.set("X-Robots-Tag", "noindex");
+---
+
+<FeedPage
+  posts={posts}
+  reactions={reactions}
+  nextHref={nextCursor ? `${base}?desde=${nextCursor}` : null}
+  nextFragmentHref={nextCursor ? `${base}/mas?desde=${nextCursor}` : null}
+/>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/auth.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -6297,6 +7641,7 @@ import {
   optionalWhatsapp,
   optionalPhone,
 } from "./common";
+import { SITUATION_VALUES } from "../config/situations";
 
 const personName = (label: string) =>
   z
@@ -6317,6 +7662,8 @@ export const profileSchema = z.object({
   first_name: personName("nombre"),
   last_name: personName("apellido"),
   bio: optionalText(500, "La descripción"),
+  situation: z.preprocess((value) => (value === "" || value === null ? undefined : value), z.enum(SITUATION_VALUES).optional()),
+  headline: optionalText(80, "Tu rubro"),
   city_id: optionalId,
   avatar_path: optionalMediaPath,
   whatsapp: optionalWhatsapp,
@@ -6330,13 +7677,224 @@ export const profileSchema = z.object({
 export type ProfileInput = z.infer<typeof profileSchema>;
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/schemas/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const uuid = (message = "Dato inválido") => z.string().regex(UUID, { error: message });
+
+export const COMMENT_MAX = 1000;
+
+/** Me gusta / guardar: estado deseado (idempotente, sirve aunque se repita). */
+export const reactionSchema = z.object({
+  post_id: uuid(),
+  active: z.boolean(),
+});
+
+/** Seguir o dejar de seguir a una persona o a un emprendimiento. */
+export const followSchema = z.object({
+  kind: z.enum(["profile", "business"]),
+  id: uuid(),
+  active: z.boolean(),
+});
+
+export const commentSchema = z.object({
+  post_id: uuid(),
+  body: z
+    .string({ error: "Escribí un comentario" })
+    .trim()
+    .min(1, { error: "Escribí un comentario" })
+    .max(COMMENT_MAX, { error: `El comentario puede tener hasta ${COMMENT_MAX} caracteres` }),
+});
+
+export const commentRefSchema = z.object({
+  comment_id: uuid(),
+});
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/scripts/load-more.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * "Cargar más" sin recargar: pide el fragmento HTML de la página siguiente y
+ * lo agrega a la lista. Si algo falla, sigue el enlace normal (funciona sin JS).
+ */
+document.addEventListener("click", async (event) => {
+  const link = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[data-load-more]");
+  if (!link || event.metaKey || event.ctrlKey || event.shiftKey) return;
+  event.preventDefault();
+  if (link.getAttribute("aria-busy") === "true") return;
+  const wrapper = link.closest("[data-load-more-wrapper]");
+  link.textContent = "Cargando…";
+  link.setAttribute("aria-busy", "true");
+  try {
+    const res = await fetch(link.dataset.loadMore!, { headers: { Accept: "text/html" } });
+    if (!res.ok) throw new Error(String(res.status));
+    const html = await res.text();
+    wrapper?.insertAdjacentHTML("afterend", html);
+    wrapper?.remove();
+  } catch {
+    window.location.href = link.href;
+  }
+});
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/scripts/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Botones de me gusta, guardar, seguir y compartir, y el "Ver más" de los
+ * textos largos (un solo manejador para toda la página, así también funcionan
+ * en las tarjetas que agrega "Cargar más").
+ *
+ * - Cambia el botón al instante y después confirma con el servidor; si falla,
+ *   vuelve al estado anterior y avisa.
+ * - Mantiene sincronizados todos los botones de la misma publicación o cuenta
+ *   que haya en la página.
+ * - Sin sesión, los botones son enlaces a /ingresar (no pasan por acá).
+ */
+import { actions } from "astro:actions";
+
+type Kind = "like" | "save" | "follow";
+
+const numberFormat = new Intl.NumberFormat("es-AR");
+
+function selectorFor(button: HTMLElement): string {
+  const kind = button.dataset.social as Kind;
+  return `button[data-social="${kind}"][data-id="${button.dataset.id}"]`;
+}
+
+function render(id: string, kind: Kind, active: boolean, count: number | null) {
+  for (const button of document.querySelectorAll<HTMLButtonElement>(`button[data-social="${kind}"][data-id="${id}"]`)) {
+    button.setAttribute("aria-pressed", String(active));
+    const label = button.querySelector<HTMLElement>("[data-label]");
+    if (label) label.textContent = active ? (button.dataset.labelOn ?? "") : (button.dataset.labelOff ?? "");
+    const counter = button.querySelector<HTMLElement>("[data-count]");
+    if (counter && count !== null) counter.textContent = count > 0 ? numberFormat.format(count) : "";
+  }
+  if (kind === "like" && count !== null) {
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-likes-for="${id}"]`)) el.textContent = numberFormat.format(count);
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-likes-wrap="${id}"]`)) el.hidden = count === 0;
+  }
+  if (kind === "follow" && count !== null) {
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-followers="${id}"]`)) {
+      el.textContent = `${numberFormat.format(count)} ${count === 1 ? "seguidor" : "seguidores"}`;
+    }
+  }
+}
+
+function currentCount(button: HTMLElement, kind: Kind): number | null {
+  if (kind === "follow") {
+    const el = document.querySelector<HTMLElement>(`[data-followers="${button.dataset.id}"]`);
+    return el ? Number.parseInt(el.textContent!.replace(/\D/g, ""), 10) || 0 : null;
+  }
+  const counter =
+    button.querySelector<HTMLElement>("[data-count]") ??
+    (kind === "like" ? document.querySelector<HTMLElement>(`[data-likes-for="${button.dataset.id}"]`) : null);
+  return counter ? Number.parseInt(counter.textContent!.replace(/\D/g, ""), 10) || 0 : null;
+}
+
+let toastTimer: number | undefined;
+function toast(message: string) {
+  let el = document.getElementById("wl-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "wl-toast";
+    el.setAttribute("role", "status");
+    el.className =
+      "fixed inset-x-4 bottom-4 z-50 mx-auto max-w-sm rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-white shadow-lg";
+    document.body.append(el);
+  }
+  el.textContent = message;
+  el.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (el!.hidden = true), 3500);
+}
+
+// Compartir: menú nativo del celular si existe; si no, copia el enlace.
+document.addEventListener("click", async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-share-url]");
+  if (!button) return;
+  const url = button.dataset.shareUrl!;
+  const title = button.dataset.shareTitle ?? document.title;
+  try {
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+      await navigator.share({ title, url });
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    toast("¡Enlace copiado! Ya lo podés pegar donde quieras.");
+  } catch {
+    /* el usuario canceló */
+  }
+});
+
+// "Ver más": muestra el botón solo si el texto quedó cortado.
+function checkClamps(root: ParentNode = document) {
+  for (const text of root.querySelectorAll<HTMLElement>("[data-clamp]:not([data-clamp-checked])")) {
+    text.dataset.clampChecked = "1";
+    const more = text.parentElement?.querySelector<HTMLElement>("[data-expand]");
+    if (more && text.scrollHeight > text.clientHeight + 2) more.hidden = false;
+  }
+}
+checkClamps();
+new MutationObserver(() => checkClamps()).observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener("click", (event) => {
+  const more = (event.target as HTMLElement).closest<HTMLElement>("[data-expand]");
+  if (!more) return;
+  const text = more.parentElement?.querySelector<HTMLElement>("[data-clamp]");
+  text?.classList.remove("line-clamp-5");
+  more.hidden = true;
+});
+
+document.addEventListener("click", async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-social]");
+  if (!button) return;
+  event.preventDefault();
+  if (button.dataset.busy) return;
+
+  const kind = button.dataset.social as Kind;
+  const id = button.dataset.id!;
+  const wasActive = button.getAttribute("aria-pressed") === "true";
+  const active = !wasActive;
+  const before = currentCount(button, kind);
+
+  render(id, kind, active, before === null ? null : Math.max(before + (active ? 1 : -1), 0));
+  for (const b of document.querySelectorAll<HTMLElement>(selectorFor(button))) b.dataset.busy = "1";
+
+  try {
+    const result =
+      kind === "like"
+        ? await actions.social.like({ post_id: id, active })
+        : kind === "save"
+          ? await actions.social.save({ post_id: id, active })
+          : await actions.social.follow({ kind: button.dataset.kind as "profile" | "business", id, active });
+
+    if (result.error) {
+      render(id, kind, wasActive, before);
+      if (result.error.code === "UNAUTHORIZED") {
+        window.location.href = `/ingresar?next=${encodeURIComponent(location.pathname + location.search)}`;
+        return;
+      }
+      toast(result.error.message || "No pudimos guardar el cambio. Probá de nuevo.");
+      return;
+    }
+
+    render(id, kind, result.data.active, result.data.count);
+    if (kind === "save") toast(result.data.active ? "Guardada en tu panel → Guardados" : "Quitada de Guardados");
+  } catch {
+    render(id, kind, wasActive, before);
+    toast("Sin conexión. Probá de nuevo.");
+  } finally {
+    for (const b of document.querySelectorAll<HTMLElement>(selectorFor(button))) delete b.dataset.busy;
+  }
+});
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/services/businesses.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Business, CatalogItem } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
 const BASE_COLUMNS = `id, owner_id, slug, name, tagline, description, logo_path, cover_path, status, verification,
-  instagram, facebook, tiktok, website, hours, availability, followers_count, rating_sum, rating_count,
+  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count,
   created_at, updated_at,
   categories ( id, name, slug, seo_noun ),
   cities ( ${CITY_EMBED} ),
@@ -6546,6 +8104,42 @@ export async function getCategoryTree(supabase: SupabaseClient): Promise<Categor
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/services/home.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getFeed, type Cursor, type PostView } from "./posts";
+
+/**
+ * Feed del inicio para usuarios logueados:
+ *  - "following": publicaciones de quienes sigue + las propias.
+ *  - "featured":  si todavía no sigue a nadie, las de cuentas con plan pago.
+ *  - "latest":    si no hay destacadas (o lo que sigue no publicó nada), lo
+ *                 último publicado en WorkLink.
+ * El modo se decide en la primera página y viaja en el enlace "Cargar más".
+ */
+export type HomeMode = "following" | "featured" | "latest";
+
+export const HOME_MODES: HomeMode[] = ["following", "featured", "latest"];
+
+export async function getHomeFeed(
+  supabase: SupabaseClient,
+  { followingCount, mode, cursor }: { followingCount: number; mode?: HomeMode | null; cursor?: Cursor | null },
+): Promise<{ mode: HomeMode; posts: PostView[]; nextCursor: string | null }> {
+  if (mode) {
+    const page = await getFeed(supabase, { following: mode === "following", featured: mode === "featured", cursor });
+    return { mode, ...page };
+  }
+
+  if (followingCount > 0) {
+    const page = await getFeed(supabase, { following: true });
+    if (page.posts.length) return { mode: "following", ...page };
+  } else {
+    const page = await getFeed(supabase, { featured: true });
+    if (page.posts.length) return { mode: "featured", ...page };
+  }
+  return { mode: "latest", ...(await getFeed(supabase, {})) };
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/services/locations.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CityRef } from "../types/domain";
@@ -6600,6 +8194,17 @@ export interface PostMediaView {
   bytes: number;
 }
 
+export type ProfileSituation = "job_seeking" | "entrepreneur" | "freelancer" | "hiring";
+
+export interface PostAuthor {
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  situation: ProfileSituation | null;
+  headline: string | null;
+}
+
 export interface PostView {
   id: string;
   type: PostType;
@@ -6617,7 +8222,8 @@ export interface PostView {
   city_id: number | null;
   likes_count: number;
   comments_count: number;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+  saves_count: number;
+  author: PostAuthor | null;
   business: { slug: string; name: string; logo_path: string | null; verification: string } | null;
   city: { name: string; slug: string; provinces: { name: string } | null } | null;
   category: { name: string; slug: string } | null;
@@ -6626,8 +8232,8 @@ export interface PostView {
 }
 
 const POST_COLUMNS = `id, type, title, body, price, currency, tags, status, published_at, author_id, business_id,
-  category_id, subcategory_id, city_id, likes_count, comments_count,
-  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path ),
+  category_id, subcategory_id, city_id, likes_count, comments_count, saves_count,
+  author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path, situation, headline ),
   business:businesses ( slug, name, logo_path, verification ),
   city:cities ( name, slug, provinces ( name ) ),
   category:categories ( name, slug ),
@@ -6681,14 +8287,33 @@ export interface FeedFilters {
   type?: PostType | null;
   businessId?: string | null;
   authorId?: string | null;
+  /** Solo publicaciones personales (sin emprendimiento). */
+  personalOnly?: boolean;
+  /** Solo de personas y emprendimientos que sigue el usuario actual (y las propias). */
+  following?: boolean;
+  /** Solo de cuentas con plan pago (destacadas del inicio). */
+  featured?: boolean;
   cursor?: Cursor | null;
   limit?: number;
 }
 
 export async function getFeed(
   supabase: SupabaseClient,
-  { type, businessId, authorId, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
+  { type, businessId, authorId, personalOnly, following, featured, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
 ): Promise<{ posts: PostView[]; nextCursor: string | null }> {
+  // "Siguiendo" y "Destacadas": la base devuelve los ids de la página (ya
+  // filtrados) y después se traen esas publicaciones con todos sus datos.
+  let followingIds: string[] | null = null;
+  if (following || featured) {
+    const page = { p_before_at: cursor?.publishedAt ?? null, p_before_id: cursor?.id ?? null, p_limit: limit + 1 };
+    const { data, error } = following
+      ? await supabase.rpc("following_feed_ids", { p_type: type ?? null, ...page })
+      : await supabase.rpc("featured_feed_ids", page);
+    if (error) throw error;
+    followingIds = ((data ?? []) as { id: string }[]).map((row) => row.id);
+    if (!followingIds.length) return { posts: [], nextCursor: null };
+  }
+
   let query = supabase
     .from("posts")
     .select(POST_COLUMNS)
@@ -6699,10 +8324,12 @@ export async function getFeed(
     .order("position", { referencedTable: "post_media" })
     .limit(limit + 1);
 
+  if (followingIds) query = query.in("id", followingIds);
   if (type) query = query.eq("type", type);
   if (businessId) query = query.eq("business_id", businessId);
   if (authorId) query = query.eq("author_id", authorId);
-  if (cursor) {
+  if (personalOnly) query = query.is("business_id", null);
+  if (cursor && !followingIds) {
     query = query.or(
       `published_at.lt."${cursor.publishedAt}",and(published_at.eq."${cursor.publishedAt}",id.lt.${cursor.id})`,
     );
@@ -6712,7 +8339,7 @@ export async function getFeed(
   if (error) throw error;
 
   const rows = (data ?? []) as unknown as Row[];
-  const hasMore = rows.length > limit;
+  const hasMore = followingIds ? followingIds.length > limit : rows.length > limit;
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
   return {
@@ -6734,6 +8361,24 @@ export async function getPost(supabase: SupabaseClient, id: string): Promise<Pos
   if (!data) return null;
   const post = toPost(data as unknown as Row);
   return isVisible(post) || post.status !== "published" ? post : null;
+}
+
+/**
+ * Varias publicaciones por id, en el mismo orden pedido (para "Guardados").
+ * Las que ya no son visibles (ocultas, eliminadas) se omiten.
+ */
+export async function getPostsByIds(supabase: SupabaseClient, ids: string[]): Promise<PostView[]> {
+  if (!ids.length) return [];
+  const { data, error } = await supabase
+    .from("posts")
+    .select(POST_COLUMNS)
+    .in("id", ids)
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .order("position", { referencedTable: "post_media" });
+  if (error) throw error;
+  const byId = new Map(((data ?? []) as unknown as Row[]).map((row) => [row.id, toPost(row)]));
+  return ids.map((id) => byId.get(id)).filter((post): post is PostView => Boolean(post) && isVisible(post!));
 }
 
 /** Publicaciones que el usuario puede gestionar: propias o de sus emprendimientos. */
@@ -6790,8 +8435,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
-const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, intent,
-  instagram, facebook, tiktok, website, created_at, cities ( ${CITY_EMBED} )`;
+const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, intent,
+  instagram, facebook, tiktok, website, followers_count, following_count, created_at, cities ( ${CITY_EMBED} )`;
 
 /** Columnas de contacto directo: solo para usuarios logueados (RLS por columnas). */
 const CONTACT_COLUMNS = "whatsapp, phone";
@@ -6848,6 +8493,217 @@ export function profileCompleteness(profile: Profile): { percent: number; missin
     percent: Math.round((done / (checks.length + 1)) * 100),
     missing: checks.filter(([ok]) => !ok).map(([, label]) => label),
   };
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/search.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getPostsByIds, type PostView, type ProfileSituation } from "./posts";
+
+/**
+ * Buscador básico por palabra: personas, emprendimientos y publicaciones.
+ * Usa ILIKE con índices de trigramas (rápido aun con muchos datos). En la
+ * Etapa 7 se suma relevancia, rubros y ciudades.
+ */
+
+export const SEARCH_MIN = 2;
+export const SEARCH_MAX = 100;
+
+export function normalizeQuery(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/\s+/g, " ").trim().slice(0, SEARCH_MAX);
+}
+
+export interface PersonResult {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  headline: string | null;
+  situation: ProfileSituation | null;
+  followers_count: number;
+  city: { name: string } | null;
+}
+
+export interface BusinessResult {
+  id: string;
+  slug: string;
+  name: string;
+  tagline: string | null;
+  logo_path: string | null;
+  verification: string;
+  followers_count: number;
+  category: { name: string } | null;
+  city: { name: string } | null;
+}
+
+export interface SearchResults {
+  people: PersonResult[];
+  businesses: BusinessResult[];
+  posts: PostView[];
+}
+
+/** Escapa los comodines de LIKE para buscar el texto tal cual. */
+const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+export async function search(supabase: SupabaseClient, q: string): Promise<SearchResults> {
+  if (q.length < SEARCH_MIN) return { people: [], businesses: [], posts: [] };
+
+  const [peopleIds, businesses, postIds] = await Promise.all([
+    supabase.rpc("search_profile_ids", { p_query: q, p_limit: 12 }),
+    supabase
+      .from("businesses")
+      .select("id, slug, name, tagline, logo_path, verification, followers_count, category:categories ( name ), city:cities ( name )")
+      .eq("status", "active")
+      .is("deleted_at", null)
+      .ilike("name", likePattern(q))
+      .order("followers_count", { ascending: false })
+      .limit(8),
+    supabase.rpc("search_post_ids", { p_query: q, p_limit: 20 }),
+  ]);
+  if (peopleIds.error) throw peopleIds.error;
+  if (businesses.error) throw businesses.error;
+  if (postIds.error) throw postIds.error;
+
+  const ids = ((peopleIds.data ?? []) as { id: string }[]).map((row) => row.id);
+  let people: PersonResult[] = [];
+  if (ids.length) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, first_name, last_name, avatar_path, headline, situation, followers_count, city:cities ( name )")
+      .in("id", ids);
+    if (error) throw error;
+    const byId = new Map(((data ?? []) as unknown as PersonResult[]).map((p) => [p.id, p]));
+    people = ids.map((id) => byId.get(id)).filter((p): p is PersonResult => Boolean(p));
+  }
+
+  const posts = await getPostsByIds(supabase, ((postIds.data ?? []) as { id: string }[]).map((row) => row.id));
+  return { people, businesses: (businesses.data ?? []) as unknown as BusinessResult[], posts };
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * Consultas de interacción social: me gusta, guardados, comentarios y
+ * seguimientos. Las tablas son privadas por RLS (cada uno ve lo suyo); los
+ * contadores públicos están en posts, profiles y businesses.
+ */
+
+export interface ViewerReactions {
+  liked: Set<string>;
+  saved: Set<string>;
+}
+
+const EMPTY: ViewerReactions = { liked: new Set(), saved: new Set() };
+
+/** ¿Cuáles de estas publicaciones le gustan / tiene guardadas el usuario? */
+export async function getViewerReactions(
+  supabase: SupabaseClient,
+  userId: string | null | undefined,
+  postIds: string[],
+): Promise<ViewerReactions> {
+  if (!userId || !postIds.length) return EMPTY;
+  const ids = [...new Set(postIds)];
+  const [likes, saves] = await Promise.all([
+    supabase.from("post_likes").select("post_id").eq("user_id", userId).in("post_id", ids),
+    supabase.from("post_saves").select("post_id").eq("user_id", userId).in("post_id", ids),
+  ]);
+  if (likes.error) throw likes.error;
+  if (saves.error) throw saves.error;
+  return {
+    liked: new Set((likes.data ?? []).map((row) => row.post_id as string)),
+    saved: new Set((saves.data ?? []).map((row) => row.post_id as string)),
+  };
+}
+
+/** ¿El usuario sigue a esta persona o emprendimiento? */
+export async function isFollowing(
+  supabase: SupabaseClient,
+  userId: string | null | undefined,
+  kind: "profile" | "business",
+  id: string,
+): Promise<boolean> {
+  if (!userId) return false;
+  const query =
+    kind === "profile"
+      ? supabase.from("profile_follows").select("followed_id").eq("follower_id", userId).eq("followed_id", id)
+      : supabase.from("business_follows").select("business_id").eq("follower_id", userId).eq("business_id", id);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+/** ¿Sigue a alguien? (para mostrar u ocultar la pestaña "Siguiendo" vacía). */
+export async function followsAnyone(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data, error } = await supabase.from("profiles").select("following_count").eq("id", userId).maybeSingle();
+  if (error) throw error;
+  return (data?.following_count ?? 0) > 0;
+}
+
+export interface CommentView {
+  id: string;
+  post_id: string;
+  author_id: string;
+  body: string;
+  created_at: string;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
+}
+
+export const COMMENTS_PAGE_SIZE = 50;
+
+/**
+ * Comentarios de una publicación, del más viejo al más nuevo (como una
+ * conversación). Trae los últimos `limit`; `before` pagina hacia atrás.
+ */
+export async function getComments(
+  supabase: SupabaseClient,
+  postId: string,
+  { limit = COMMENTS_PAGE_SIZE, before }: { limit?: number; before?: string | null } = {},
+): Promise<{ comments: CommentView[]; hasOlder: boolean }> {
+  let query = supabase
+    .from("post_comments")
+    .select("id, post_id, author_id, body, created_at, author:profiles!post_comments_author_id_fkey ( username, first_name, last_name, avatar_path )")
+    .eq("post_id", postId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit + 1);
+  if (before && !Number.isNaN(Date.parse(before))) query = query.lt("created_at", before);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as CommentView[];
+  return {
+    // Se omiten comentarios de cuentas suspendidas (RLS devuelve author null).
+    comments: rows.slice(0, limit).filter((c) => c.author).reverse(),
+    hasOlder: rows.length > limit,
+  };
+}
+
+export const SAVED_PAGE_SIZE = 20;
+
+/** Ids de publicaciones guardadas por el usuario, de la más reciente a la más vieja. */
+export async function getSavedPostIds(
+  supabase: SupabaseClient,
+  userId: string,
+  page: number,
+): Promise<{ ids: string[]; hasMore: boolean }> {
+  const from = (page - 1) * SAVED_PAGE_SIZE;
+  const { data, error } = await supabase
+    .from("post_saves")
+    .select("post_id")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .range(from, from + SAVED_PAGE_SIZE);
+  if (error) throw error;
+  const ids = (data ?? []).map((row) => row.post_id as string);
+  return { ids: ids.slice(0, SAVED_PAGE_SIZE), hasMore: ids.length > SAVED_PAGE_SIZE };
+}
+
+/** "1 seguidor" / "1.234 seguidores". */
+export function followersLabel(count: number): string {
+  return `${count.toLocaleString("es-AR")} ${count === 1 ? "seguidor" : "seguidores"}`;
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -7063,6 +8919,8 @@ export interface Profile {
   last_name: string | null;
   bio: string | null;
   avatar_path: string | null;
+  situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
+  headline: string | null;
   intent: "seeker" | "provider";
   city: CityRef | null;
   whatsapp?: string | null;
@@ -7071,6 +8929,8 @@ export interface Profile {
   facebook: string | null;
   tiktok: string | null;
   website: string | null;
+  followers_count: number;
+  following_count: number;
   created_at: string;
 }
 
@@ -7129,6 +8989,7 @@ export interface Business {
   hours: BusinessHours | null;
   availability: string | null;
   followers_count: number;
+  posts_count: number;
   rating_sum: number;
   rating_count: number;
   created_at: string;
@@ -7276,153 +9137,185 @@ SUPABASE_SERVICE_ROLE_KEY=
 CRON_SECRET=
 __WORKLINK_FIN_DEL_ARCHIVO__
 
-escribir 'supabase/migrations/20261008001100_posts_support.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+escribir 'supabase/migrations/20261008001300_profile_situation_home.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 -- =============================================================================
--- 0011 · Soporte para publicaciones (Etapa 5)
+-- 0013 · Situación en el perfil e inicio personalizado
 -- =============================================================================
--- * Contador businesses.posts_count mantenido por trigger (publicadas y no
---   eliminadas), para mostrarlo sin contar filas en cada visita.
--- * Al eliminar (soft delete) una publicación se desvinculan sus archivos:
---   pasan a 'orphan' y la limpieza diaria los borra de Storage.
--- * Índice para el feed filtrado por tipo.
+-- * Cada persona puede indicar su situación (busca empleo, tiene un
+--   emprendimiento, ofrece servicios, busca contratar) y su rubro ("headline",
+--   por ejemplo "Electricista matriculado"). Se muestran en el perfil y en sus
+--   publicaciones.
+-- * plan_tier en perfiles: lo administra el sistema (suscripciones, más
+--   adelante). Las publicaciones de cuentas pagas son las "destacadas" del
+--   inicio para quien todavía no sigue a nadie.
+-- * El feed "Siguiendo" incluye también las publicaciones propias.
+-- * Índices de trigramas para el buscador básico por palabra.
 -- =============================================================================
 
-create or replace function public.tg_posts_business_counter()
+create type public.profile_situation as enum ('job_seeking', 'entrepreneur', 'freelancer', 'hiring');
+
+alter table public.profiles
+  add column situation public.profile_situation,
+  add column headline  text,
+  add column plan_tier text not null default 'free',
+  add constraint profiles_headline_len check (char_length(headline) <= 80),
+  add constraint profiles_plan_tier check (plan_tier in ('free', 'pro', 'premium'));
+
+grant select (situation, headline, plan_tier) on public.profiles to anon;
+
+-- El plan solo lo cambia el sistema (pagos), nunca el usuario.
+create or replace function public.tg_profiles_protect()
 returns trigger
 language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  was_visible boolean := false;
-  is_visible  boolean := false;
-begin
-  if tg_op in ('UPDATE', 'DELETE') then
-    was_visible := old.business_id is not null and old.status = 'published' and old.deleted_at is null;
-  end if;
-  if tg_op in ('INSERT', 'UPDATE') then
-    is_visible := new.business_id is not null and new.status = 'published' and new.deleted_at is null;
-  end if;
-
-  if was_visible and not is_visible then
-    update public.businesses set posts_count = greatest(posts_count - 1, 0) where id = old.business_id;
-  elsif is_visible and not was_visible then
-    update public.businesses set posts_count = posts_count + 1 where id = new.business_id;
-  end if;
-
-  return coalesce(new, old);
-end;
-$$;
-
-create trigger posts_business_counter
-  after insert or update of status, deleted_at or delete on public.posts
-  for each row execute function public.tg_posts_business_counter();
-
--- Publicación eliminada: sus archivos quedan huérfanos para la limpieza.
-create or replace function public.tg_posts_release_media()
-returns trigger
-language plpgsql
-security definer
 set search_path = ''
 as $$
 begin
-  if new.deleted_at is not null and old.deleted_at is null then
-    delete from public.post_media where post_id = new.id;
+  if public.is_system_call() then
+    return new;
   end if;
+
+  if new.id <> old.id or new.created_at <> old.created_at then
+    raise exception 'No se pueden modificar id ni created_at' using errcode = '42501';
+  end if;
+
+  if new.followers_count <> old.followers_count
+     or new.following_count <> old.following_count
+     or new.plan_tier <> old.plan_tier then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status and not (select public.has_role('moderator')) then
+    raise exception 'Solo moderación puede cambiar el estado de una cuenta' using errcode = '42501';
+  end if;
+
   return new;
 end;
 $$;
 
-create trigger posts_release_media
-  after update of deleted_at on public.posts
-  for each row execute function public.tg_posts_release_media();
-
--- Feed filtrado por tipo ("solo Busco", "solo Promociones").
-create index if not exists posts_type_feed_idx on public.posts (type, published_at desc, id desc)
-  where status = 'published' and deleted_at is null;
-
--- Recalcula el contador por si ya existían publicaciones.
-update public.businesses b
-   set posts_count = (
-     select count(*) from public.posts p
-     where p.business_id = b.id and p.status = 'published' and p.deleted_at is null
-   );
-
 -- -----------------------------------------------------------------------------
--- Archivos de una publicación en un solo paso (alta, quitar y reordenar).
--- Cada archivo debe ser del usuario y estar libre, o ya pertenecer a esta
--- publicación. Máximo 10 fotos, o un único video.
+-- Feed "Siguiendo": ahora incluye las publicaciones propias.
 -- -----------------------------------------------------------------------------
-create or replace function public.set_post_media(p_post_id uuid, p_media_ids uuid[])
-returns void
-language plpgsql
-security definer
+create or replace function public.following_feed_ids(
+  p_type      public.post_type default null,
+  p_before_at timestamptz      default null,
+  p_before_id uuid             default null,
+  p_limit     integer          default 20
+)
+returns table (id uuid)
+language sql
+stable
+security invoker
 set search_path = ''
 as $$
-declare
-  ids     uuid[] := coalesce(p_media_ids, '{}');
-  n       integer := coalesce(array_length(p_media_ids, 1), 0);
-  videos  integer;
-begin
-  if not public.can_edit_post(p_post_id) then
-    raise exception 'No tenés permiso para editar esta publicación' using errcode = '42501';
-  end if;
-
-  if n > 10 then
-    raise exception 'Una publicación puede tener hasta 10 fotos' using errcode = '23514';
-  end if;
-
-  if (select count(distinct x) from unnest(ids) as x) <> n then
-    raise exception 'Hay archivos repetidos' using errcode = '23514';
-  end if;
-
-  if exists (
-    select 1
-    from unnest(ids) as m (id)
-    where not exists (select 1 from public.post_media pm where pm.post_id = p_post_id and pm.media_id = m.id)
-      and not exists (
-        select 1 from public.media x
-        where x.id = m.id
-          and x.owner_id = (select auth.uid())
-          and x.bucket = 'post-media'
-          and x.status in ('pending', 'orphan')
-      )
-  ) then
-    raise exception 'Archivo inválido o ajeno' using errcode = '42501';
-  end if;
-
-  select count(*) into videos from public.media where id = any (ids) and kind = 'video';
-  if videos > 1 or (videos = 1 and n > 1) then
-    raise exception 'Una publicación puede tener hasta 10 fotos o un video' using errcode = '23514';
-  end if;
-
-  -- Se reemplaza el conjunto completo: lo que sale queda 'orphan' y lo que
-  -- entra 'attached' (triggers de post_media).
-  delete from public.post_media where post_id = p_post_id;
-  insert into public.post_media (post_id, media_id, position)
-  select p_post_id, t.id, (t.ord - 1)::smallint
-  from unnest(ids) with ordinality as t (id, ord);
-end;
+  select p.id
+  from public.posts p
+  where p.status = 'published'
+    and p.deleted_at is null
+    and (p_type is null or p.type = p_type)
+    and (p_before_at is null or (p.published_at, p.id) < (p_before_at, coalesce(p_before_id, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)))
+    and (
+      p.author_id = (select auth.uid())
+      or p.author_id in (select f.followed_id from public.profile_follows f where f.follower_id = (select auth.uid()))
+      or p.business_id in (select f.business_id from public.business_follows f where f.follower_id = (select auth.uid()))
+    )
+  order by p.published_at desc, p.id desc
+  limit least(greatest(coalesce(p_limit, 20), 1), 50);
 $$;
 
-revoke execute on function public.set_post_media(uuid, uuid[]) from public, anon;
-grant  execute on function public.set_post_media(uuid, uuid[]) to authenticated;
+-- -----------------------------------------------------------------------------
+-- Destacadas: publicaciones de cuentas o emprendimientos con plan pago.
+-- -----------------------------------------------------------------------------
+create or replace function public.featured_feed_ids(
+  p_before_at timestamptz default null,
+  p_before_id uuid        default null,
+  p_limit     integer     default 20
+)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select p.id
+  from public.posts p
+  left join public.profiles a on a.id = p.author_id
+  left join public.businesses b on b.id = p.business_id
+  where p.status = 'published'
+    and p.deleted_at is null
+    and (p_before_at is null or (p.published_at, p.id) < (p_before_at, coalesce(p_before_id, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)))
+    and (coalesce(a.plan_tier, 'free') <> 'free' or coalesce(b.plan_tier, 'free') <> 'free')
+  order by p.published_at desc, p.id desc
+  limit least(greatest(coalesce(p_limit, 20), 1), 50);
+$$;
+
+revoke execute on function public.featured_feed_ids(timestamptz, uuid, integer) from public;
+grant  execute on function public.featured_feed_ids(timestamptz, uuid, integer) to anon, authenticated, service_role;
 
 -- -----------------------------------------------------------------------------
--- Corrección: las políticas de lectura de post_media y need_media se evalúan
--- también para visitantes sin cuenta (rol anon) y llaman a estas funciones.
--- Sin permiso de ejecución, la consulta falla ("permission denied"). Son
--- seguras para anon: sin sesión, auth.uid() es null y devuelven false.
+-- Buscador básico por palabra (ILIKE acelerado con índices de trigramas).
+-- La Etapa 7 suma búsqueda por relevancia, rubros y ciudades.
 -- -----------------------------------------------------------------------------
-grant execute on function public.can_edit_post(uuid)  to anon;
-grant execute on function public.is_need_author(uuid) to anon;
+create extension if not exists pg_trgm with schema extensions;
+
+create index if not exists profiles_search_trgm_idx on public.profiles
+  using gin ((coalesce(first_name, '') || ' ' || coalesce(last_name, '') || ' ' || username::text || ' ' || coalesce(headline, '')) extensions.gin_trgm_ops);
+
+create index if not exists businesses_name_trgm_idx on public.businesses
+  using gin (name extensions.gin_trgm_ops);
+
+create index if not exists posts_body_trgm_idx on public.posts
+  using gin ((coalesce(title, '') || ' ' || body) extensions.gin_trgm_ops);
+
+-- Personas que coinciden con el texto (nombre, apellido, usuario o rubro).
+-- Devuelve solo ids: la app trae después las columnas públicas (así no se
+-- exponen datos de contacto a quien no tiene permiso de verlos).
+create or replace function public.search_profile_ids(p_query text, p_limit integer default 12)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select p.id
+  from public.profiles p
+  where p.status = 'active'
+    and char_length(btrim(p_query)) >= 2
+    and (coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '') || ' ' || p.username::text || ' ' || coalesce(p.headline, ''))
+        ilike '%' || replace(replace(replace(btrim(p_query), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+  order by p.plan_tier <> 'free' desc, p.followers_count desc, p.created_at desc
+  limit least(greatest(coalesce(p_limit, 12), 1), 30);
+$$;
+
+-- Publicaciones que contienen el texto (título o cuerpo), de la más nueva a la más vieja.
+create or replace function public.search_post_ids(p_query text, p_limit integer default 20)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select p.id
+  from public.posts p
+  where p.status = 'published'
+    and p.deleted_at is null
+    and char_length(btrim(p_query)) >= 2
+    and (coalesce(p.title, '') || ' ' || p.body)
+        ilike '%' || replace(replace(replace(btrim(p_query), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+  order by p.published_at desc, p.id desc
+  limit least(greatest(coalesce(p_limit, 20), 1), 50);
+$$;
+
+revoke execute on function public.search_profile_ids(text, integer) from public;
+revoke execute on function public.search_post_ids(text, integer) from public;
+grant  execute on function public.search_profile_ids(text, integer) to anon, authenticated, service_role;
+grant  execute on function public.search_post_ids(text, integer) to anon, authenticated, service_role;
 
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 echo ""
 echo "============================================================"
-echo " Listo. 98 archivos de la Etapa 5 instalados."
+echo " Listo. 119 archivos del rediseño instalados."
 echo " Siguiente paso: subí la migración nueva a Supabase con"
 echo "     npx supabase db push"
 echo "============================================================"

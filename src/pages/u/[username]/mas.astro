@@ -1,0 +1,29 @@
+---
+/** Fragmento con la página siguiente de publicaciones de un perfil ("Cargar más"). */
+import FeedPage from "../../../components/posts/FeedPage.astro";
+import { decodeCursor, getFeed } from "../../../services/posts";
+import { getViewerReactions } from "../../../services/social";
+
+export const partial = true;
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.params.username ?? "").toLowerCase();
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+if (!/^[a-z0-9_.]{3,30}$/.test(username) || !cursor) return new Response(null, { status: 400 });
+
+const { data: profile } = await supabase.from("profiles").select("id").eq("username", username).eq("status", "active").maybeSingle();
+if (!profile) return new Response(null, { status: 404 });
+
+const { posts, nextCursor } = await getFeed(supabase, { authorId: profile.id, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
+const base = `/u/${username}`;
+
+Astro.response.headers.set("X-Robots-Tag", "noindex");
+---
+
+<FeedPage
+  posts={posts}
+  reactions={reactions}
+  nextHref={nextCursor ? `${base}?desde=${nextCursor}` : null}
+  nextFragmentHref={nextCursor ? `${base}/mas?desde=${nextCursor}` : null}
+/>

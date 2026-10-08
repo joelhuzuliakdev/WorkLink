@@ -1,6 +1,7 @@
 /**
- * Botones de me gusta, guardar y seguir (un solo manejador para toda la
- * página, así también funcionan en las tarjetas que agrega "Cargar más").
+ * Botones de me gusta, guardar, seguir y compartir, y el "Ver más" de los
+ * textos largos (un solo manejador para toda la página, así también funcionan
+ * en las tarjetas que agrega "Cargar más").
  *
  * - Cambia el botón al instante y después confirma con el servidor; si falla,
  *   vuelve al estado anterior y avisa.
@@ -27,6 +28,10 @@ function render(id: string, kind: Kind, active: boolean, count: number | null) {
     const counter = button.querySelector<HTMLElement>("[data-count]");
     if (counter && count !== null) counter.textContent = count > 0 ? numberFormat.format(count) : "";
   }
+  if (kind === "like" && count !== null) {
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-likes-for="${id}"]`)) el.textContent = numberFormat.format(count);
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-likes-wrap="${id}"]`)) el.hidden = count === 0;
+  }
   if (kind === "follow" && count !== null) {
     for (const el of document.querySelectorAll<HTMLElement>(`[data-followers="${id}"]`)) {
       el.textContent = `${numberFormat.format(count)} ${count === 1 ? "seguidor" : "seguidores"}`;
@@ -39,7 +44,9 @@ function currentCount(button: HTMLElement, kind: Kind): number | null {
     const el = document.querySelector<HTMLElement>(`[data-followers="${button.dataset.id}"]`);
     return el ? Number.parseInt(el.textContent!.replace(/\D/g, ""), 10) || 0 : null;
   }
-  const counter = button.querySelector<HTMLElement>("[data-count]");
+  const counter =
+    button.querySelector<HTMLElement>("[data-count]") ??
+    (kind === "like" ? document.querySelector<HTMLElement>(`[data-likes-for="${button.dataset.id}"]`) : null);
   return counter ? Number.parseInt(counter.textContent!.replace(/\D/g, ""), 10) || 0 : null;
 }
 
@@ -59,6 +66,43 @@ function toast(message: string) {
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => (el!.hidden = true), 3500);
 }
+
+// Compartir: menú nativo del celular si existe; si no, copia el enlace.
+document.addEventListener("click", async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-share-url]");
+  if (!button) return;
+  const url = button.dataset.shareUrl!;
+  const title = button.dataset.shareTitle ?? document.title;
+  try {
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+      await navigator.share({ title, url });
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    toast("¡Enlace copiado! Ya lo podés pegar donde quieras.");
+  } catch {
+    /* el usuario canceló */
+  }
+});
+
+// "Ver más": muestra el botón solo si el texto quedó cortado.
+function checkClamps(root: ParentNode = document) {
+  for (const text of root.querySelectorAll<HTMLElement>("[data-clamp]:not([data-clamp-checked])")) {
+    text.dataset.clampChecked = "1";
+    const more = text.parentElement?.querySelector<HTMLElement>("[data-expand]");
+    if (more && text.scrollHeight > text.clientHeight + 2) more.hidden = false;
+  }
+}
+checkClamps();
+new MutationObserver(() => checkClamps()).observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener("click", (event) => {
+  const more = (event.target as HTMLElement).closest<HTMLElement>("[data-expand]");
+  if (!more) return;
+  const text = more.parentElement?.querySelector<HTMLElement>("[data-clamp]");
+  text?.classList.remove("line-clamp-5");
+  more.hidden = true;
+});
 
 document.addEventListener("click", async (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-social]");

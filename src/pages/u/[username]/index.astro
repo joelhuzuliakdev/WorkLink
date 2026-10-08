@@ -1,0 +1,156 @@
+---
+/**
+ * Perfil de una persona (estilo Facebook): foto, nombre, rubro y situación,
+ * datos, emprendimientos y todo lo que publicó (con "Cargar más").
+ * Si es el propio perfil: botones "Editar perfil" y caja para publicar.
+ * No se indexa en buscadores (privacidad): lo indexable son los emprendimientos.
+ */
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import Button from "../../../components/ui/Button.astro";
+import FeedPage from "../../../components/posts/FeedPage.astro";
+import Composer from "../../../components/home/Composer.astro";
+import FollowButton from "../../../components/social/FollowButton.astro";
+import SituationBadge from "../../../components/social/SituationBadge.astro";
+import { decodeCursor, getFeed } from "../../../services/posts";
+import { followersLabel, getViewerReactions, isFollowing } from "../../../services/social";
+import { displayName, getPublicProfile } from "../../../services/profiles";
+import { getPublicBusinessesByOwner } from "../../../services/businesses";
+import { instagramUrl, tiktokUrl, whatsappUrl } from "../../../lib/contact";
+import { formatLocation, formatMonthYear } from "../../../lib/format";
+import { getViewerProfile } from "../../../lib/viewer";
+import { routes } from "../../../config/site";
+import Alert from "../../../components/ui/Alert.astro";
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.params.username ?? "").toLowerCase();
+if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Astro.rewrite("/404");
+
+const profile = await getPublicProfile(supabase, username, { withContact: Boolean(user) });
+if (!profile) return Astro.rewrite("/404");
+
+const isMe = user?.id === profile.id;
+const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
+const [businesses, { posts, nextCursor }, following, viewer] = await Promise.all([
+  getPublicBusinessesByOwner(supabase, profile.id),
+  getFeed(supabase, { authorId: profile.id, cursor }),
+  isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
+  isMe ? getViewerProfile(Astro.locals) : Promise.resolve(null),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
+const name = displayName(profile);
+const base = `/u/${profile.username}`;
+const location = formatLocation(profile.city);
+const firstName = profile.first_name ?? name;
+---
+
+<BaseLayout title={name} description={profile.headline ?? profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
+  <div class="h-28 bg-gradient-to-r from-brand via-seek to-offer sm:h-40" aria-hidden="true"></div>
+
+  <section class="mx-auto max-w-3xl px-4">
+    <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end">
+      <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
+      <div class="min-w-0 flex-1 sm:pb-2">
+        <h1 class="text-2xl font-bold sm:text-3xl">{name}</h1>
+        {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
+        <p class="mt-1 text-sm text-ink-muted">
+          <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
+          {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2 sm:pb-2">
+        {
+          isMe ? (
+            <>
+              <Button href="/panel/perfil">Editar perfil</Button>
+              <Button href="/panel/publicaciones/nueva" variant="secondary">Publicar</Button>
+            </>
+          ) : (
+            <>
+              <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
+              {profile.whatsapp ? (
+                <Button href={whatsappUrl(profile.whatsapp, `Hola ${firstName}, te encontré en WorkLink.`)} variant="secondary" target="_blank" rel="noopener">
+                  WhatsApp
+                </Button>
+              ) : (
+                !user && <Button href={`${routes.login}?next=${encodeURIComponent(base)}`} variant="secondary">Contactar</Button>
+              )}
+            </>
+          )
+        }
+      </div>
+    </div>
+
+    {isMe && Astro.url.searchParams.get("guardado") === "1" && <Alert tone="success" class="mt-6">Guardamos los cambios de tu perfil.</Alert>}
+
+    <div class="mt-6 grid gap-6 md:grid-cols-[260px_minmax(0,1fr)]">
+      <aside class="flex flex-col gap-4">
+        <section class="rounded-wl-lg border border-line bg-surface p-4">
+          <h2 class="font-semibold">Información</h2>
+          {profile.situation && <SituationBadge situation={profile.situation} size="md" class="mt-3" />}
+          {profile.bio && <p class="mt-3 whitespace-pre-line text-sm">{profile.bio}</p>}
+          <ul class="mt-3 flex flex-col gap-1.5 text-sm text-ink-muted">
+            {location && <li>📍 {location}</li>}
+            <li>📅 En WorkLink desde {formatMonthYear(profile.created_at)}</li>
+            {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram @{profile.instagram}</a></li>}
+            {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok @{profile.tiktok}</a></li>}
+            {profile.facebook && <li><a href={profile.facebook.startsWith("http") ? profile.facebook : `https://${profile.facebook}`} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Facebook</a></li>}
+            {profile.website && <li><a href={profile.website} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Sitio web</a></li>}
+          </ul>
+          {isMe && !profile.situation && (
+            <a href="/panel/perfil#situacion" class="mt-3 block rounded-wl bg-surface-muted px-3 py-2 text-sm">
+              <strong>Completá tu situación:</strong> ¿buscás empleo, tenés un emprendimiento u ofrecés servicios?
+            </a>
+          )}
+        </section>
+
+        {(businesses.length > 0 || isMe) && (
+          <section class="rounded-wl-lg border border-line bg-surface p-4">
+            <h2 class="font-semibold">Emprendimientos</h2>
+            {businesses.length > 0 ? (
+              <ul class="mt-3 flex flex-col gap-2">
+                {businesses.map((b) => (
+                  <li>
+                    <a href={`/e/${b.slug}`} class="flex items-center gap-3 rounded-wl p-1 hover:bg-surface-muted">
+                      <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={40} />
+                      <span class="min-w-0">
+                        <span class="block truncate text-sm font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</span>
+                        <span class="block truncate text-xs text-ink-muted">{[b.categories?.name, b.cities?.name].filter(Boolean).join(" · ")}</span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p class="mt-2 text-sm text-ink-muted">
+                Si tenés un emprendimiento, creale su página con catálogo, horarios y contacto.
+                <a href="/panel/emprendimientos/nuevo" class="font-semibold text-brand hover:underline">Crear página</a>
+              </p>
+            )}
+          </section>
+        )}
+      </aside>
+
+      <div class="flex min-w-0 flex-col gap-4 pb-16">
+        {isMe && viewer && !cursor && <Composer viewer={viewer} />}
+        <h2 class="text-lg font-semibold">Publicaciones</h2>
+        {
+          posts.length === 0 ? (
+            <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
+              {isMe ? "Todavía no publicaste nada. ¡Contá qué ofrecés o qué estás buscando!" : `${firstName} todavía no publicó nada.`}
+            </p>
+          ) : (
+            <div class="flex flex-col gap-4" data-feed>
+              <FeedPage
+                posts={posts}
+                reactions={reactions}
+                nextHref={nextCursor ? `${base}?desde=${nextCursor}` : null}
+                nextFragmentHref={nextCursor ? `${base}/mas?desde=${nextCursor}` : null}
+              />
+            </div>
+          )
+        }
+      </div>
+    </div>
+  </section>
+</BaseLayout>

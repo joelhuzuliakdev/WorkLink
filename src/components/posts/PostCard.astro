@@ -1,20 +1,22 @@
 ---
 /**
- * Tarjeta de publicación para el feed: quién publica, tipo, texto, primera
- * foto (o portada del video), precio y ciudad. Toda la tarjeta lleva a /p/...
+ * Publicación en el feed, estilo Facebook: quién publica (con su situación),
+ * cuándo y dónde, el texto con "Ver más", el mosaico de fotos o el video, y
+ * el pie con me gusta, comentar, compartir y guardar.
  */
 import Avatar from "../ui/Avatar.astro";
 import PostActions from "../social/PostActions.astro";
+import PostGallery from "./PostGallery.astro";
+import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
-import { postFileUrl, mediaSrcSet, mediaUrl } from "../../lib/media";
-import { formatMoney, formatRelative } from "../../lib/format";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
 import { businessPath, postPath, profilePath } from "../../lib/urls";
 import { displayName } from "../../services/profiles";
 
 interface Props {
   post: PostView;
-  /** true para las primeras tarjetas visibles (carga prioritaria de la imagen). */
+  /** true para las primeras publicaciones visibles (carga prioritaria de la imagen). */
   priority?: boolean;
   /** Estado del usuario actual (me gusta / guardada). */
   liked?: boolean;
@@ -24,94 +26,75 @@ interface Props {
 const { post, priority = false, liked = false, saved = false } = Astro.props;
 const href = postPath(post);
 const type = POST_TYPE_LABELS[post.type];
-const cover = post.media[0];
+const isBusiness = Boolean(post.business);
 const authorName = post.business?.name ?? (post.author ? displayName(post.author) : "");
 const authorHref = post.business ? businessPath(post.business.slug) : post.author ? profilePath(post.author.username) : null;
-const extraMedia = post.media.length - 1;
-const ratio = cover?.width && cover?.height ? Math.min(Math.max(cover.width / cover.height, 0.8), 1.91) : 4 / 3;
+const site = Astro.site ?? new URL(Astro.url.origin);
+const shareUrl = new URL(href, site).toString();
+const headline = postHeadline(post, 120);
 ---
 
-<article class="flex flex-col overflow-hidden rounded-wl-lg border border-line bg-surface">
-  <header class="flex items-center gap-3 px-4 pt-4">
+<article class="overflow-hidden rounded-wl-lg border border-line bg-surface">
+  <header class="flex items-start gap-3 px-4 pt-3">
     {
-      authorHref ? (
-        <a href={authorHref} class="flex min-w-0 flex-1 items-center gap-3">
+      authorHref && (
+        <a href={authorHref} class="shrink-0">
           <Avatar
             name={authorName}
             path={post.business?.logo_path ?? post.author?.avatar_path}
-            purpose={post.business ? "logo" : "avatar"}
-            shape={post.business ? "rounded" : "circle"}
-            size={40}
+            purpose={isBusiness ? "logo" : "avatar"}
+            shape={isBusiness ? "rounded" : "circle"}
+            size={42}
           />
-          <span class="min-w-0">
-            <span class="block truncate font-semibold">
-              {authorName}
-              {post.business?.verification === "verified" && <span class="text-seek" title="Verificado"> ✓</span>}
-            </span>
-            <span class="block truncate text-xs text-ink-muted">
-              {formatRelative(post.published_at)}{post.city && ` · ${post.city.name}`}
-            </span>
-          </span>
         </a>
-      ) : null
+      )
     }
+    <div class="min-w-0 flex-1">
+      <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
+        {authorHref ? (
+          <a href={authorHref} class="font-semibold hover:underline">{authorName}</a>
+        ) : (
+          <span class="font-semibold">{authorName}</span>
+        )}
+        {post.business?.verification === "verified" && <span class="text-seek" title="Verificado">✓</span>}
+        {!isBusiness && <SituationBadge situation={post.author?.situation} />}
+      </p>
+      <p class="mt-0.5 truncate text-xs text-ink-muted">
+        {!isBusiness && post.author?.headline && <>{post.author.headline} · </>}
+        <a href={href} class="hover:underline">
+          <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
+        </a>
+        {post.city && ` · ${post.city.name}`}
+      </p>
+    </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
   </header>
 
-  <a href={href} class="mt-3 flex flex-1 flex-col">
-    <div class="px-4">
-      {post.title && <h2 class="font-semibold leading-snug">{post.title}</h2>}
-      <p class:list={["whitespace-pre-line text-sm", post.title ? "mt-1 line-clamp-3 text-ink-muted" : "line-clamp-4 text-ink"]}>{post.body}</p>
-    </div>
-
+  <div class="px-4 pt-3">
+    {post.title && (
+      <h2 class="font-semibold leading-snug">
+        <a href={href} class="hover:underline">{post.title}</a>
+      </h2>
+    )}
+    <p class:list={["line-clamp-5 whitespace-pre-line break-words", post.title && "mt-1"]} data-clamp>{post.body}</p>
+    <button type="button" data-expand hidden class="mt-0.5 text-sm font-semibold text-ink-muted hover:underline">Ver más</button>
     {
-      cover && (
-        <div class="relative mt-3 w-full overflow-hidden bg-surface-muted" style={{ aspectRatio: String(ratio) }}>
-          {cover.kind === "image" ? (
-            <img
-              src={mediaUrl("post", cover.path, 960)}
-              srcset={mediaSrcSet("post", cover.path)}
-              sizes="(min-width: 768px) 600px, 100vw"
-              width={cover.width ?? undefined}
-              height={cover.height ?? undefined}
-              alt={postHeadline(post, 120)}
-              loading={priority ? "eager" : "lazy"}
-              fetchpriority={priority ? "high" : undefined}
-              decoding="async"
-              class="h-full w-full object-cover"
-            />
-          ) : (
-            <>
-              <img
-                src={postFileUrl(cover.path, "poster.webp")}
-                alt={postHeadline(post, 120)}
-                loading={priority ? "eager" : "lazy"}
-                decoding="async"
-                class="h-full w-full object-cover"
-              />
-              <span class="absolute inset-0 grid place-items-center">
-                <span class="grid h-14 w-14 place-items-center rounded-full bg-black/60 text-2xl text-white" aria-hidden="true">▶</span>
-              </span>
-              <span class="sr-only">Video</span>
-            </>
-          )}
-          {extraMedia > 0 && (
-            <span class="absolute right-2 top-2 rounded-full bg-black/65 px-2 py-0.5 text-xs font-semibold text-white">+{extraMedia} {extraMedia === 1 ? "foto" : "fotos"}</span>
-          )}
-        </div>
+      post.price !== null && (
+        <p class="mt-2 font-semibold">
+          {formatMoney(post.price)}
+          {post.category && <span class="ml-2 text-sm font-normal text-ink-muted">{post.subcategory?.name ?? post.category.name}</span>}
+        </p>
       )
     }
+  </div>
 
-    {
-      (post.price !== null || post.category) && (
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 text-sm">
-          {post.price !== null && <span class="font-semibold">{formatMoney(post.price)}</span>}
-          {post.category && <span class="text-ink-muted">{post.subcategory?.name ?? post.category.name}</span>}
-        </div>
-      )
-    }
-    <span class="sr-only">Ver publicación</span>
-  </a>
+  {
+    post.media.length > 0 && (
+      <div class="mt-3">
+        <PostGallery media={post.media} href={href} alt={headline} priority={priority} />
+      </div>
+    )
+  }
 
-  <PostActions post={post} liked={liked} saved={saved} commentsHref={`${href}#comentarios`} class="mt-2 border-t border-line px-2 py-1.5" />
+  <PostActions post={post} liked={liked} saved={saved} postHref={href} shareUrl={shareUrl} shareTitle={`${headline} — en WorkLink`} class="mt-1" />
 </article>

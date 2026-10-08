@@ -1,0 +1,40 @@
+---
+/**
+ * Caja "¿Qué querés publicar?" (estilo Facebook). Lleva al formulario de
+ * publicación; los atajos abren el formulario con el tipo ya elegido.
+ */
+import Avatar from "../ui/Avatar.astro";
+import type { ViewerProfile } from "../../lib/viewer";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  viewer: ViewerProfile;
+  class?: string;
+}
+
+const { viewer, class: className = "" } = Astro.props;
+const name = viewer.first_name ?? viewer.username;
+const href = "/panel/publicaciones/nueva";
+const shortcut = "flex h-10 flex-1 items-center justify-center gap-2 rounded-wl text-sm font-semibold text-ink-muted hover:bg-surface-muted";
+---
+
+<section class:list={["rounded-wl-lg border border-line bg-surface p-3", className]} aria-label="Crear publicación">
+  <div class="flex items-center gap-3">
+    <a href={`/u/${viewer.username}`} class="shrink-0"><Avatar name={displayName(viewer)} path={viewer.avatar_path} size={40} /></a>
+    <a href={href} class="flex h-10 flex-1 items-center rounded-full bg-surface-muted px-4 text-ink-muted hover:bg-line/60">
+      ¿Qué querés publicar, {name}?
+    </a>
+  </div>
+  <div class="mt-2 flex gap-1 border-t border-line pt-2">
+    <a href={href} class={shortcut}>
+      <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-success stroke-2" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path stroke-linejoin="round" d="m4 17 5-4.5 3.5 3 3-2.5 4.5 4" /></svg>
+      Foto o video
+    </a>
+    <a href={`${href}?tipo=offer`} class={shortcut}>
+      <span class="text-offer" aria-hidden="true">●</span> Ofrezco
+    </a>
+    <a href={`${href}?tipo=seeking`} class={shortcut}>
+      <span class="text-seek" aria-hidden="true">●</span> Busco
+    </a>
+  </div>
+</section>

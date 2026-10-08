@@ -12,12 +12,13 @@ import { getOwnProfile } from "../../services/profiles";
 import { getCity } from "../../services/locations";
 import { mediaUrl } from "../../lib/media";
 import { getSubmittedForm } from "../../utils/form";
+import { SITUATIONS } from "../../config/situations";
 
 const { supabase, user } = Astro.locals;
 
 const result = Astro.getActionResult(actions.profile.update);
 if (result && !result.error) {
-  return Astro.redirect("/panel/perfil?guardado=1");
+  return Astro.redirect(`/u/${result.data.username}?guardado=1`);
 }
 
 const profile = await getOwnProfile(supabase, user!.id);
@@ -33,13 +34,10 @@ const v = (name: string, saved: unknown) =>
 const submittedCityId = submitted ? Number(submitted.get("city_id")) : null;
 const city = submittedCityId ? await getCity(supabase, submittedCityId) : profile.city;
 const avatarPath = v("avatar_path", profile.avatar_path) || null;
-const saved = Astro.url.searchParams.get("guardado") === "1";
+const situation = v("situation", profile.situation);
 ---
 
-<PanelLayout title="Mi perfil" description="Así te ven las personas en WorkLink.">
-  <a slot="actions" href={`/u/${profile.username}`} class="text-sm font-semibold text-brand hover:underline">Ver mi perfil público →</a>
-
-  {saved && <Alert tone="success" class="mb-6">Guardamos tu perfil.</Alert>}
+<PanelLayout title="Editar perfil" description="Así te ven las personas en WorkLink." back={{ href: `/u/${profile.username}`, label: "Volver a mi perfil" }}>
   {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
 
   <form method="POST" action={actions.profile.update} class="flex max-w-2xl flex-col gap-8" novalidate>
@@ -68,6 +66,15 @@ const saved = Astro.url.searchParams.get("guardado") === "1";
         hint="Es tu dirección pública: worklink/u/tu-usuario"
         error={err("username")}
       />
+      <Field
+        name="headline"
+        label="Tu rubro o profesión (opcional)"
+        maxlength={80}
+        placeholder="Ej.: Electricista matriculado, Diseñadora gráfica, Estudiante de enfermería"
+        value={v("headline", profile.headline)}
+        hint="Aparece debajo de tu nombre en tu perfil y en tus publicaciones."
+        error={err("headline")}
+      />
       <TextArea name="bio" label="Sobre vos (opcional)" rows={4} maxlength={500} placeholder="Contá en pocas palabras a qué te dedicás o qué estás buscando." value={v("bio", profile.bio)} error={err("bio")} />
       <CityPicker
         client:load
@@ -76,6 +83,30 @@ const saved = Astro.url.searchParams.get("guardado") === "1";
         initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
         error={err("city_id")}
       />
+    </section>
+
+    <section id="situacion" class="flex scroll-mt-24 flex-col gap-3">
+      <div>
+        <h2 class="text-lg font-semibold">Tu situación</h2>
+        <p class="text-sm text-ink-muted">Se muestra como etiqueta en tu perfil y en tus publicaciones, para que te encuentren quienes te necesitan.</p>
+      </div>
+      <fieldset class="grid gap-2 sm:grid-cols-2">
+        <legend class="sr-only">Situación</legend>
+        {SITUATIONS.map((option) => (
+          <label class="flex cursor-pointer gap-3 rounded-wl border border-line bg-surface p-3 has-[:checked]:border-brand has-[:checked]:bg-brand/5">
+            <input type="radio" name="situation" value={option.value} checked={situation === option.value} class="mt-1 accent-[var(--wl-brand)]" />
+            <span>
+              <span class="block font-semibold">{option.label}</span>
+              <span class="block text-sm text-ink-muted">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+        <label class="flex cursor-pointer items-center gap-3 rounded-wl border border-line bg-surface p-3 has-[:checked]:border-brand has-[:checked]:bg-brand/5 sm:col-span-2">
+          <input type="radio" name="situation" value="" checked={!situation} class="accent-[var(--wl-brand)]" />
+          <span class="text-sm">Prefiero no mostrarlo</span>
+        </label>
+      </fieldset>
+      {err("situation") && <p class="text-sm text-danger" role="alert">{err("situation")}</p>}
     </section>
 
     <section class="flex flex-col gap-4">

@@ -6,14 +6,14 @@ import PostForm from "../../../components/posts/PostForm.astro";
 import { getMyBusinesses } from "../../../services/businesses";
 import { getCategoryTree } from "../../../services/categories";
 import { getCity } from "../../../services/locations";
-import { getOwnProfile } from "../../../services/profiles";
+import { displayName, getOwnProfile } from "../../../services/profiles";
 import { getSubmittedForm } from "../../../utils/form";
 import { mediaItemsFromSubmitted } from "../../../lib/post-media";
 
 const { supabase, user } = Astro.locals;
 
 const result = Astro.getActionResult(actions.posts.create);
-if (result && !result.error) return Astro.redirect("/panel/publicaciones?ok=publicada");
+if (result && !result.error) return Astro.redirect("/?publicada=1");
 
 const [businesses, categories, profile] = await Promise.all([
   getMyBusinesses(supabase, user!.id),
@@ -28,10 +28,12 @@ const formError = result?.error && !isInputError(result.error) ? result.error.me
 const submittedCity = submitted ? Number(submitted.get("city_id")) : 0;
 const city = submitted ? (submittedCity ? await getCity(supabase, submittedCity) : null) : null;
 const defaultBusinessId = Astro.url.searchParams.get("emprendimiento");
-const personalCity = !businesses.length ? profile?.city ?? null : null;
+const defaultType = Astro.url.searchParams.get("tipo");
+// Por defecto se publica como persona: se usa la ciudad del perfil.
+const personalCity = defaultBusinessId ? null : (profile?.city ?? null);
 ---
 
-<PanelLayout title="Nueva publicación" back={{ href: "/panel/publicaciones", label: "Mis publicaciones" }}>
+<PanelLayout title="Crear publicación" back={{ href: "/", label: "Inicio" }}>
   {formError && <Alert tone="danger" class="mb-6">{formError}</Alert>}
   {Object.keys(fieldErrors).length > 0 && <Alert tone="danger" class="mb-6">Revisá los campos marcados.</Alert>}
   <div class="max-w-3xl">
@@ -45,6 +47,8 @@ const personalCity = !businesses.length ? profile?.city ?? null : null;
       media={submitted ? mediaItemsFromSubmitted(submitted.get("media")) : []}
       submitLabel="Publicar"
       defaultBusinessId={defaultBusinessId}
+      defaultType={defaultType}
+      personName={profile ? displayName(profile) : "Yo"}
     />
   </div>
 </PanelLayout>

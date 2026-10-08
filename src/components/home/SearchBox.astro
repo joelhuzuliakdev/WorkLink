@@ -1,0 +1,32 @@
+---
+/** Caja de búsqueda grande (inicio y /buscar). Funciona sin JavaScript. */
+interface Props {
+  value?: string;
+  autofocus?: boolean;
+  class?: string;
+}
+
+const { value = "", autofocus = false, class: className = "" } = Astro.props;
+---
+
+<form action="/buscar" method="GET" role="search" class:list={["relative", className]}>
+  <label for="search-q" class="sr-only">Buscar en WorkLink</label>
+  <svg viewBox="0 0 24 24" class="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 fill-none stroke-ink-muted stroke-2" aria-hidden="true">
+    <circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" />
+  </svg>
+  <input
+    id="search-q"
+    type="search"
+    name="q"
+    value={value}
+    maxlength={100}
+    autofocus={autofocus}
+    autocomplete="off"
+    enterkeyhint="search"
+    placeholder="Buscá personas, emprendimientos o servicios"
+    class="h-12 w-full rounded-full border border-line bg-surface pl-12 pr-28 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+  />
+  <button type="submit" class="absolute right-1.5 top-1/2 h-9 -translate-y-1/2 rounded-full bg-brand px-4 text-sm font-semibold text-brand-contrast hover:bg-brand-hover">
+    Buscar
+  </button>
+</form>

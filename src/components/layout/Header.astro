@@ -1,28 +1,54 @@
 ---
 import Logo from "../brand/Logo.astro";
 import Button from "../ui/Button.astro";
+import Avatar from "../ui/Avatar.astro";
 import { actions } from "astro:actions";
 import { routes } from "../../config/site";
+import { getViewerProfile } from "../../lib/viewer";
+import { displayName } from "../../services/profiles";
 
 const user = Astro.locals.user;
+const viewer = await getViewerProfile(Astro.locals);
 const logoutAction = `/salir${actions.auth.signOut}`;
+const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
 
 <header class="sticky top-0 z-30 border-b border-line bg-bg/85 backdrop-blur supports-[backdrop-filter]:bg-bg/70">
-  <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4">
-    <a href={routes.home} class="rounded-wl" aria-label="WorkLink, ir al inicio">
+  <div class="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4">
+    <a href={routes.home} class="shrink-0 rounded-wl" aria-label="WorkLink, ir al inicio">
       <Logo />
     </a>
 
-    <nav aria-label="Cuenta" class="flex items-center gap-2">
-      <a href="/publicaciones" class="hidden rounded-wl px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink sm:inline-block">Publicaciones</a>
+    <form action="/buscar" method="GET" role="search" class="hidden max-w-xs flex-1 md:block">
+      <label for="header-search" class="sr-only">Buscar en WorkLink</label>
+      <input
+        id="header-search"
+        type="search"
+        name="q"
+        value={query}
+        maxlength={100}
+        placeholder="Buscar personas, servicios…"
+        class="h-10 w-full rounded-full border border-line bg-surface-muted px-4 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+      />
+    </form>
+
+    <nav aria-label="Cuenta" class="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <a href="/buscar" class="grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden" aria-label="Buscar">
+        <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" /></svg>
+      </a>
       {
         user ? (
           <>
+            {viewer && (
+              <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
+                <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
+                <span class="hidden text-sm font-semibold sm:inline">{viewer.first_name ?? viewer.username}</span>
+              </a>
+            )}
             <Button href={routes.dashboard} variant="ghost" size="sm">
               Mi panel
             </Button>
-            <form method="POST" action={logoutAction}>
+            <form method="POST" action={logoutAction} class="hidden sm:block">
               <Button type="submit" variant="secondary" size="sm">
                 Salir
               </Button>
@@ -30,6 +56,7 @@ const logoutAction = `/salir${actions.auth.signOut}`;
           </>
         ) : (
           <>
+            <a href="/publicaciones" class="hidden rounded-wl px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink sm:inline-block">Publicaciones</a>
             <Button href={routes.login} variant="ghost" size="sm">
               Ingresar
             </Button>

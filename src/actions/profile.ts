@@ -27,6 +27,8 @@ export const profile = {
           first_name: input.first_name,
           last_name: input.last_name,
           bio: input.bio ?? null,
+          situation: input.situation ?? null,
+          headline: input.headline ?? null,
           city_id: input.city_id ?? null,
           // La provincia la completa la base a partir de la ciudad.
           province_id: null,
@@ -51,7 +53,7 @@ export const profile = {
         await removeMedia(supabase, "avatar", current.avatar_path);
       }
 
-      return { saved: true };
+      return { saved: true, username: input.username };
     },
   }),
 };

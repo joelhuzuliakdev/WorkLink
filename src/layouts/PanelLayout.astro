@@ -1,6 +1,7 @@
 ---
 /** Layout del área privada: navegación del panel + contenido. Siempre noindex. */
 import BaseLayout from "./BaseLayout.astro";
+import { getViewerProfile } from "../lib/viewer";
 
 interface Props {
   title: string;
@@ -13,10 +14,12 @@ interface Props {
 const { title, heading = title, description, back } = Astro.props;
 const path = Astro.url.pathname;
 
+const viewer = await getViewerProfile(Astro.locals);
+
 const links = [
-  { href: "/panel", label: "Inicio", active: path === "/panel" },
-  { href: "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
-  { href: "/panel/publicaciones", label: "Publicaciones", active: path.startsWith("/panel/publicaciones") },
+  { href: "/panel", label: "Resumen", active: path === "/panel" },
+  { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
 ];

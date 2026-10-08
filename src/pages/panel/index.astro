@@ -1,7 +1,7 @@
 ---
 /**
- * Inicio del panel: saludo, perfil completo y accesos a emprendimientos.
- * Ruta protegida por el middleware.
+ * Resumen del panel: perfil, páginas de emprendimiento y accesos.
+ * (El feed está en el inicio "/".) Ruta protegida por el middleware.
  */
 import PanelLayout from "../../layouts/PanelLayout.astro";
 import Alert from "../../components/ui/Alert.astro";
@@ -11,6 +11,7 @@ import { hasRole } from "../../lib/auth/session";
 import { displayName, getOwnProfile, profileCompleteness } from "../../services/profiles";
 import { getMyBusinesses } from "../../services/businesses";
 import { routes } from "../../config/site";
+import { actions } from "astro:actions";
 
 const { supabase, user } = Astro.locals;
 
@@ -24,6 +25,7 @@ const name = profile?.first_name ?? profile?.username ?? "";
 const completeness = profile ? profileCompleteness(profile) : { percent: 0, missing: [] };
 const isProvider = profile?.intent === "provider";
 const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
+const logoutAction = `/salir${actions.auth.signOut}`;
 ---
 
 <PanelLayout title="Mi panel" heading={`Hola${name ? `, ${name}` : ""} 👋`} description={profile ? `@${profile.username}` : undefined}>
@@ -44,19 +46,20 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
       {completeness.missing.length > 0 && (
         <p class="mt-3 text-sm text-ink-muted">Te falta: {completeness.missing.join(", ")}.</p>
       )}
-      <div class="mt-auto pt-4">
-        <Button href="/panel/perfil" variant="secondary" size="sm">{completeness.percent < 100 ? "Completar perfil" : "Editar perfil"}</Button>
+      <div class="mt-auto flex flex-wrap gap-2 pt-4">
+        {profile && <Button href={`/u/${profile.username}`} variant="secondary" size="sm">Ver mi perfil</Button>}
+        <Button href="/panel/perfil" variant="ghost" size="sm">{completeness.percent < 100 ? "Completar perfil" : "Editar perfil"}</Button>
       </div>
     </section>
 
     <section class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
-      <h2 class="font-semibold">Tus emprendimientos</h2>
+      <h2 class="font-semibold">Páginas de emprendimiento</h2>
       {
         businesses.length === 0 ? (
           <p class="mt-1 text-sm text-ink-muted">
-            {isProvider
-              ? "Creá la página de tu emprendimiento con tus servicios, productos y horarios."
-              : "¿Tenés algo para ofrecer? Podés crear un emprendimiento cuando quieras."}
+            Como una página de Facebook: si tenés un negocio o emprendimiento, creale su página con logo, catálogo de
+            productos y servicios, horarios y contacto. Podés publicar en nombre de la página y la gente la puede seguir.
+            {isProvider ? "" : " Es opcional: también podés publicar solo desde tu perfil."}
           </p>
         ) : (
           <ul class="mt-3 flex flex-col gap-2">
@@ -78,11 +81,10 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
     </section>
   </div>
 
-  <h2 class="mt-10 text-lg font-semibold">Más para hacer</h2>
-  <ul class="mt-3 grid gap-3 md:grid-cols-3">
-    <li class="rounded-wl-lg border border-line bg-surface p-4 text-sm"><strong>Publicaciones</strong><p class="text-ink-muted">Mostrá trabajos y promociones.</p><a href="/panel/publicaciones/nueva" class="mt-2 inline-block font-semibold text-brand hover:underline">Publicar ahora →</a></li>
-    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Buscador</strong><p class="text-ink-muted">Encontrá por categoría y ciudad.</p></li>
-    <li class="rounded-wl-lg border border-dashed border-line p-4 text-sm"><strong>Necesidades</strong><p class="text-ink-muted">Publicá lo que buscás y recibí propuestas.</p></li>
+  <ul class="mt-6 grid gap-3 sm:grid-cols-3">
+    <li><a href="/" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Inicio</strong><span class="block text-ink-muted">Lo que publican las cuentas que seguís.</span></a></li>
+    <li><a href="/panel/publicaciones/nueva" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Crear publicación</strong><span class="block text-ink-muted">Contá qué ofrecés o qué buscás.</span></a></li>
+    <li><a href="/panel/guardados" class="block rounded-wl-lg border border-line bg-surface p-4 text-sm hover:border-brand"><strong>Guardados</strong><span class="block text-ink-muted">Publicaciones para ver después.</span></a></li>
   </ul>
 
   {isStaff && (
@@ -90,4 +92,8 @@ const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
       <Button href={routes.admin} variant="secondary">Ir al panel administrativo</Button>
     </div>
   )}
+
+  <form method="POST" action={logoutAction} class="mt-10 border-t border-line pt-6">
+    <Button type="submit" variant="ghost" size="sm">Cerrar sesión</Button>
+  </form>
 </PanelLayout>

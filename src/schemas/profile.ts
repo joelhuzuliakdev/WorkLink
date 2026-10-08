@@ -10,6 +10,7 @@ import {
   optionalWhatsapp,
   optionalPhone,
 } from "./common";
+import { SITUATION_VALUES } from "../config/situations";
 
 const personName = (label: string) =>
   z
@@ -30,6 +31,8 @@ export const profileSchema = z.object({
   first_name: personName("nombre"),
   last_name: personName("apellido"),
   bio: optionalText(500, "La descripción"),
+  situation: z.preprocess((value) => (value === "" || value === null ? undefined : value), z.enum(SITUATION_VALUES).optional()),
+  headline: optionalText(80, "Tu rubro"),
   city_id: optionalId,
   avatar_path: optionalMediaPath,
   whatsapp: optionalWhatsapp,

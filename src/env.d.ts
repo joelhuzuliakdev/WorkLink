@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SessionUser } from "./lib/auth/session";
+import type { ViewerProfile } from "./lib/viewer";
 
 declare global {
   namespace App {
@@ -10,6 +11,8 @@ declare global {
       supabase: SupabaseClient;
       /** Usuario autenticado, o null si es un visitante. */
       user: SessionUser | null;
+      /** Perfil del usuario actual (se carga una vez, al pedirlo). Usar getViewerProfile(). */
+      viewerProfile?: Promise<ViewerProfile | null>;
     }
   }
 }

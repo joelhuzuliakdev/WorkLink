@@ -28,7 +28,7 @@ const reactions = await getViewerReactions(supabase, user!.id, posts.map((p) => 
       </div>
     ) : (
       <>
-        <div class="grid items-start gap-4 md:grid-cols-2">
+        <div class="flex max-w-2xl flex-col gap-4">
           {posts.map((post) => (
             <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
           ))}

@@ -10,6 +10,7 @@ import Avatar from "../../components/ui/Avatar.astro";
 import Button from "../../components/ui/Button.astro";
 import PostCard from "../../components/posts/PostCard.astro";
 import PostActions from "../../components/social/PostActions.astro";
+import SituationBadge from "../../components/social/SituationBadge.astro";
 import FollowButton from "../../components/social/FollowButton.astro";
 import CommentsSection from "../../components/social/CommentsSection.astro";
 import { getComments, getViewerReactions, isFollowing } from "../../services/social";
@@ -119,7 +120,11 @@ const jsonLd =
             size={48}
           />
           <span class="min-w-0">
-            <span class="block truncate font-semibold">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
+            <span class="flex flex-wrap items-center gap-x-2 font-semibold">
+              <span class="truncate">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
+              {!post.business && <SituationBadge situation={post.author?.situation} />}
+            </span>
+            {!post.business && post.author?.headline && <span class="block truncate text-sm text-ink-muted">{post.author.headline}</span>}
             <span class="block text-sm text-ink-muted">
               <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
               {post.city && ` · ${post.city.name}`}
@@ -201,9 +206,11 @@ const jsonLd =
         post={post}
         liked={reactions.liked.has(post.id)}
         saved={reactions.saved.has(post.id)}
+        postHref={canonical}
+        shareUrl={absoluteUrl}
+        shareTitle={shareText}
         commentsHref="#comentarios"
-        size="lg"
-        class="mt-6 border-y border-line py-1"
+        class="-mx-3 mt-6 border-b border-line"
       />
     )}
 
@@ -214,7 +221,6 @@ const jsonLd =
         <Button href={profilePath(post.author.username)} size="lg">Ver perfil de {displayName(post.author)}</Button>
       ) : null}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
-      <Button variant="ghost" size="lg" data-share={absoluteUrl} data-share-title={shareText}>Copiar enlace</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
     </div>
 
@@ -235,9 +241,9 @@ const jsonLd =
 
   {
     more.length > 0 && post.business && (
-      <section class="mx-auto max-w-5xl px-4 pb-16">
+      <section class="mx-auto max-w-2xl px-4 pb-16">
         <h2 class="mb-4 text-lg font-semibold">Más de {post.business.name}</h2>
-        <div class="grid gap-4 md:grid-cols-3">
+        <div class="flex flex-col gap-4">
           {more.map((item) => <PostCard post={item} liked={reactions.liked.has(item.id)} saved={reactions.saved.has(item.id)} />)}
         </div>
       </section>
@@ -245,24 +251,3 @@ const jsonLd =
   }
 </BaseLayout>
 
-<script>
-  // Compartir: menú nativo del celular si existe; si no, copia el enlace.
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-share]")) {
-    button.addEventListener("click", async () => {
-      const url = button.dataset.share!;
-      const title = button.dataset.shareTitle ?? document.title;
-      try {
-        if (navigator.share) {
-          await navigator.share({ title, url });
-          return;
-        }
-        await navigator.clipboard.writeText(url);
-        const original = button.textContent;
-        button.textContent = "¡Enlace copiado!";
-        setTimeout(() => (button.textContent = original), 2000);
-      } catch {
-        /* el usuario canceló */
-      }
-    });
-  }
-</script>

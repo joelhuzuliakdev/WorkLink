@@ -168,7 +168,7 @@ const jsonLd = [
                 {canEdit && <Button href={`/panel/publicaciones/nueva?emprendimiento=${business.id}`} variant="secondary" size="sm">Publicar</Button>}
               </div>
               {businessPosts.length > 0 ? (
-                <div class="grid items-start gap-4 sm:grid-cols-2">
+                <div class="flex flex-col gap-4">
                   {businessPosts.map((post) => <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />)}
                 </div>
               ) : (

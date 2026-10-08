@@ -1,9 +1,10 @@
 ---
 /**
- * Barra de acciones de una publicación: me gusta (con cantidad), comentarios
- * (con cantidad, lleva a la sección de comentarios) y guardar.
- * Con sesión son botones (los maneja scripts/social.ts); sin sesión, enlaces
- * a /ingresar que vuelven a esta página.
+ * Pie de una publicación (estilo Facebook):
+ *  - fila de totales: ♥ cantidad de me gusta · N comentarios
+ *  - botones: Me gusta · Comentar · Compartir · Guardar
+ * Con sesión, Me gusta y Guardar son botones (los maneja scripts/social.ts);
+ * sin sesión, llevan a /ingresar y vuelven a la publicación.
  */
 import { routes } from "../../config/site";
 
@@ -11,84 +12,103 @@ interface Props {
   post: { id: string; likes_count: number; comments_count: number };
   liked?: boolean;
   saved?: boolean;
-  /** Enlace a los comentarios (en el feed, la página de la publicación). */
-  commentsHref: string;
-  size?: "sm" | "lg";
+  /** Página de la publicación (sin #). */
+  postHref: string;
+  /** URL absoluta para compartir. */
+  shareUrl: string;
+  shareTitle: string;
+  /** En la página de la publicación, "Comentar" baja al formulario. */
+  commentsHref?: string;
   class?: string;
 }
 
-const { post, liked = false, saved = false, commentsHref, size = "sm", class: className = "" } = Astro.props;
+const { post, liked = false, saved = false, postHref, shareUrl, shareTitle, commentsHref = `${postHref}#comentarios`, class: className = "" } =
+  Astro.props;
 const loggedIn = Boolean(Astro.locals.user);
-// Sin sesión: ingresar y volver a la publicación.
-const loginHref = `${routes.login}?next=${encodeURIComponent(commentsHref.split("#")[0])}`;
-const fmt = (n: number) => (n > 0 ? n.toLocaleString("es-AR") : "");
+const loginHref = `${routes.login}?next=${encodeURIComponent(postHref)}`;
+const fmt = (n: number) => n.toLocaleString("es-AR");
 
-const base = [
-  "group inline-flex items-center gap-1.5 rounded-full font-semibold text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink",
-  size === "lg" ? "h-11 px-4 text-base" : "h-9 px-3 text-sm",
-].join(" ");
-const icon = size === "lg" ? "h-6 w-6" : "h-5 w-5";
+const action =
+  "group flex h-10 min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-wl text-[13px] font-semibold text-ink-muted transition-colors hover:bg-surface-muted sm:gap-1.5 sm:text-sm";
+const icon = "h-[18px] w-[18px] shrink-0 fill-none stroke-current stroke-2 sm:h-5 sm:w-5";
+const heart = "M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.9 4.5 7.3 4.5c2 0 3.6 1.1 4.7 2.8 1.1-1.7 2.7-2.8 4.7-2.8 3.4 0 5.7 3.3 4.5 6.7-1.7 4.7-9.2 9.3-9.2 9.3Z";
+const bookmark = "M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1Z";
 ---
 
-<div class:list={["flex items-center gap-1", className]}>
-  {
-    loggedIn ? (
-      <button
-        type="button"
-        class:list={[base, "aria-pressed:text-danger"]}
-        data-social="like"
-        data-id={post.id}
-        aria-pressed={liked ? "true" : "false"}
-        aria-label="Me gusta"
-      >
-        <svg viewBox="0 0 24 24" class:list={[icon, "fill-none stroke-current stroke-2 group-aria-pressed:fill-current"]} aria-hidden="true">
-          <path stroke-linejoin="round" d="M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.9 4.5 7.3 4.5c2 0 3.6 1.1 4.7 2.8 1.1-1.7 2.7-2.8 4.7-2.8 3.4 0 5.7 3.3 4.5 6.7-1.7 4.7-9.2 9.3-9.2 9.3Z" />
-        </svg>
-        <span data-count>{fmt(post.likes_count)}</span>
-      </button>
-    ) : (
-      <a href={loginHref} class={base} aria-label="Me gusta (ingresá para reaccionar)">
-        <svg viewBox="0 0 24 24" class:list={[icon, "fill-none stroke-current stroke-2"]} aria-hidden="true">
-          <path stroke-linejoin="round" d="M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.9 4.5 7.3 4.5c2 0 3.6 1.1 4.7 2.8 1.1-1.7 2.7-2.8 4.7-2.8 3.4 0 5.7 3.3 4.5 6.7-1.7 4.7-9.2 9.3-9.2 9.3Z" />
-        </svg>
-        <span>{fmt(post.likes_count)}</span>
-      </a>
-    )
-  }
+<div class:list={["px-1.5 sm:px-3", className]}>
+  <div class="flex min-h-9 items-center justify-between gap-3 px-1 text-sm text-ink-muted">
+    <span data-likes-wrap={post.id} hidden={post.likes_count === 0} class="inline-flex items-center gap-1.5">
+      <span class="grid h-5 w-5 place-items-center rounded-full bg-danger text-white" aria-hidden="true">
+        <svg viewBox="0 0 24 24" class="h-3 w-3 fill-current"><path d={heart} /></svg>
+      </span>
+      <span data-likes-for={post.id}>{fmt(post.likes_count)}</span>
+      <span class="sr-only">me gusta</span>
+    </span>
+    <span></span>
+    {
+      post.comments_count > 0 && (
+        <a href={commentsHref} class="hover:underline">
+          {fmt(post.comments_count)} {post.comments_count === 1 ? "comentario" : "comentarios"}
+        </a>
+      )
+    }
+  </div>
 
-  <a href={commentsHref} class={base} aria-label={`Comentarios (${post.comments_count})`}>
-    <svg viewBox="0 0 24 24" class:list={[icon, "fill-none stroke-current stroke-2"]} aria-hidden="true">
-      <path stroke-linejoin="round" d="M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z" />
-    </svg>
-    <span>{fmt(post.comments_count)}</span>
-  </a>
+  <div class="flex items-center border-t border-line py-1">
+    {
+      loggedIn ? (
+        <button type="button" class:list={[action, "aria-pressed:text-danger"]} data-social="like" data-id={post.id} aria-pressed={liked ? "true" : "false"}>
+          <svg viewBox="0 0 24 24" class:list={[icon, "group-aria-pressed:fill-current"]} aria-hidden="true">
+            <path stroke-linejoin="round" d={heart} />
+          </svg>
+          <span>Me gusta</span>
+        </button>
+      ) : (
+        <a href={loginHref} class={action}>
+          <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linejoin="round" d={heart} /></svg>
+          <span>Me gusta</span>
+        </a>
+      )
+    }
 
-  {
-    loggedIn ? (
-      <button
-        type="button"
-        class:list={[base, "ml-auto aria-pressed:text-brand"]}
-        data-social="save"
-        data-id={post.id}
-        aria-pressed={saved ? "true" : "false"}
-        aria-label="Guardar"
-        data-label-on="Guardada"
-        data-label-off="Guardar"
-      >
-        <svg viewBox="0 0 24 24" class:list={[icon, "fill-none stroke-current stroke-2 group-aria-pressed:fill-current"]} aria-hidden="true">
-          <path stroke-linejoin="round" d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1Z" />
-        </svg>
-        {size === "lg" && <span data-label>{saved ? "Guardada" : "Guardar"}</span>}
-      </button>
-    ) : (
-      <a href={loginHref} class:list={[base, "ml-auto"]} aria-label="Guardar (ingresá para guardar)">
-        <svg viewBox="0 0 24 24" class:list={[icon, "fill-none stroke-current stroke-2"]} aria-hidden="true">
-          <path stroke-linejoin="round" d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1Z" />
-        </svg>
-        {size === "lg" && <span>Guardar</span>}
-      </a>
-    )
-  }
+    <a href={commentsHref} class={action}>
+      <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
+        <path stroke-linejoin="round" d="M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z" />
+      </svg>
+      <span>Comentar</span>
+    </a>
+
+    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle}>
+      <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L8 8m4-4 4 4M6 12v6.5a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V12" />
+      </svg>
+      <span>Compartir</span>
+    </button>
+
+    {
+      loggedIn ? (
+        <button
+          type="button"
+          class:list={[action, "aria-pressed:text-brand"]}
+          data-social="save"
+          data-id={post.id}
+          aria-pressed={saved ? "true" : "false"}
+          data-label-on="Guardada"
+          data-label-off="Guardar"
+        >
+          <svg viewBox="0 0 24 24" class:list={[icon, "group-aria-pressed:fill-current"]} aria-hidden="true">
+            <path stroke-linejoin="round" d={bookmark} />
+          </svg>
+          <span data-label>{saved ? "Guardada" : "Guardar"}</span>
+        </button>
+      ) : (
+        <a href={loginHref} class={action}>
+          <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linejoin="round" d={bookmark} /></svg>
+          <span>Guardar</span>
+        </a>
+      )
+    }
+  </div>
 </div>
 
 <script>

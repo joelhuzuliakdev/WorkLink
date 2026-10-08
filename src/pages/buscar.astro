@@ -1,25 +1,102 @@
 ---
 /**
- * Buscador (provisional). El buscador real con Full Text Search, filtros y
- * paginación llega en la Etapa 7. Las búsquedas nunca se indexan.
+ * Buscador básico: personas, emprendimientos y publicaciones por palabra.
+ * Los resultados nunca se indexan (contenido variable y duplicado).
+ * La Etapa 7 suma filtros por rubro y ciudad, y páginas indexables.
  */
 import BaseLayout from "../layouts/BaseLayout.astro";
-import Button from "../components/ui/Button.astro";
-import { routes } from "../config/site";
+import Avatar from "../components/ui/Avatar.astro";
+import PostCard from "../components/posts/PostCard.astro";
+import SearchBox from "../components/home/SearchBox.astro";
+import SituationBadge from "../components/social/SituationBadge.astro";
+import { normalizeQuery, search, SEARCH_MIN } from "../services/search";
+import { getViewerReactions, followersLabel } from "../services/social";
+import { displayName } from "../services/profiles";
 
-const q = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
+const { supabase, user } = Astro.locals;
+const q = normalizeQuery(Astro.url.searchParams.get("q"));
+const results = await search(supabase, q);
+const reactions = await getViewerReactions(supabase, user?.id, results.posts.map((p) => p.id));
+const total = results.people.length + results.businesses.length + results.posts.length;
+const tooShort = q.length > 0 && q.length < SEARCH_MIN;
 ---
 
 <BaseLayout title={q ? `Buscar “${q}”` : "Buscar"} noindex canonicalPath="/buscar">
-  <section class="mx-auto max-w-3xl px-4 py-16 text-center">
-    <h1 class="text-3xl font-bold">Estamos preparando el buscador</h1>
-    <p class="mt-3 text-ink-muted">
-      {q ? <>Muy pronto vas a poder encontrar resultados para <strong class="text-ink">“{q}”</strong>.</> : "Muy pronto vas a poder buscar emprendedores, productos, servicios y necesidades."}
-      Mientras tanto, creá tu cuenta para ser de los primeros.
-    </p>
-    <div class="mt-8 flex justify-center gap-3">
-      <Button href={routes.signup}>Crear cuenta</Button>
-      <Button href={routes.home} variant="secondary">Volver al inicio</Button>
+  <section class="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-6">
+    <div>
+      <h1 class="sr-only">Buscar en WorkLink</h1>
+      <SearchBox value={q} autofocus={!q} />
     </div>
+
+    {
+      !q ? (
+        <p class="text-center text-ink-muted">Buscá por nombre, rubro o lo que necesitás: “electricista”, “tortas”, “diseño web”…</p>
+      ) : tooShort ? (
+        <p class="text-center text-ink-muted">Escribí al menos {SEARCH_MIN} letras.</p>
+      ) : total === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">No encontramos resultados para “{q}”</h2>
+          <p class="mt-1 text-ink-muted">Probá con otra palabra, o más corta (por ejemplo “foto” en vez de “fotógrafa profesional”).</p>
+        </div>
+      ) : (
+        <>
+          {results.people.length > 0 && (
+            <section aria-labelledby="r-personas">
+              <h2 id="r-personas" class="mb-3 text-lg font-semibold">Personas</h2>
+              <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+                {results.people.map((person) => (
+                  <li>
+                    <a href={`/u/${person.username}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
+                      <Avatar name={displayName(person)} path={person.avatar_path} size={48} />
+                      <span class="min-w-0 flex-1">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="font-semibold">{displayName(person)}</span>
+                          <SituationBadge situation={person.situation} />
+                        </span>
+                        <span class="block truncate text-sm text-ink-muted">
+                          {[person.headline, person.city?.name, followersLabel(person.followers_count)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {results.businesses.length > 0 && (
+            <section aria-labelledby="r-emprendimientos">
+              <h2 id="r-emprendimientos" class="mb-3 text-lg font-semibold">Emprendimientos</h2>
+              <ul class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+                {results.businesses.map((b) => (
+                  <li>
+                    <a href={`/e/${b.slug}`} class="flex items-center gap-3 p-3 hover:bg-surface-muted">
+                      <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={48} />
+                      <span class="min-w-0 flex-1">
+                        <span class="font-semibold">{b.name}{b.verification === "verified" && <span class="ml-1 text-seek">✓</span>}</span>
+                        <span class="block truncate text-sm text-ink-muted">
+                          {[b.category?.name, b.city?.name, followersLabel(b.followers_count)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {results.posts.length > 0 && (
+            <section aria-labelledby="r-publicaciones">
+              <h2 id="r-publicaciones" class="mb-3 text-lg font-semibold">Publicaciones</h2>
+              <div class="flex flex-col gap-4">
+                {results.posts.map((post) => (
+                  <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
+      )
+    }
   </section>
 </BaseLayout>
