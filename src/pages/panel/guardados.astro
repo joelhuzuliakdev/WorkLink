@@ -1,0 +1,46 @@
+---
+/**
+ * Publicaciones guardadas por el usuario, de la más reciente a la más vieja.
+ * Solo las ve él (RLS). Las que se ocultaron o eliminaron no aparecen.
+ */
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import PostCard from "../../components/posts/PostCard.astro";
+import { getPostsByIds } from "../../services/posts";
+import { getSavedPostIds, getViewerReactions } from "../../services/social";
+
+const { supabase, user } = Astro.locals;
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const { ids, hasMore } = await getSavedPostIds(supabase, user!.id, page);
+const posts = await getPostsByIds(supabase, ids);
+const reactions = await getViewerReactions(supabase, user!.id, posts.map((p) => p.id));
+---
+
+<PanelLayout title="Guardados" description="Las publicaciones que guardaste para ver después. Solo vos ves esta lista.">
+  {
+    posts.length === 0 && page === 1 ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <h2 class="text-lg font-semibold">Todavía no guardaste publicaciones</h2>
+        <p class="mt-1 text-ink-muted">Tocá el ícono de guardar en cualquier publicación y la vas a encontrar acá.</p>
+        <div class="mt-4">
+          <Button href="/publicaciones" variant="secondary">Ver publicaciones</Button>
+        </div>
+      </div>
+    ) : (
+      <>
+        <div class="grid items-start gap-4 md:grid-cols-2">
+          {posts.map((post) => (
+            <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />
+          ))}
+        </div>
+        {posts.length < ids.length && (
+          <p class="mt-4 text-sm text-ink-muted">Algunas publicaciones guardadas ya no están disponibles.</p>
+        )}
+        <nav class="mt-6 flex justify-between gap-4" aria-label="Páginas">
+          {page > 1 ? <Button href={`/panel/guardados?pagina=${page - 1}`} variant="secondary">← Anteriores</Button> : <span />}
+          {hasMore && <Button href={`/panel/guardados?pagina=${page + 1}`} variant="secondary">Más guardados →</Button>}
+        </nav>
+      </>
+    )
+  }
+</PanelLayout>

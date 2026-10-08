@@ -66,6 +66,9 @@ const okText: Record<string, string> = {
                 </p>
                 <p class="mt-1 truncate font-medium">{postHeadline(post, 90)}</p>
                 {post.price !== null && <p class="text-sm text-ink-muted">{formatMoney(post.price)}</p>}
+                <p class="text-xs text-ink-muted">
+                  {post.likes_count} me gusta · {post.comments_count} {post.comments_count === 1 ? "comentario" : "comentarios"} · {post.saves_count} {post.saves_count === 1 ? "guardado" : "guardados"}
+                </p>
               </div>
               <div class="flex flex-wrap gap-1">
                 <Button href={postPath(post)} variant="ghost" size="sm">Ver</Button>

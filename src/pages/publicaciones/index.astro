@@ -1,48 +1,46 @@
 ---
 /**
- * Feed público de publicaciones, del más nuevo al más viejo, 20 por página.
- * Filtro por tipo (?tipo=busco). La primera página se indexa; las siguientes
- * (?desde=...) no, para no duplicar contenido en buscadores.
+ * Feed de publicaciones, del más nuevo al más viejo, 20 por página.
+ * Filtros: por tipo (?tipo=busco) o "Siguiendo" (?ver=siguiendo, con sesión).
+ * La primera página pública se indexa; las siguientes (?desde=...) y
+ * "Siguiendo" no, para no duplicar contenido en buscadores.
  */
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Button from "../../components/ui/Button.astro";
 import FeedPage from "../../components/posts/FeedPage.astro";
-import { decodeCursor, getFeed } from "../../services/posts";
-import { POST_TYPES, type PostType } from "../../schemas/post";
+import { getFeed } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { parseFeedParams, TYPE_SLUGS } from "../../lib/feed-params";
+import { POST_TYPES } from "../../schemas/post";
+import { routes } from "../../config/site";
 
-const TYPE_SLUGS: Record<string, PostType> = {
-  ofrezco: "offer",
-  busco: "seeking",
-  productos: "product",
-  servicios: "service",
-  promociones: "promotion",
-};
+const { supabase, user } = Astro.locals;
+const { tipo, type, following, cursor, query } = parseFeedParams(Astro.url);
+if (following && !user) return Astro.redirect(`${routes.login}?next=${encodeURIComponent("/publicaciones?ver=siguiendo")}`);
 
-const tipo = Astro.url.searchParams.get("tipo") ?? "";
-const type = TYPE_SLUGS[tipo] ?? null;
-const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-const { posts, nextCursor } = await getFeed(Astro.locals.supabase, { type, cursor });
+const { posts, nextCursor } = await getFeed(supabase, { type, following, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 
-const query = (extra: Record<string, string>) => {
-  const params = new URLSearchParams({ ...(type ? { tipo } : {}), ...extra });
-  const s = params.toString();
-  return s ? `?${s}` : "";
-};
 const nextHref = nextCursor ? `/publicaciones${query({ desde: nextCursor })}` : null;
 const nextFragmentHref = nextCursor ? `/publicaciones/mas${query({ desde: nextCursor })}` : null;
 
 const filters = [
-  { slug: "", label: "Todo" },
-  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({ slug, label: POST_TYPES.find((t) => t.value === value)!.label })),
+  { href: "/publicaciones", label: "Todo", active: !type && !following },
+  ...(user ? [{ href: "/publicaciones?ver=siguiendo", label: "Siguiendo", active: following }] : []),
+  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({
+    href: `/publicaciones?tipo=${slug}`,
+    label: POST_TYPES.find((t) => t.value === value)!.label,
+    active: type === value,
+  })),
 ];
-const currentLabel = filters.find((f) => f.slug === (type ? tipo : ""))?.label ?? "Todo";
+const currentLabel = filters.find((f) => f.active)?.label ?? "Todo";
 ---
 
 <BaseLayout
-  title={type ? `Publicaciones: ${currentLabel}` : "Publicaciones"}
+  title={type || following ? `Publicaciones: ${currentLabel}` : "Publicaciones"}
   description="Lo último que publicaron emprendedores y personas en WorkLink: servicios, productos, promociones y pedidos."
   canonicalPath={`/publicaciones${type ? `?tipo=${tipo}` : ""}`}
-  noindex={Boolean(cursor)}
+  noindex={Boolean(cursor) || following}
 >
   <section class="mx-auto max-w-6xl px-4 py-8">
     <div class="flex flex-wrap items-end justify-between gap-4">
@@ -50,38 +48,45 @@ const currentLabel = filters.find((f) => f.slug === (type ? tipo : ""))?.label ?
         <h1 class="text-3xl font-bold">Publicaciones</h1>
         <p class="mt-1 text-ink-muted">Lo último que se publicó en WorkLink.</p>
       </div>
-      <Button href={Astro.locals.user ? "/panel/publicaciones/nueva" : "/registrarse"}>Publicar</Button>
+      <Button href={user ? "/panel/publicaciones/nueva" : "/registrarse"}>Publicar</Button>
     </div>
 
     <nav aria-label="Filtrar por tipo" class="mt-6 flex gap-2 overflow-x-auto pb-1">
       {
-        filters.map((filter) => {
-          const active = filter.slug === (type ? tipo : "");
-          return (
-            <a
-              href={`/publicaciones${filter.slug ? `?tipo=${filter.slug}` : ""}`}
-              aria-current={active ? "page" : undefined}
-              class:list={[
-                "whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium",
-                active ? "border-brand bg-brand text-brand-contrast" : "border-line bg-surface text-ink hover:bg-surface-muted",
-              ]}
-            >
-              {filter.label}
-            </a>
-          );
-        })
+        filters.map((filter) => (
+          <a
+            href={filter.href}
+            aria-current={filter.active ? "page" : undefined}
+            class:list={[
+              "whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium",
+              filter.active ? "border-brand bg-brand text-brand-contrast" : "border-line bg-surface text-ink hover:bg-surface-muted",
+            ]}
+          >
+            {filter.label}
+          </a>
+        ))
       }
     </nav>
 
     {
       posts.length === 0 ? (
         <div class="mt-10 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
-          <h2 class="text-lg font-semibold">Todavía no hay publicaciones {type && `de tipo “${currentLabel}”`}</h2>
-          <p class="mt-1 text-ink-muted">¡Podés ser la primera persona en publicar!</p>
+          {following ? (
+            <>
+              <h2 class="text-lg font-semibold">Todavía no hay publicaciones de las cuentas que seguís</h2>
+              <p class="mt-1 text-ink-muted">Tocá “Seguir” en los emprendimientos y personas que te interesan y vas a ver acá lo que publiquen.</p>
+              <a href="/publicaciones" class="mt-4 inline-block font-semibold text-brand">Ver todas las publicaciones →</a>
+            </>
+          ) : (
+            <>
+              <h2 class="text-lg font-semibold">Todavía no hay publicaciones {type && `de tipo “${currentLabel}”`}</h2>
+              <p class="mt-1 text-ink-muted">¡Podés ser la primera persona en publicar!</p>
+            </>
+          )}
         </div>
       ) : (
         <div class="mt-6 grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3" data-feed>
-          <FeedPage posts={posts} nextHref={nextHref} nextFragmentHref={nextFragmentHref} priorityCount={cursor ? 0 : 2} />
+          <FeedPage posts={posts} reactions={reactions} nextHref={nextHref} nextFragmentHref={nextFragmentHref} priorityCount={cursor ? 0 : 2} />
         </div>
       )
     }

@@ -29,6 +29,8 @@ export interface Profile {
   facebook: string | null;
   tiktok: string | null;
   website: string | null;
+  followers_count: number;
+  following_count: number;
   created_at: string;
 }
 
@@ -87,6 +89,7 @@ export interface Business {
   hours: BusinessHours | null;
   availability: string | null;
   followers_count: number;
+  posts_count: number;
   rating_sum: number;
   rating_count: number;
   created_at: string;

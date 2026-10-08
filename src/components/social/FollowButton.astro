@@ -1,0 +1,54 @@
+---
+/**
+ * Botón Seguir / Siguiendo para una persona o un emprendimiento.
+ * El contador de seguidores se muestra aparte con FollowersCount (mismo id),
+ * y el script lo actualiza al tocar el botón.
+ */
+import { routes } from "../../config/site";
+
+interface Props {
+  kind: "profile" | "business";
+  id: string;
+  following: boolean;
+  /** Página a la que vuelve después de ingresar. */
+  returnTo: string;
+  class?: string;
+}
+
+const { kind, id, following, returnTo, class: className = "" } = Astro.props;
+const loggedIn = Boolean(Astro.locals.user);
+const loginHref = `${routes.login}?next=${encodeURIComponent(returnTo)}`;
+
+const base =
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-wl px-4 text-sm font-semibold transition-colors";
+---
+
+{
+  loggedIn ? (
+    <button
+      type="button"
+      data-social="follow"
+      data-kind={kind}
+      data-id={id}
+      data-label-on="Siguiendo"
+      data-label-off="Seguir"
+      aria-pressed={following ? "true" : "false"}
+      class:list={[
+        base,
+        "bg-brand text-brand-contrast hover:bg-brand-hover",
+        "aria-pressed:border aria-pressed:border-line aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:hover:bg-surface-muted",
+        className,
+      ]}
+    >
+      <span data-label>{following ? "Siguiendo" : "Seguir"}</span>
+    </button>
+  ) : (
+    <a href={loginHref} class:list={[base, "bg-brand text-brand-contrast hover:bg-brand-hover", className]}>
+      Seguir
+    </a>
+  )
+}
+
+<script>
+  import "../../scripts/social";
+</script>

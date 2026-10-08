@@ -6,6 +6,10 @@
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import Button from "../../components/ui/Button.astro";
+import PostCard from "../../components/posts/PostCard.astro";
+import FollowButton from "../../components/social/FollowButton.astro";
+import { getFeed } from "../../services/posts";
+import { followersLabel, getViewerReactions, isFollowing } from "../../services/social";
 import { displayName, getPublicProfile } from "../../services/profiles";
 import { getPublicBusinessesByOwner } from "../../services/businesses";
 import { instagramUrl, tiktokUrl } from "../../lib/contact";
@@ -18,9 +22,14 @@ if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Astro.rewrite("/404");
 const profile = await getPublicProfile(supabase, username, { withContact: false });
 if (!profile) return Astro.rewrite("/404");
 
-const businesses = await getPublicBusinessesByOwner(supabase, profile.id);
-const name = displayName(profile);
 const isMe = user?.id === profile.id;
+const [businesses, { posts }, following] = await Promise.all([
+  getPublicBusinessesByOwner(supabase, profile.id),
+  getFeed(supabase, { authorId: profile.id, personalOnly: true, limit: 6 }),
+  isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
+const name = displayName(profile);
 ---
 
 <BaseLayout title={name} description={profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
@@ -32,9 +41,17 @@ const isMe = user?.id === profile.id;
         <p class="text-ink-muted">
           @{profile.username}{profile.city && ` · ${formatLocation(profile.city)}`}
         </p>
-        <p class="mt-1 text-sm text-ink-muted">En WorkLink desde {formatMonthYear(profile.created_at)}</p>
+        <p class="mt-1 text-sm text-ink-muted">
+          <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
+          {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
+          {" · "}En WorkLink desde {formatMonthYear(profile.created_at)}
+        </p>
       </div>
-      {isMe && <Button href="/panel/perfil" variant="secondary" size="sm">Editar perfil</Button>}
+      {isMe ? (
+        <Button href="/panel/perfil" variant="secondary" size="sm">Editar perfil</Button>
+      ) : (
+        <FollowButton kind="profile" id={profile.id} following={following} returnTo={`/u/${profile.username}`} />
+      )}
     </header>
 
     {profile.bio && <p class="mt-6 whitespace-pre-line">{profile.bio}</p>}
@@ -67,6 +84,17 @@ const isMe = user?.id === profile.id;
               </li>
             ))}
           </ul>
+        </section>
+      )
+    }
+
+    {
+      posts.length > 0 && (
+        <section class="mt-10">
+          <h2 class="mb-4 text-lg font-semibold">Publicaciones</h2>
+          <div class="grid items-start gap-4 sm:grid-cols-2">
+            {posts.map((post) => <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />)}
+          </div>
         </section>
       )
     }

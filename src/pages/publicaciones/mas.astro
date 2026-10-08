@@ -4,32 +4,25 @@
  * Lo pide el botón "Cargar más" de /publicaciones. No se indexa.
  */
 import FeedPage from "../../components/posts/FeedPage.astro";
-import { decodeCursor, getFeed } from "../../services/posts";
-import type { PostType } from "../../schemas/post";
+import { getFeed } from "../../services/posts";
+import { getViewerReactions } from "../../services/social";
+import { parseFeedParams } from "../../lib/feed-params";
 
 export const partial = true;
 
-const TYPE_SLUGS: Record<string, PostType> = {
-  ofrezco: "offer",
-  busco: "seeking",
-  productos: "product",
-  servicios: "service",
-  promociones: "promotion",
-};
+const { supabase, user } = Astro.locals;
+const { type, following, cursor, query } = parseFeedParams(Astro.url);
+if (!cursor || (following && !user)) return new Response(null, { status: 400 });
 
-const tipo = Astro.url.searchParams.get("tipo") ?? "";
-const type = TYPE_SLUGS[tipo] ?? null;
-const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-if (!cursor) return new Response(null, { status: 400 });
-
-const { posts, nextCursor } = await getFeed(Astro.locals.supabase, { type, cursor });
-const params = (extra: Record<string, string>) => new URLSearchParams({ ...(type ? { tipo } : {}), ...extra }).toString();
+const { posts, nextCursor } = await getFeed(supabase, { type, following, cursor });
+const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 
 Astro.response.headers.set("X-Robots-Tag", "noindex");
 ---
 
 <FeedPage
   posts={posts}
-  nextHref={nextCursor ? `/publicaciones?${params({ desde: nextCursor })}` : null}
-  nextFragmentHref={nextCursor ? `/publicaciones/mas?${params({ desde: nextCursor })}` : null}
+  reactions={reactions}
+  nextHref={nextCursor ? `/publicaciones${query({ desde: nextCursor })}` : null}
+  nextFragmentHref={nextCursor ? `/publicaciones/mas${query({ desde: nextCursor })}` : null}
 />

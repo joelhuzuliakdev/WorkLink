@@ -4,10 +4,15 @@
  * Si el texto de la URL no coincide con el actual, redirige (301) a la URL
  * canónica: así los enlaces viejos siguen funcionando y Google ve una sola.
  */
+import { actions, isInputError } from "astro:actions";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import Button from "../../components/ui/Button.astro";
 import PostCard from "../../components/posts/PostCard.astro";
+import PostActions from "../../components/social/PostActions.astro";
+import FollowButton from "../../components/social/FollowButton.astro";
+import CommentsSection from "../../components/social/CommentsSection.astro";
+import { getComments, getViewerReactions, isFollowing } from "../../services/social";
 import { getFeed, getPost, POST_TYPE_LABELS, postHeadline } from "../../services/posts";
 import { displayName } from "../../services/profiles";
 import { mediaSrcSet, mediaUrl, postFileUrl } from "../../lib/media";
@@ -25,6 +30,26 @@ if (!post) return Astro.rewrite("/404");
 const canonical = postPath(post);
 if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
 
+// Comentar / borrar comentario (formularios): si salió bien, volver a la
+// publicación con GET (así recargar no reenvía el formulario).
+const commentResult = Astro.getActionResult(actions.social.comment);
+const removeResult = Astro.getActionResult(actions.social.removeComment);
+if (commentResult && !commentResult.error) return Astro.redirect(`${canonical}#c-${commentResult.data.id}`, 303);
+if (removeResult && !removeResult.error) return Astro.redirect(`${canonical}#comentarios`, 303);
+const commentError = commentResult?.error
+  ? { message: commentResult.error.message, fields: isInputError(commentResult.error) ? commentResult.error.fields : undefined }
+  : removeResult?.error
+    ? { message: removeResult.error.message }
+    : null;
+let draft: string | undefined;
+if (commentResult?.error) {
+  try {
+    draft = String((await Astro.request.clone().formData()).get("body") ?? "");
+  } catch {
+    draft = undefined;
+  }
+}
+
 const isPublic = post.status === "published";
 const isOwner = user?.id === post.author_id;
 const type = POST_TYPE_LABELS[post.type];
@@ -38,9 +63,22 @@ const cover = post.media[0];
 const ogImage = cover ? (cover.kind === "image" ? mediaUrl("post", cover.path, 1600) : postFileUrl(cover.path, "poster.webp")) : null;
 const description = post.body.replace(/\s+/g, " ").slice(0, 155);
 
-const more = post.business_id
-  ? (await getFeed(supabase, { businessId: post.business_id, limit: 4 })).posts.filter((p) => p.id !== post.id).slice(0, 3)
-  : [];
+const before = Astro.url.searchParams.get("comentarios_antes");
+const [more, { comments, hasOlder }, following, canModerateComments] = await Promise.all([
+  post.business_id
+    ? getFeed(supabase, { businessId: post.business_id, limit: 4 }).then((r) => r.posts.filter((p) => p.id !== post.id).slice(0, 3))
+    : Promise.resolve([]),
+  getComments(supabase, post.id, { before }),
+  user
+    ? post.business_id
+      ? isFollowing(supabase, user.id, "business", post.business_id)
+      : isFollowing(supabase, user.id, "profile", post.author_id)
+    : Promise.resolve(false),
+  user ? supabase.rpc("can_edit_post", { p_post_id: post.id }).then((r) => Boolean(r.data)) : Promise.resolve(false),
+]);
+const reactions = await getViewerReactions(supabase, user?.id, [post.id, ...more.map((p) => p.id)]);
+const olderHref = hasOlder && comments[0] ? `${canonical}?comentarios_antes=${encodeURIComponent(comments[0].created_at)}#comentarios` : null;
+const showFollow = isPublic && !canModerateComments && user?.id !== post.author_id;
 
 const shareText = `${headline} — en WorkLink`;
 const whatsappShare = `https://wa.me/?text=${encodeURIComponent(`${shareText} ${absoluteUrl}`)}`;
@@ -72,7 +110,7 @@ const jsonLd =
 
     <header class="flex flex-wrap items-center gap-3">
       {authorHref && (
-        <a href={authorHref} class="flex min-w-0 flex-1 items-center gap-3">
+        <a href={authorHref} class="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
           <Avatar
             name={authorName}
             path={post.business?.logo_path ?? post.author?.avatar_path}
@@ -90,6 +128,14 @@ const jsonLd =
         </a>
       )}
       <span class:list={["rounded-full px-3 py-1 text-sm font-semibold", type.class]}>{type.label}</span>
+      {showFollow && (
+        <FollowButton
+          kind={post.business_id ? "business" : "profile"}
+          id={post.business_id ?? post.author_id}
+          following={following}
+          returnTo={canonical}
+        />
+      )}
     </header>
 
     {post.title && <h1 class="mt-6 text-2xl font-bold sm:text-3xl">{post.title}</h1>}
@@ -150,7 +196,18 @@ const jsonLd =
       )
     }
 
-    <div class="mt-8 flex flex-wrap gap-2">
+    {isPublic && (
+      <PostActions
+        post={post}
+        liked={reactions.liked.has(post.id)}
+        saved={reactions.saved.has(post.id)}
+        commentsHref="#comentarios"
+        size="lg"
+        class="mt-6 border-y border-line py-1"
+      />
+    )}
+
+    <div class="mt-6 flex flex-wrap gap-2">
       {post.business ? (
         <Button href={`${businessPath(post.business.slug)}#contacto`} size="lg">Contactar a {post.business.name}</Button>
       ) : post.author ? (
@@ -160,6 +217,20 @@ const jsonLd =
       <Button variant="ghost" size="lg" data-share={absoluteUrl} data-share-title={shareText}>Copiar enlace</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
     </div>
+
+    <div class="mt-10">
+      <CommentsSection
+        postId={post.id}
+        total={post.comments_count}
+        comments={comments}
+        olderHref={olderHref}
+        canModerate={canModerateComments}
+        open={isPublic}
+        returnTo={canonical}
+        error={commentError}
+        draft={draft}
+      />
+    </div>
   </article>
 
   {
@@ -167,7 +238,7 @@ const jsonLd =
       <section class="mx-auto max-w-5xl px-4 pb-16">
         <h2 class="mb-4 text-lg font-semibold">Más de {post.business.name}</h2>
         <div class="grid gap-4 md:grid-cols-3">
-          {more.map((item) => <PostCard post={item} />)}
+          {more.map((item) => <PostCard post={item} liked={reactions.liked.has(item.id)} saved={reactions.saved.has(item.id)} />)}
         </div>
       </section>
     )

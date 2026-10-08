@@ -4,6 +4,7 @@
  * foto (o portada del video), precio y ciudad. Toda la tarjeta lleva a /p/...
  */
 import Avatar from "../ui/Avatar.astro";
+import PostActions from "../social/PostActions.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
 import { postFileUrl, mediaSrcSet, mediaUrl } from "../../lib/media";
@@ -15,9 +16,12 @@ interface Props {
   post: PostView;
   /** true para las primeras tarjetas visibles (carga prioritaria de la imagen). */
   priority?: boolean;
+  /** Estado del usuario actual (me gusta / guardada). */
+  liked?: boolean;
+  saved?: boolean;
 }
 
-const { post, priority = false } = Astro.props;
+const { post, priority = false, liked = false, saved = false } = Astro.props;
 const href = postPath(post);
 const type = POST_TYPE_LABELS[post.type];
 const cover = post.media[0];
@@ -106,6 +110,8 @@ const ratio = cover?.width && cover?.height ? Math.min(Math.max(cover.width / co
         </div>
       )
     }
-    <span class="px-4 pb-4 pt-3 text-sm font-semibold text-brand">Ver publicación →</span>
+    <span class="sr-only">Ver publicación</span>
   </a>
+
+  <PostActions post={post} liked={liked} saved={saved} commentsHref={`${href}#comentarios`} class="mt-2 border-t border-line px-2 py-1.5" />
 </article>

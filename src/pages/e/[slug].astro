@@ -10,6 +10,8 @@ import Button from "../../components/ui/Button.astro";
 import HoursTable from "../../components/business/HoursTable.astro";
 import CatalogItemCard from "../../components/business/CatalogItemCard.astro";
 import PostCard from "../../components/posts/PostCard.astro";
+import FollowButton from "../../components/social/FollowButton.astro";
+import { followersLabel, getViewerReactions, isFollowing } from "../../services/social";
 import { getFeed } from "../../services/posts";
 import { getBusinessBySlug, getCatalog } from "../../services/businesses";
 import { mediaSrcSet, mediaUrl } from "../../lib/media";
@@ -30,10 +32,12 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }] = await Promise.all([
+const [catalog, { posts: businessPosts }, following] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
+  isFollowing(supabase, user?.id, "business", business.id),
 ]);
+const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
 const isPublic = business.status === "active";
 
 const site = Astro.site ?? new URL(Astro.url.origin);
@@ -108,8 +112,13 @@ const jsonLd = [
           <p class="mt-1 text-ink-muted">
             {[business.category?.name, location].filter(Boolean).join(" · ")}
           </p>
+          <p class="mt-1 text-sm text-ink-muted">
+            <span data-followers={business.id}>{followersLabel(business.followers_count)}</span>
+            {business.posts_count > 0 && <span> · {business.posts_count} {business.posts_count === 1 ? "publicación" : "publicaciones"}</span>}
+          </p>
         </div>
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
+          {!canEdit && isPublic && <FollowButton kind="business" id={business.id} following={following} returnTo={`/e/${business.slug}`} />}
           <Button href="#contacto" class="lg:hidden">Contactar</Button>
           {canEdit && <Button href={`/panel/emprendimientos/${business.id}`} variant="secondary">Editar</Button>}
         </div>
@@ -160,7 +169,7 @@ const jsonLd = [
               </div>
               {businessPosts.length > 0 ? (
                 <div class="grid items-start gap-4 sm:grid-cols-2">
-                  {businessPosts.map((post) => <PostCard post={post} />)}
+                  {businessPosts.map((post) => <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />)}
                 </div>
               ) : (
                 <p class="text-ink-muted">Todavía no hay publicaciones.</p>

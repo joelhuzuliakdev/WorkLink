@@ -5,18 +5,24 @@
  */
 import PostCard from "./PostCard.astro";
 import type { PostView } from "../../services/posts";
+import type { ViewerReactions } from "../../services/social";
 
 interface Props {
   posts: PostView[];
   nextHref: string | null;
   nextFragmentHref: string | null;
   priorityCount?: number;
+  reactions?: ViewerReactions;
 }
 
-const { posts, nextHref, nextFragmentHref, priorityCount = 0 } = Astro.props;
+const { posts, nextHref, nextFragmentHref, priorityCount = 0, reactions } = Astro.props;
 ---
 
-{posts.map((post, index) => <PostCard post={post} priority={index < priorityCount} />)}
+{
+  posts.map((post, index) => (
+    <PostCard post={post} priority={index < priorityCount} liked={reactions?.liked.has(post.id)} saved={reactions?.saved.has(post.id)} />
+  ))
+}
 {
   nextHref && (
     <div class="col-span-full flex justify-center pt-2" data-load-more-wrapper>

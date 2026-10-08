@@ -8,9 +8,11 @@ import Button from "../components/ui/Button.astro";
 import { routes } from "../config/site";
 import PostCard from "../components/posts/PostCard.astro";
 import { getFeed } from "../services/posts";
+import { getViewerReactions } from "../services/social";
 
 const user = Astro.locals.user;
 const { posts: latest } = await getFeed(Astro.locals.supabase, { limit: 6 });
+const reactions = await getViewerReactions(Astro.locals.supabase, Astro.locals.user?.id, latest.map((p) => p.id));
 
 const seekExamples = ["Fotógrafo para un casamiento", "Electricista", "Tortas personalizadas", "Diseño de logo"];
 const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "Clases particulares"];
@@ -93,7 +95,7 @@ const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "C
           <a href="/publicaciones" class="text-sm font-semibold text-brand hover:underline">Ver todas →</a>
         </div>
         <div class="grid items-start gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {latest.map((post) => <PostCard post={post} />)}
+          {latest.map((post) => <PostCard post={post} liked={reactions.liked.has(post.id)} saved={reactions.saved.has(post.id)} />)}
         </div>
       </section>
     )

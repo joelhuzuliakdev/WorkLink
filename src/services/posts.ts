@@ -37,6 +37,7 @@ export interface PostView {
   city_id: number | null;
   likes_count: number;
   comments_count: number;
+  saves_count: number;
   author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null } | null;
   business: { slug: string; name: string; logo_path: string | null; verification: string } | null;
   city: { name: string; slug: string; provinces: { name: string } | null } | null;
@@ -46,7 +47,7 @@ export interface PostView {
 }
 
 const POST_COLUMNS = `id, type, title, body, price, currency, tags, status, published_at, author_id, business_id,
-  category_id, subcategory_id, city_id, likes_count, comments_count,
+  category_id, subcategory_id, city_id, likes_count, comments_count, saves_count,
   author:profiles!posts_author_id_fkey ( username, first_name, last_name, avatar_path ),
   business:businesses ( slug, name, logo_path, verification ),
   city:cities ( name, slug, provinces ( name ) ),
@@ -101,14 +102,33 @@ export interface FeedFilters {
   type?: PostType | null;
   businessId?: string | null;
   authorId?: string | null;
+  /** Solo publicaciones personales (sin emprendimiento). */
+  personalOnly?: boolean;
+  /** Solo de personas y emprendimientos que sigue el usuario actual (pestaña "Siguiendo"). */
+  following?: boolean;
   cursor?: Cursor | null;
   limit?: number;
 }
 
 export async function getFeed(
   supabase: SupabaseClient,
-  { type, businessId, authorId, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
+  { type, businessId, authorId, personalOnly, following, cursor, limit = FEED_PAGE_SIZE }: FeedFilters = {},
 ): Promise<{ posts: PostView[]; nextCursor: string | null }> {
+  // "Siguiendo": la base devuelve los ids de la página (ya filtrados por los
+  // seguimientos del usuario) y después se traen esas publicaciones.
+  let followingIds: string[] | null = null;
+  if (following) {
+    const { data, error } = await supabase.rpc("following_feed_ids", {
+      p_type: type ?? null,
+      p_before_at: cursor?.publishedAt ?? null,
+      p_before_id: cursor?.id ?? null,
+      p_limit: limit + 1,
+    });
+    if (error) throw error;
+    followingIds = ((data ?? []) as { id: string }[]).map((row) => row.id);
+    if (!followingIds.length) return { posts: [], nextCursor: null };
+  }
+
   let query = supabase
     .from("posts")
     .select(POST_COLUMNS)
@@ -119,10 +139,12 @@ export async function getFeed(
     .order("position", { referencedTable: "post_media" })
     .limit(limit + 1);
 
+  if (followingIds) query = query.in("id", followingIds);
   if (type) query = query.eq("type", type);
   if (businessId) query = query.eq("business_id", businessId);
   if (authorId) query = query.eq("author_id", authorId);
-  if (cursor) {
+  if (personalOnly) query = query.is("business_id", null);
+  if (cursor && !followingIds) {
     query = query.or(
       `published_at.lt."${cursor.publishedAt}",and(published_at.eq."${cursor.publishedAt}",id.lt.${cursor.id})`,
     );
@@ -132,7 +154,7 @@ export async function getFeed(
   if (error) throw error;
 
   const rows = (data ?? []) as unknown as Row[];
-  const hasMore = rows.length > limit;
+  const hasMore = followingIds ? followingIds.length > limit : rows.length > limit;
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
   return {
@@ -154,6 +176,24 @@ export async function getPost(supabase: SupabaseClient, id: string): Promise<Pos
   if (!data) return null;
   const post = toPost(data as unknown as Row);
   return isVisible(post) || post.status !== "published" ? post : null;
+}
+
+/**
+ * Varias publicaciones por id, en el mismo orden pedido (para "Guardados").
+ * Las que ya no son visibles (ocultas, eliminadas) se omiten.
+ */
+export async function getPostsByIds(supabase: SupabaseClient, ids: string[]): Promise<PostView[]> {
+  if (!ids.length) return [];
+  const { data, error } = await supabase
+    .from("posts")
+    .select(POST_COLUMNS)
+    .in("id", ids)
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .order("position", { referencedTable: "post_media" });
+  if (error) throw error;
+  const byId = new Map(((data ?? []) as unknown as Row[]).map((row) => [row.id, toPost(row)]));
+  return ids.map((id) => byId.get(id)).filter((post): post is PostView => Boolean(post) && isVisible(post!));
 }
 
 /** Publicaciones que el usuario puede gestionar: propias o de sus emprendimientos. */
