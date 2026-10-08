@@ -223,6 +223,12 @@ const jsonLd =
       ) : null}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
+      {isOwner && (
+        <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={post.author ? `/u/${post.author.username}` : "/"}>
+          <input type="hidden" name="post_id" value={post.id} />
+          <Button type="submit" variant="ghost" size="lg" class="text-danger">Eliminar</Button>
+        </form>
+      )}
     </div>
 
     <div class="mt-10">

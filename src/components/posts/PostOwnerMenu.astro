@@ -1,0 +1,39 @@
+---
+/**
+ * Menú "⋯" de una publicación propia: Editar y Eliminar.
+ * Eliminar pide confirmación y, con JavaScript, saca la publicación de la
+ * página sin recargar (scripts/social.ts). Sin JavaScript, el formulario
+ * va a "Mis publicaciones", que la elimina y muestra el aviso.
+ */
+import { actions } from "astro:actions";
+
+interface Props {
+  postId: string;
+  /** Adónde ir después de eliminar (en la página de la publicación). */
+  redirectTo?: string;
+  class?: string;
+}
+
+const { postId, redirectTo, class: className = "" } = Astro.props;
+const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted";
+---
+
+<details class:list={["relative", className]} data-post-menu>
+  <summary
+    class="grid h-8 w-8 cursor-pointer list-none place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink [&::-webkit-details-marker]:hidden"
+    aria-label="Opciones de la publicación"
+  >
+    <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+  </summary>
+  <div class="absolute right-0 top-9 z-20 w-44 rounded-wl-lg border border-line bg-surface p-1 shadow-lg">
+    <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
+    <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
+      <input type="hidden" name="post_id" value={postId} />
+      <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
+    </form>
+  </div>
+</details>
+
+<script>
+  import "../../scripts/social";
+</script>

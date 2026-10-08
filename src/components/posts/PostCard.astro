@@ -7,6 +7,7 @@
 import Avatar from "../ui/Avatar.astro";
 import PostActions from "../social/PostActions.astro";
 import PostGallery from "./PostGallery.astro";
+import PostOwnerMenu from "./PostOwnerMenu.astro";
 import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
@@ -33,9 +34,11 @@ const profileHref = post.author ? profilePath(post.author.username) : null;
 const site = Astro.site ?? new URL(Astro.url.origin);
 const shareUrl = new URL(href, site).toString();
 const headline = postHeadline(post, 120);
+// Quien publicó ve el menú para editar o eliminar.
+const isOwner = Astro.locals.user?.id === post.author_id;
 ---
 
-<article class="overflow-hidden rounded-wl-lg border border-line bg-surface">
+<article class="rounded-wl-lg border border-line bg-surface" data-post-card>
   <header class="flex items-start gap-3 px-4 pt-3">
     {
       profileHref && (
@@ -71,6 +74,7 @@ const headline = postHeadline(post, 120);
       </p>
     </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
+    {isOwner && <PostOwnerMenu postId={post.id} class="-mr-2" />}
   </header>
 
   <div class="px-4 pt-3">

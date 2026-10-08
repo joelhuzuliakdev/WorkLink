@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 7 (buscador, directorio de rubros y localidades)
+# WorkLink · arreglo: eliminar publicaciones desde el feed, el perfil y la publicación (incluye la Etapa 7)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa7.sh
+#     bash instalar-eliminar.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
 # y .env.example, agrega scripts/importar-localidades.mjs y la migración 0014. NO toca tu .env, node_modules ni
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 7..."
+echo "Instalando archivos del arreglo..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -2125,6 +2125,7 @@ escribir 'src/components/posts/PostCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import Avatar from "../ui/Avatar.astro";
 import PostActions from "../social/PostActions.astro";
 import PostGallery from "./PostGallery.astro";
+import PostOwnerMenu from "./PostOwnerMenu.astro";
 import SituationBadge from "../social/SituationBadge.astro";
 import type { PostView } from "../../services/posts";
 import { POST_TYPE_LABELS, postHeadline } from "../../services/posts";
@@ -2151,9 +2152,11 @@ const profileHref = post.author ? profilePath(post.author.username) : null;
 const site = Astro.site ?? new URL(Astro.url.origin);
 const shareUrl = new URL(href, site).toString();
 const headline = postHeadline(post, 120);
+// Quien publicó ve el menú para editar o eliminar.
+const isOwner = Astro.locals.user?.id === post.author_id;
 ---
 
-<article class="overflow-hidden rounded-wl-lg border border-line bg-surface">
+<article class="rounded-wl-lg border border-line bg-surface" data-post-card>
   <header class="flex items-start gap-3 px-4 pt-3">
     {
       profileHref && (
@@ -2189,6 +2192,7 @@ const headline = postHeadline(post, 120);
       </p>
     </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
+    {isOwner && <PostOwnerMenu postId={post.id} class="-mr-2" />}
   </header>
 
   <div class="px-4 pt-3">
@@ -2504,6 +2508,48 @@ const sizes = (cell: string) => (cell.includes("col-span-2") ? "(min-width: 672p
       </a>
     ))
 }
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/posts/PostOwnerMenu.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Menú "⋯" de una publicación propia: Editar y Eliminar.
+ * Eliminar pide confirmación y, con JavaScript, saca la publicación de la
+ * página sin recargar (scripts/social.ts). Sin JavaScript, el formulario
+ * va a "Mis publicaciones", que la elimina y muestra el aviso.
+ */
+import { actions } from "astro:actions";
+
+interface Props {
+  postId: string;
+  /** Adónde ir después de eliminar (en la página de la publicación). */
+  redirectTo?: string;
+  class?: string;
+}
+
+const { postId, redirectTo, class: className = "" } = Astro.props;
+const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted";
+---
+
+<details class:list={["relative", className]} data-post-menu>
+  <summary
+    class="grid h-8 w-8 cursor-pointer list-none place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink [&::-webkit-details-marker]:hidden"
+    aria-label="Opciones de la publicación"
+  >
+    <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
+  </summary>
+  <div class="absolute right-0 top-9 z-20 w-44 rounded-wl-lg border border-line bg-surface p-1 shadow-lg">
+    <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
+    <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
+      <input type="hidden" name="post_id" value={postId} />
+      <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
+    </form>
+  </div>
+</details>
+
+<script>
+  import "../../scripts/social";
+</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/social/CommentsSection.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -6114,6 +6160,12 @@ const jsonLd =
       ) : null}
       <Button href={whatsappShare} variant="secondary" size="lg" target="_blank" rel="noopener">Compartir por WhatsApp</Button>
       {isOwner && <Button href={`/panel/publicaciones/${post.id}`} variant="ghost" size="lg">Editar</Button>}
+      {isOwner && (
+        <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={post.author ? `/u/${post.author.username}` : "/"}>
+          <input type="hidden" name="post_id" value={post.id} />
+          <Button type="submit" variant="ghost" size="lg" class="text-danger">Eliminar</Button>
+        </form>
+      )}
     </div>
 
     <div class="mt-10">
@@ -8837,6 +8889,41 @@ document.addEventListener("click", async (event) => {
     for (const b of document.querySelectorAll<HTMLElement>(selectorFor(button))) delete b.dataset.busy;
   }
 });
+
+// Eliminar una publicación propia: confirma, la elimina y la saca de la página.
+document.addEventListener("submit", async (event) => {
+  const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-delete-post]");
+  if (!form) return;
+  event.preventDefault();
+  if (!window.confirm("¿Eliminar esta publicación? No se puede deshacer.")) return;
+  const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    const { error } = await actions.posts.remove(new FormData(form));
+    if (error) {
+      toast(error.message || "No pudimos eliminar la publicación.");
+      if (button) button.disabled = false;
+      return;
+    }
+    if (form.dataset.redirect) {
+      window.location.href = form.dataset.redirect;
+      return;
+    }
+    const card = form.closest<HTMLElement>("[data-post-card]");
+    card?.remove();
+    toast("Eliminaste la publicación.");
+  } catch {
+    toast("Sin conexión. Probá de nuevo.");
+    if (button) button.disabled = false;
+  }
+});
+
+// Cerrar el menú "⋯" al tocar fuera de él.
+document.addEventListener("click", (event) => {
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>("details[data-post-menu][open]")) {
+    if (!menu.contains(event.target as Node)) menu.open = false;
+  }
+});
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/services/businesses.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -10806,8 +10893,7 @@ echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 129 archivos de la Etapa 7 instalados."
-echo " Siguientes pasos:"
-echo "   1) npx supabase db push"
-echo "   2) npm run db:localidades"
+echo " Listo. 130 archivos del arreglo instalados."
+echo " Si ya instalaste la Etapa 7: solo git add, commit y push."
+echo " Si no: npx supabase db push y npm run db:localidades antes."
 echo "============================================================"

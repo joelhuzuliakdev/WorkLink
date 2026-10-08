@@ -146,3 +146,38 @@ document.addEventListener("click", async (event) => {
     for (const b of document.querySelectorAll<HTMLElement>(selectorFor(button))) delete b.dataset.busy;
   }
 });
+
+// Eliminar una publicación propia: confirma, la elimina y la saca de la página.
+document.addEventListener("submit", async (event) => {
+  const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-delete-post]");
+  if (!form) return;
+  event.preventDefault();
+  if (!window.confirm("¿Eliminar esta publicación? No se puede deshacer.")) return;
+  const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    const { error } = await actions.posts.remove(new FormData(form));
+    if (error) {
+      toast(error.message || "No pudimos eliminar la publicación.");
+      if (button) button.disabled = false;
+      return;
+    }
+    if (form.dataset.redirect) {
+      window.location.href = form.dataset.redirect;
+      return;
+    }
+    const card = form.closest<HTMLElement>("[data-post-card]");
+    card?.remove();
+    toast("Eliminaste la publicación.");
+  } catch {
+    toast("Sin conexión. Probá de nuevo.");
+    if (button) button.disabled = false;
+  }
+});
+
+// Cerrar el menú "⋯" al tocar fuera de él.
+document.addEventListener("click", (event) => {
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>("details[data-post-menu][open]")) {
+    if (!menu.contains(event.target as Node)) menu.open = false;
+  }
+});
