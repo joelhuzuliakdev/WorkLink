@@ -1,0 +1,16 @@
+---
+import Logo from "../brand/Logo.astro";
+import { brand } from "../../config/brand";
+
+const year = new Date().getFullYear();
+---
+
+<footer class="mt-auto border-t border-line">
+  <div class="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 text-sm text-ink-muted sm:flex-row sm:items-center sm:justify-between">
+    <div class="flex items-center gap-3">
+      <Logo variant="mark" />
+      <p>{brand.tagline}.</p>
+    </div>
+    <p>© {year} {brand.name} · Hecho en Córdoba, Argentina</p>
+  </div>
+</footer>

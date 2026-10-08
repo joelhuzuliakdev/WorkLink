@@ -1,0 +1,51 @@
+---
+import { actions, isInputError } from "astro:actions";
+import AuthLayout from "../layouts/AuthLayout.astro";
+import Field from "../components/ui/Field.astro";
+import Button from "../components/ui/Button.astro";
+import Alert from "../components/ui/Alert.astro";
+import { routes } from "../config/site";
+import { getSubmittedValues } from "../utils/form";
+
+const result = Astro.getActionResult(actions.auth.requestPasswordReset);
+const sent = result && !result.error;
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const values = result?.error ? await getSubmittedValues(Astro.request) : {};
+---
+
+<AuthLayout
+  title="Recuperar contraseña"
+  heading="Recuperá tu contraseña"
+  subheading="Te mandamos un enlace para elegir una nueva."
+>
+  {
+    sent ? (
+      <Alert tone="success" title="Revisá tu email">
+        Si hay una cuenta con ese email, en unos minutos vas a recibir un enlace para cambiar la contraseña. Revisá
+        también la carpeta de spam.
+      </Alert>
+    ) : (
+      <>
+        {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
+        <form method="POST" action={actions.auth.requestPasswordReset} class="flex flex-col gap-4" novalidate>
+          <Field
+            name="email"
+            value={values.email}
+            label="Email de tu cuenta"
+            type="email"
+            autocomplete="email"
+            inputmode="email"
+            required
+            error={fieldErrors.email?.[0]}
+          />
+          <Button type="submit" block size="lg">Enviar enlace</Button>
+        </form>
+      </>
+    )
+  }
+
+  <Fragment slot="footer">
+    <a href={routes.login} class="font-semibold text-brand hover:underline">Volver a ingresar</a>
+  </Fragment>
+</AuthLayout>

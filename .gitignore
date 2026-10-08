@@ -1,9 +1,11 @@
 node_modules/
+dist/
+.astro/
+.vercel/
 .env
 .env.*
 !.env.example
-.vercel/
-dist/
-.astro/
+npm-debug.log*
+.DS_Store
 supabase/.branches/
 supabase/.temp/

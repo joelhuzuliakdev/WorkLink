@@ -1,0 +1,56 @@
+---
+/**
+ * Botón reutilizable. Con `href` se renderiza como enlace; sin `href`, como
+ * <button>. Variantes: primary, secondary, ghost, seek, offer.
+ */
+import type { HTMLAttributes } from "astro/types";
+
+type Variant = "primary" | "secondary" | "ghost" | "seek" | "offer";
+type Size = "sm" | "md" | "lg";
+
+type Props = {
+  variant?: Variant;
+  size?: Size;
+  href?: string;
+  block?: boolean;
+  class?: string;
+} & Omit<HTMLAttributes<"button">, "class"> &
+  Omit<HTMLAttributes<"a">, "class" | "type">;
+
+const { variant = "primary", size = "md", href, block = false, class: className = "", ...rest } = Astro.props;
+
+const variants: Record<Variant, string> = {
+  primary: "bg-brand text-brand-contrast hover:bg-brand-hover",
+  secondary: "border border-line bg-surface text-ink hover:bg-surface-muted",
+  ghost: "text-ink hover:bg-surface-muted",
+  seek: "bg-seek text-white hover:opacity-90",
+  offer: "bg-offer text-white hover:opacity-90",
+};
+
+const sizes: Record<Size, string> = {
+  sm: "h-9 px-3 text-sm",
+  md: "h-11 px-4 text-[0.95rem]",
+  lg: "h-12 px-6 text-base",
+};
+
+const classes = [
+  "inline-flex items-center justify-center gap-2 rounded-wl font-semibold transition-colors",
+  "disabled:cursor-not-allowed disabled:opacity-60",
+  variants[variant],
+  sizes[size],
+  block ? "w-full" : "",
+  className,
+];
+---
+
+{
+  href ? (
+    <a href={href} class:list={classes} {...rest}>
+      <slot />
+    </a>
+  ) : (
+    <button type="button" class:list={classes} {...rest}>
+      <slot />
+    </button>
+  )
+}

@@ -1,0 +1,12 @@
+---
+/**
+ * Cierre de sesión. El botón "Salir" envía un POST a /salir con la acción
+ * auth.signOut; esta página solo redirige. Un GET (link directo) no cierra
+ * la sesión, para que nadie pueda desloguearte con un enlace.
+ */
+import { actions } from "astro:actions";
+import { routes } from "../config/site";
+
+const result = Astro.getActionResult(actions.auth.signOut);
+return Astro.redirect(result && !result.error ? result.data.redirectTo : routes.home);
+---

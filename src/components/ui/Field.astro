@@ -1,0 +1,39 @@
+---
+/**
+ * Campo de formulario accesible: etiqueta, input, ayuda y error vinculados
+ * por aria-describedby. Acepta cualquier atributo nativo de <input>.
+ */
+import type { HTMLAttributes } from "astro/types";
+
+type Props = {
+  name: string;
+  label: string;
+  error?: string | undefined;
+  hint?: string;
+  class?: string;
+} & Omit<HTMLAttributes<"input">, "name" | "class">;
+
+const { name, label, error, hint, class: className = "", id = name, ...inputProps } = Astro.props;
+
+const hintId = hint ? `${id}-hint` : undefined;
+const errorId = error ? `${id}-error` : undefined;
+const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
+---
+
+<div class:list={["flex flex-col gap-1.5", className]}>
+  <label for={id} class="text-sm font-medium text-ink">{label}</label>
+  <input
+    id={id}
+    name={name}
+    aria-invalid={error ? "true" : undefined}
+    aria-describedby={describedBy}
+    class:list={[
+      "h-11 w-full rounded-wl border bg-surface px-3 text-base text-ink placeholder:text-ink-muted/70",
+      "transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25",
+      error ? "border-danger" : "border-line",
+    ]}
+    {...inputProps}
+  />
+  {hint && !error && <p id={hintId} class="text-xs text-ink-muted">{hint}</p>}
+  {error && <p id={errorId} class="text-sm text-danger" role="alert">{error}</p>}
+</div>

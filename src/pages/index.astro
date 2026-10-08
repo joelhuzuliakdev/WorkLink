@@ -1,16 +1,84 @@
 ---
+/**
+ * Home provisional de WorkLink: explica el concepto (necesito / ofrezco) y
+ * lleva al buscador o al registro. El buscador real llega en la Etapa 7.
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import { routes } from "../config/site";
+
+const user = Astro.locals.user;
+
+const seekExamples = ["Fotógrafo para un casamiento", "Electricista", "Tortas personalizadas", "Diseño de logo"];
+const offerExamples = ["Desarrollo web", "Pastelería", "Ropa personalizada", "Clases particulares"];
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="viewport" content="width=device-width" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro</title>
-	</head>
-	<body>
-		<h1>Astro</h1>
-	</body>
-</html>
+<BaseLayout>
+  <section class="mx-auto max-w-6xl px-4 pb-12 pt-10 sm:pt-16">
+    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">Córdoba, Argentina</p>
+    <h1 class="mt-3 max-w-3xl text-4xl font-extrabold leading-[1.05] sm:text-6xl">
+      Lo que <span class="text-seek">necesitás</span>, con quien lo <span class="text-offer">ofrece</span>.
+    </h1>
+    <p class="mt-5 max-w-2xl text-lg text-ink-muted">
+      Encontrá emprendedores, profesionales, productos y servicios cerca tuyo. O publicá lo que buscás y recibí
+      propuestas.
+    </p>
+
+    <form action="/buscar" method="GET" role="search" class="mt-8 flex max-w-2xl flex-col gap-2 sm:flex-row">
+      <label for="q" class="sr-only">¿Qué estás buscando?</label>
+      <input
+        id="q"
+        name="q"
+        type="search"
+        placeholder="¿Qué estás buscando? Ej.: fotógrafo en Córdoba"
+        autocomplete="off"
+        enterkeyhint="search"
+        class="h-13 w-full rounded-wl border border-line bg-surface px-4 text-base shadow-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+      />
+      <Button type="submit" size="lg" class="h-13 shrink-0">Buscar</Button>
+    </form>
+  </section>
+
+  <section class="mx-auto grid max-w-6xl gap-4 px-4 pb-16 md:grid-cols-2" aria-label="Cómo usar WorkLink">
+    <article class="flex flex-col rounded-wl-lg border border-line bg-seek-soft p-6 sm:p-8">
+      <h2 class="text-2xl font-bold">¿Qué estás buscando?</h2>
+      <p class="mt-2 text-ink-muted">
+        Buscá entre emprendedores de tu zona o publicá tu necesidad y dejá que te lleguen las propuestas.
+      </p>
+      <ul class="mt-5 flex flex-wrap gap-2" aria-label="Ejemplos">
+        {seekExamples.map((example) => (
+          <li>
+            <a
+              href={`/buscar?q=${encodeURIComponent(example)}`}
+              class="inline-block rounded-full border border-seek/25 bg-surface px-3 py-1.5 text-sm hover:border-seek"
+            >
+              Busco {example.toLowerCase()}
+            </a>
+          </li>
+        ))}
+      </ul>
+      <div class="mt-auto pt-6">
+        <Button href={user ? routes.dashboard : `${routes.signup}?intent=seeker`} variant="seek">
+          Publicar una necesidad
+        </Button>
+      </div>
+    </article>
+
+    <article class="flex flex-col rounded-wl-lg border border-line bg-offer-soft p-6 sm:p-8">
+      <h2 class="text-2xl font-bold">¿Qué ofrecés?</h2>
+      <p class="mt-2 text-ink-muted">
+        Creá el perfil de tu emprendimiento, mostrá tus trabajos y encontrá personas que necesitan lo que hacés.
+      </p>
+      <ul class="mt-5 flex flex-wrap gap-2" aria-label="Ejemplos">
+        {offerExamples.map((example) => (
+          <li class="rounded-full border border-offer/25 bg-surface px-3 py-1.5 text-sm">Ofrezco {example.toLowerCase()}</li>
+        ))}
+      </ul>
+      <div class="mt-auto pt-6">
+        <Button href={user ? routes.dashboard : `${routes.signup}?intent=provider`} variant="offer">
+          Crear mi emprendimiento
+        </Button>
+      </div>
+    </article>
+  </section>
+</BaseLayout>

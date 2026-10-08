@@ -1,0 +1,160 @@
+---
+import { actions, isInputError } from "astro:actions";
+import AuthLayout from "../layouts/AuthLayout.astro";
+import Field from "../components/ui/Field.astro";
+import Button from "../components/ui/Button.astro";
+import Alert from "../components/ui/Alert.astro";
+import { routes } from "../config/site";
+import { getSubmittedValues } from "../utils/form";
+
+if (Astro.locals.user) {
+    return Astro.redirect(routes.dashboard);
+}
+
+const result = Astro.getActionResult(actions.auth.signUp);
+
+// Sin confirmación de email (desarrollo): la sesión ya existe.
+if (result && !result.error && !result.data.needsConfirmation) {
+    return Astro.redirect(routes.dashboard);
+}
+
+const sentTo = result && !result.error ? result.data.email : null;
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+
+const values = result?.error ? await getSubmittedValues(Astro.request) : {};
+const preselected = (values.intent ?? Astro.url.searchParams.get("intent")) === "provider" ? "provider" : "seeker";
+
+const intents = [
+    {
+        value: "seeker",
+        title: "Necesito algo",
+        text: "Busco servicios, productos o profesionales.",
+        ring: "has-[:checked]:border-seek has-[:checked]:bg-seek-soft",
+        dot: "bg-seek",
+    },
+    {
+        value: "provider",
+        title: "Tengo algo para ofrecer",
+        text: "Tengo un emprendimiento o doy un servicio.",
+        ring: "has-[:checked]:border-offer has-[:checked]:bg-offer-soft",
+        dot: "bg-offer",
+    },
+] as const;
+---
+
+<AuthLayout
+    title="Crear cuenta"
+    heading={sentTo ? "Revisá tu email" : "Creá tu cuenta"}
+    subheading={sentTo ? undefined : "Es gratis. Podés buscar y ofrecer con la misma cuenta."}
+    >
+    {
+        sentTo ? (
+        <div class="flex flex-col gap-4">
+            <Alert tone="success" title="Te enviamos un enlace de confirmación">
+            Abrí el email que mandamos a <strong>{sentTo}</strong> y tocá el enlace para activar tu cuenta.
+            Si no aparece en unos minutos, revisá la carpeta de spam.
+            </Alert>
+            <Button href={routes.login} variant="secondary" block>
+            Ya la confirmé, ingresar
+            </Button>
+        </div>
+        ) : (
+        <>
+            {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
+
+            <form method="POST" action={actions.auth.signUp} class="flex flex-col gap-4" novalidate>
+            <fieldset class="flex flex-col gap-2">
+                <legend class="mb-2 text-sm font-medium text-ink">¿Qué venís a hacer?</legend>
+                <div class="grid gap-2 sm:grid-cols-2">
+                {intents.map((option) => (
+                    <label
+                    class:list={[
+                        "flex cursor-pointer flex-col gap-1 rounded-wl border border-line bg-surface p-3 transition-colors",
+                        "hover:bg-surface-muted has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40",
+                        option.ring,
+                    ]}
+                    >
+                    <span class="flex items-center gap-2 font-semibold">
+                        <input
+                        type="radio"
+                        name="intent"
+                        value={option.value}
+                        checked={preselected === option.value}
+                        class="sr-only"
+                        />
+                        <span class:list={["h-2.5 w-2.5 rounded-full", option.dot]} aria-hidden="true" />
+                        {option.title}
+                    </span>
+                    <span class="text-sm text-ink-muted">{option.text}</span>
+                    </label>
+                ))}
+                </div>
+                <p class="text-xs text-ink-muted">Después podés hacer las dos cosas.</p>
+                {fieldErrors.intent?.[0] && <p class="text-sm text-danger">{fieldErrors.intent[0]}</p>}
+            </fieldset>
+
+            <div class="grid gap-4 sm:grid-cols-2">
+                <Field
+                name="first_name"
+                value={values.first_name}
+                label="Nombre"
+                autocomplete="given-name"
+                required
+                maxlength={60}
+                error={fieldErrors.first_name?.[0]}
+                />
+                <Field
+                name="last_name"
+                value={values.last_name}
+                label="Apellido"
+                autocomplete="family-name"
+                required
+                maxlength={60}
+                error={fieldErrors.last_name?.[0]}
+                />
+            </div>
+            <Field
+                name="email"
+                value={values.email}
+                label="Email"
+                type="email"
+                autocomplete="email"
+                inputmode="email"
+                required
+                error={fieldErrors.email?.[0]}
+            />
+            <Field
+                name="password"
+                label="Contraseña"
+                type="password"
+                autocomplete="new-password"
+                required
+                minlength={8}
+                maxlength={72}
+                hint="Mínimo 8 caracteres, con al menos una letra y un número."
+                error={fieldErrors.password?.[0]}
+            />
+
+            <div class="flex flex-col gap-1">
+                <label class="flex items-start gap-2.5 text-sm text-ink-muted">
+                <input type="checkbox" name="accept_terms" class="mt-0.5 h-4 w-4 accent-[var(--wl-brand)]" required />
+                <span>
+                    Acepto los <a href="/terminos" class="font-medium text-brand hover:underline">términos y condiciones</a> y la{" "}
+                    <a href="/privacidad" class="font-medium text-brand hover:underline">política de privacidad</a>.
+                </span>
+                </label>
+                {fieldErrors.accept_terms?.[0] && <p class="text-sm text-danger">{fieldErrors.accept_terms[0]}</p>}
+            </div>
+
+            <Button type="submit" block size="lg">Crear cuenta</Button>
+            </form>
+        </>
+        )
+    }
+
+    <Fragment slot="footer">
+        ¿Ya tenés cuenta?
+        <a href={routes.login} class="font-semibold text-brand hover:underline">Ingresá</a>
+    </Fragment>
+</AuthLayout>

@@ -1,0 +1,28 @@
+---
+/**
+ * Panel administrativo (Etapa 12). El middleware ya verificó sesión y rol
+ * de staff contra la base; acá solo se muestra el rol actual.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const { supabase, user } = Astro.locals;
+const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
+
+const roleLabel: Record<string, string> = {
+  moderator: "Moderación",
+  admin: "Administración",
+  super_admin: "Super administración",
+};
+---
+
+<BaseLayout title="Administración" noindex>
+  <section class="mx-auto max-w-6xl px-4 py-10">
+    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">
+      {role ? roleLabel[role.role] ?? role.role : "Staff"}
+    </p>
+    <h1 class="mt-2 text-3xl font-bold">Panel administrativo</h1>
+    <p class="mt-2 max-w-2xl text-ink-muted">
+      Acá van a estar el dashboard, la moderación, las categorías propuestas y las métricas. Se construye en la Etapa 12.
+    </p>
+  </section>
+</BaseLayout>

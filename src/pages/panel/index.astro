@@ -1,0 +1,70 @@
+---
+/**
+ * Panel del usuario (ruta protegida por el middleware).
+ * Por ahora: saludo, estado de la cuenta y próximos pasos.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Alert from "../../components/ui/Alert.astro";
+import Button from "../../components/ui/Button.astro";
+import { hasRole } from "../../lib/auth/session";
+import { routes } from "../../config/site";
+
+const { supabase, user } = Astro.locals;
+
+const [{ data: profile }, isStaff] = await Promise.all([
+  supabase.from("profiles").select("first_name, username, intent").eq("id", user!.id).maybeSingle(),
+  hasRole(supabase, "moderator"),
+]);
+
+const name = profile?.first_name ?? profile?.username ?? "";
+const isProvider = profile?.intent === "provider";
+const passwordUpdated = Astro.url.searchParams.get("password") === "updated";
+
+const nextSteps = [
+  {
+    title: "Completá tu perfil",
+    text: "Foto, ciudad y formas de contacto.",
+    stage: "Etapa 4",
+  },
+  {
+    title: isProvider ? "Creá tu emprendimiento" : "Publicá lo que necesitás",
+    text: isProvider
+      ? "Tu vidriera con servicios, productos y reseñas."
+      : "Contá qué buscás y recibí propuestas de emprendedores.",
+    stage: isProvider ? "Etapa 4" : "Etapa 10",
+  },
+  {
+    title: isProvider ? "Encontrá personas que te necesitan" : "Explorá emprendedores",
+    text: isProvider ? "Necesidades publicadas en tu zona." : "Buscá por categoría y ciudad.",
+    stage: "Etapa 7",
+  },
+];
+---
+
+<BaseLayout title="Mi panel" noindex>
+  <section class="mx-auto max-w-6xl px-4 py-10">
+    {passwordUpdated && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
+
+    <h1 class="text-3xl font-bold">Hola{name ? `, ${name}` : ""} 👋</h1>
+    <p class="mt-2 text-ink-muted">
+      Tu cuenta está activa{profile?.username ? <> como <strong class="text-ink">@{profile.username}</strong></> : null}.
+    </p>
+
+    <h2 class="mt-10 text-lg font-semibold">Próximos pasos</h2>
+    <ul class="mt-4 grid gap-4 md:grid-cols-3">
+      {nextSteps.map((step) => (
+        <li class="flex flex-col rounded-wl-lg border border-line bg-surface p-5">
+          <h3 class="font-semibold">{step.title}</h3>
+          <p class="mt-1 text-sm text-ink-muted">{step.text}</p>
+          <p class="mt-4 text-xs font-medium text-ink-muted">Disponible en la {step.stage}</p>
+        </li>
+      ))}
+    </ul>
+
+    {isStaff && (
+      <div class="mt-10">
+        <Button href={routes.admin} variant="secondary">Ir al panel administrativo</Button>
+      </div>
+    )}
+  </section>
+</BaseLayout>

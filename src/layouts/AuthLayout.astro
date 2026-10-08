@@ -1,0 +1,30 @@
+---
+/**
+ * Layout de las pantallas de cuenta (ingresar, registrarse, recuperar):
+ * tarjeta centrada, sin distracciones, y siempre noindex.
+ */
+import BaseLayout from "./BaseLayout.astro";
+
+interface Props {
+  title: string;
+  heading: string;
+  subheading?: string;
+}
+
+const { title, heading, subheading } = Astro.props;
+---
+
+<BaseLayout title={title} noindex>
+  <section class="mx-auto flex w-full max-w-md flex-col px-4 py-10 sm:py-16">
+    <div class="rounded-wl-lg border border-line bg-surface p-6 shadow-sm sm:p-8">
+      <h1 class="text-2xl font-bold">{heading}</h1>
+      {subheading && <p class="mt-1.5 text-ink-muted">{subheading}</p>}
+      <div class="mt-6">
+        <slot />
+      </div>
+    </div>
+    <div class="mt-6 text-center text-sm text-ink-muted">
+      <slot name="footer" />
+    </div>
+  </section>
+</BaseLayout>

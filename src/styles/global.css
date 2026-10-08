@@ -1,1 +1,158 @@
+/* =============================================================================
+   WorkLink · estilos globales y tokens de diseño (identidad provisional)
+   =============================================================================
+   Toda la marca vive en las variables --wl-* de abajo. Para cambiar colores,
+   radios o tipografía se tocan SOLO estas variables: los componentes usan
+   las clases de Tailwind generadas a partir de ellas (bg-brand, text-ink...).
+
+   Concepto: dos lados que se encuentran.
+     --wl-seek  (azul)    → "Necesito / Busco"
+     --wl-offer (naranja) → "Ofrezco / Vendo"
+   ========================================================================== */
+
 @import "tailwindcss";
+
+/* Modo oscuro por clase/atributo además de la preferencia del sistema. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  /* Marca */
+  --wl-brand: #2f4fd8;
+  --wl-brand-hover: #2440b8;
+  --wl-brand-contrast: #ffffff;
+  --wl-seek: #2f4fd8;
+  --wl-seek-soft: #e8ecfd;
+  --wl-offer: #e8572e;
+  --wl-offer-soft: #fdece6;
+
+  /* Superficies y texto */
+  --wl-bg: #f7f7f4;
+  --wl-surface: #ffffff;
+  --wl-surface-muted: #efefea;
+  --wl-ink: #14161f;
+  --wl-ink-muted: #5b5f6e;
+  --wl-line: #e2e2dc;
+
+  /* Estados */
+  --wl-success: #16794a;
+  --wl-success-soft: #e3f4ea;
+  --wl-danger: #c0362c;
+  --wl-danger-soft: #fbe9e7;
+  --wl-warning: #9a6200;
+  --wl-warning-soft: #fdf3dc;
+
+  /* Forma y tipografía */
+  --wl-radius: 0.75rem;
+  --wl-radius-lg: 1.25rem;
+  --wl-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif;
+  --wl-font-display: var(--wl-font-sans);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wl-brand: #7d93ff;
+    --wl-brand-hover: #9aaaff;
+    --wl-brand-contrast: #0d1020;
+    --wl-seek: #7d93ff;
+    --wl-seek-soft: #1c2240;
+    --wl-offer: #ff8a63;
+    --wl-offer-soft: #3a1f17;
+    --wl-bg: #0f1016;
+    --wl-surface: #171922;
+    --wl-surface-muted: #20222d;
+    --wl-ink: #eceef5;
+    --wl-ink-muted: #a3a7b7;
+    --wl-line: #2b2e3b;
+    --wl-success: #5fd39a;
+    --wl-success-soft: #13291f;
+    --wl-danger: #ff8a80;
+    --wl-danger-soft: #34171a;
+    --wl-warning: #f3c063;
+    --wl-warning-soft: #2f2412;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --wl-brand: #7d93ff;
+  --wl-brand-hover: #9aaaff;
+  --wl-brand-contrast: #0d1020;
+  --wl-seek: #7d93ff;
+  --wl-seek-soft: #1c2240;
+  --wl-offer: #ff8a63;
+  --wl-offer-soft: #3a1f17;
+  --wl-bg: #0f1016;
+  --wl-surface: #171922;
+  --wl-surface-muted: #20222d;
+  --wl-ink: #eceef5;
+  --wl-ink-muted: #a3a7b7;
+  --wl-line: #2b2e3b;
+  --wl-success: #5fd39a;
+  --wl-success-soft: #13291f;
+  --wl-danger: #ff8a80;
+  --wl-danger-soft: #34171a;
+  --wl-warning: #f3c063;
+  --wl-warning-soft: #2f2412;
+  color-scheme: dark;
+}
+
+/* Las variables de marca se exponen como utilidades de Tailwind:
+   bg-brand, text-ink, border-line, bg-seek-soft, rounded-wl, font-display... */
+@theme inline {
+  --color-brand: var(--wl-brand);
+  --color-brand-hover: var(--wl-brand-hover);
+  --color-brand-contrast: var(--wl-brand-contrast);
+  --color-seek: var(--wl-seek);
+  --color-seek-soft: var(--wl-seek-soft);
+  --color-offer: var(--wl-offer);
+  --color-offer-soft: var(--wl-offer-soft);
+  --color-bg: var(--wl-bg);
+  --color-surface: var(--wl-surface);
+  --color-surface-muted: var(--wl-surface-muted);
+  --color-ink: var(--wl-ink);
+  --color-ink-muted: var(--wl-ink-muted);
+  --color-line: var(--wl-line);
+  --color-success: var(--wl-success);
+  --color-success-soft: var(--wl-success-soft);
+  --color-danger: var(--wl-danger);
+  --color-danger-soft: var(--wl-danger-soft);
+  --color-warning: var(--wl-warning);
+  --color-warning-soft: var(--wl-warning-soft);
+
+  --radius-wl: var(--wl-radius);
+  --radius-wl-lg: var(--wl-radius-lg);
+
+  --font-sans: var(--wl-font-sans);
+  --font-display: var(--wl-font-display);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    min-height: 100dvh;
+  }
+
+  h1, h2, h3 {
+    @apply font-display tracking-tight text-balance;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--wl-brand);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

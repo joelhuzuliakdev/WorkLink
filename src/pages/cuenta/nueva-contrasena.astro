@@ -1,0 +1,48 @@
+---
+/**
+ * Elegir nueva contraseña. Se llega desde el email de recuperación: el enlace
+ * pasa por /auth/confirm, que abre la sesión y redirige acá. Ruta protegida
+ * por el middleware (/cuenta/*).
+ */
+import { actions, isInputError } from "astro:actions";
+import AuthLayout from "../../layouts/AuthLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import { routes } from "../../config/site";
+
+const result = Astro.getActionResult(actions.auth.updatePassword);
+if (result && !result.error) {
+  return Astro.redirect(`${routes.dashboard}?password=updated`);
+}
+
+const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+---
+
+<AuthLayout title="Nueva contraseña" heading="Elegí una nueva contraseña">
+  {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
+
+  <form method="POST" action={actions.auth.updatePassword} class="flex flex-col gap-4" novalidate>
+    <Field
+      name="password"
+      label="Nueva contraseña"
+      type="password"
+      autocomplete="new-password"
+      required
+      minlength={8}
+      maxlength={72}
+      hint="Mínimo 8 caracteres, con al menos una letra y un número."
+      error={fieldErrors.password?.[0]}
+    />
+    <Field
+      name="password_confirm"
+      label="Repetí la contraseña"
+      type="password"
+      autocomplete="new-password"
+      required
+      error={fieldErrors.password_confirm?.[0]}
+    />
+    <Button type="submit" block size="lg">Guardar contraseña</Button>
+  </form>
+</AuthLayout>

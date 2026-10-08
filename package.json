@@ -1,5 +1,5 @@
 {
-  "name": "plataforma",
+  "name": "worklink",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,10 +10,28 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
     "db:test": "psql \"postgresql://postgres:postgres@127.0.0.1:54322/postgres\" -v ON_ERROR_STOP=1 -q -t -f supabase/tests/database/etapa2_seguridad.sql",
-    "db:types": "supabase gen types typescript --local > src/types/database.types.ts",
-    "db:push": "supabase db push"
+    "db:types": "supabase gen types typescript --linked > src/types/database.types.ts",
+    "db:push": "supabase db push",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "check": "astro check"
   },
   "devDependencies": {
-    "supabase": "^2.120.0"
+    "@astrojs/check": "^0.9.10",
+    "@types/node": "^22.20.5",
+    "supabase": "^2.120.0",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@astrojs/preact": "^6.0.6",
+    "@astrojs/vercel": "^11.0.12",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.3.7",
+    "preact": "^10.29.8",
+    "tailwindcss": "^4.3.3"
   }
 }
