@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 9 (mensajes privados)
+# WorkLink · chat más chico con ✕ y avisos de mensajes al momento (incluye la Etapa 9)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa9.sh
+#     bash instalar-chat.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
 # y .env.example, y agrega la migración 0017 (incluye todo lo anterior). NO toca tu .env, node_modules ni
@@ -6189,22 +6189,22 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
 
 <BaseLayout title={`Mensajes con ${name}`} noindex hideFooter>
   <section
-    class="mx-auto flex h-[calc(100dvh-4rem)] max-w-2xl flex-col border-x border-line bg-surface"
+    class="mx-auto flex h-[calc(100dvh-4rem)] w-full flex-col bg-surface md:my-6 md:h-[min(620px,calc(100dvh-7rem))] md:max-w-md md:overflow-hidden md:rounded-wl-lg md:border md:border-line md:shadow-xl"
     data-chat
     data-conversation={id}
     data-me={me}
     data-last={lastAt}
     data-other-read={conversation.otherLastReadAt ?? ""}
   >
-    <header class="flex items-center gap-3 border-b border-line px-3 py-2.5">
-      <a href="/mensajes" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted" aria-label="Volver a mensajes">
+    <header class="flex items-center gap-2 border-b border-line px-2 py-2">
+      <a href="/mensajes" class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-ink-muted hover:bg-surface-muted" aria-label="Todos los mensajes" title="Todos los mensajes">
         <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7" /></svg>
       </a>
       {other ? (
         <a href={profilePath(other.username)} class="flex min-w-0 flex-1 items-center gap-3">
-          <Avatar name={name} path={other.avatar_path} size={40} />
+          <Avatar name={name} path={other.avatar_path} size={34} />
           <span class="min-w-0">
-            <span class="flex items-center gap-1.5 font-semibold">
+            <span class="flex items-center gap-1.5 text-sm font-semibold">
               <span class="truncate">{name}</span>
               {other.verified_at && <VerifiedBadge size={14} />}
               <SituationBadge situation={other.situation} />
@@ -6219,9 +6219,12 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
         <input type="hidden" name="conversation_id" value={id} />
         <button type="submit" class="rounded-wl px-2 py-1 text-xs font-semibold text-ink-muted hover:bg-surface-muted hover:text-ink">Ocultar</button>
       </form>
+      <a href="/mensajes" class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" aria-label="Cerrar conversación" title="Cerrar" data-chat-close>
+        <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" d="M6 6l12 12M18 6 6 18" /></svg>
+      </a>
     </header>
 
-    <div class="flex-1 overflow-y-auto px-3 py-4" data-chat-scroll>
+    <div class="flex-1 overflow-y-auto px-3 py-3 text-[15px]" data-chat-scroll>
       {hasOlder && messages[0] && (
         <p class="mb-4 text-center">
           <a href={`/mensajes/${id}?antes=${encodeURIComponent(messages[0].created_at)}`} class="text-sm font-semibold text-brand hover:underline">Ver mensajes anteriores</a>
@@ -6240,7 +6243,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
             <>
               {newDay && <li class="my-3 text-center text-xs font-semibold capitalize text-ink-muted" data-day={dayKey(m.created_at)}>{dayLabel(m.created_at)}</li>}
               <li class:list={["flex", mine ? "justify-end" : "justify-start"]} data-message={m.id}>
-                <div class:list={["max-w-[80%] rounded-2xl px-3.5 py-2", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
+                <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
                       Consulta sobre: <strong>{postHeadline(m.post, 60)}</strong>
@@ -6260,7 +6263,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
       <span id="ultimo"></span>
     </div>
 
-    <form method="POST" action={actions.messages.send} class="border-t border-line p-3" data-chat-form>
+    <form method="POST" action={actions.messages.send} class="border-t border-line p-2.5" data-chat-form>
       <input type="hidden" name="conversation_id" value={id} />
       {contextPost && (
         <div class="mb-2 flex items-center justify-between gap-2 rounded-wl bg-surface-muted px-3 py-2 text-sm" data-chat-context>
@@ -6279,9 +6282,9 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
           maxlength={MESSAGE_MAX}
           required
           placeholder="Escribí un mensaje…"
-          class="max-h-40 min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface-muted px-4 py-2.5 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+          class="max-h-32 min-h-10 flex-1 resize-none rounded-2xl border border-line bg-surface-muted px-3.5 py-2 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
         ></textarea>
-        <button type="submit" class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast hover:bg-brand-hover disabled:opacity-50" aria-label="Enviar">
+        <button type="submit" class="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast hover:bg-brand-hover disabled:opacity-50" aria-label="Enviar">
           <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
         </button>
       </div>
@@ -9389,7 +9392,7 @@ if (root) {
     li.className = `flex ${mine ? "justify-end" : "justify-start"}`;
     li.dataset.message = message.id;
     const bubble = document.createElement("div");
-    bubble.className = `max-w-[80%] rounded-2xl px-3.5 py-2 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
+    bubble.className = `max-w-[78%] rounded-2xl px-3 py-1.5 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
     if (message.post) {
       const link = document.createElement("a");
       const words = slug(message.post.title || message.post.body);
@@ -9419,7 +9422,7 @@ if (root) {
   // Altura automática del cuadro de texto.
   const resize = () => {
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
   };
   textarea.addEventListener("input", resize);
   textarea.addEventListener("keydown", (event) => {
@@ -9484,6 +9487,18 @@ if (root) {
     if (document.visibilityState === "visible") void poll();
   });
 
+  // Cerrar (✕): volver a la página anterior si vino de WorkLink; si no, a la bandeja.
+  root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.addEventListener("click", (event) => {
+    const cameFromSite = document.referrer.startsWith(location.origin) && !document.referrer.includes(`/mensajes/${conversationId}`);
+    if (cameFromSite && history.length > 1) {
+      event.preventDefault();
+      history.back();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !textarea.value.trim()) root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.click();
+  });
+
   // Confirmación para "Ocultar".
   for (const confirmForm of root.querySelectorAll<HTMLFormElement>("form[data-confirm]")) {
     confirmForm.addEventListener("submit", (event) => {
@@ -9520,14 +9535,45 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/scripts/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
- * Campanita: actualiza la cantidad de notificaciones sin leer cada minuto
- * mientras la pestaña está a la vista, y al volver a ella. Una consulta
- * liviana (solo un número); sin conexión, no hace nada.
+ * Íconos de mensajes y notificaciones del encabezado: consulta cada 10
+ * segundos mientras la pestaña está a la vista (y al volver a ella) cuántos
+ * hay sin leer. Si llega un mensaje nuevo y no estás en Mensajes, muestra un
+ * aviso abajo con un enlace para leerlo.
+ * Es una consulta liviana (solo dos números); sin conexión, no hace nada.
  */
-const INTERVAL = 60_000;
+const INTERVAL = 10_000;
 let timer: number | undefined;
+let lastMessages: number | null = null;
 
 const enabled = () => Boolean(document.querySelector("[data-notifications-badge]"));
+
+function setBadges(selector: string, count: number) {
+  for (const badge of document.querySelectorAll<HTMLElement>(selector)) {
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.hidden = count === 0;
+  }
+}
+
+function initialMessages(): number {
+  const badge = document.querySelector<HTMLElement>("[data-messages-badge]");
+  return badge && !badge.hidden ? Number.parseInt(badge.textContent ?? "0", 10) || 0 : 0;
+}
+
+function announce(text: string, href: string) {
+  let box = document.getElementById("wl-message-toast") as HTMLAnchorElement | null;
+  if (!box) {
+    box = document.createElement("a");
+    box.id = "wl-message-toast";
+    box.setAttribute("role", "status");
+    box.className =
+      "fixed bottom-4 right-4 z-50 flex max-w-xs items-center gap-3 rounded-wl-lg bg-ink px-4 py-3 text-sm font-semibold text-white shadow-xl";
+    document.body.append(box);
+  }
+  box.href = href;
+  box.textContent = text;
+  box.hidden = false;
+  window.setTimeout(() => box && (box.hidden = true), 6000);
+}
 
 async function refresh() {
   if (document.visibilityState !== "visible" || !enabled()) return;
@@ -9535,17 +9581,15 @@ async function refresh() {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
     const { unread, messages } = (await res.json()) as { unread: number; messages: number };
-    for (const badge of document.querySelectorAll<HTMLElement>("[data-messages-badge]")) {
-      badge.textContent = messages > 99 ? "99+" : String(messages);
-      badge.hidden = messages === 0;
-    }
-    for (const badge of document.querySelectorAll<HTMLElement>("[data-notifications-badge]")) {
-      badge.textContent = unread > 99 ? "99+" : String(unread);
-      badge.hidden = unread === 0;
-    }
+    setBadges("[data-notifications-badge]", unread);
+    setBadges("[data-messages-badge]", messages);
     for (const link of document.querySelectorAll<HTMLElement>("[data-notifications-link]")) {
       link.setAttribute("aria-label", unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones");
     }
+    if (lastMessages !== null && messages > lastMessages && !location.pathname.startsWith("/mensajes")) {
+      announce("💬 Tenés un mensaje nuevo. Tocá para leerlo.", "/mensajes");
+    }
+    lastMessages = messages;
   } catch {
     /* sin conexión: se reintenta en el próximo ciclo */
   }
@@ -9556,15 +9600,19 @@ function start() {
   timer = window.setInterval(refresh, INTERVAL);
 }
 
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    void refresh();
-    start();
-  } else {
-    window.clearInterval(timer);
-  }
-});
-start();
+if (enabled()) {
+  lastMessages = initialMessages();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void refresh();
+      start();
+    } else {
+      window.clearInterval(timer);
+    }
+  });
+  window.addEventListener("focus", () => void refresh());
+  start();
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/scripts/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'

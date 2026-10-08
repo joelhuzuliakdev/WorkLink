@@ -79,7 +79,7 @@ if (root) {
     li.className = `flex ${mine ? "justify-end" : "justify-start"}`;
     li.dataset.message = message.id;
     const bubble = document.createElement("div");
-    bubble.className = `max-w-[80%] rounded-2xl px-3.5 py-2 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
+    bubble.className = `max-w-[78%] rounded-2xl px-3 py-1.5 ${mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"}`;
     if (message.post) {
       const link = document.createElement("a");
       const words = slug(message.post.title || message.post.body);
@@ -109,7 +109,7 @@ if (root) {
   // Altura automática del cuadro de texto.
   const resize = () => {
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
   };
   textarea.addEventListener("input", resize);
   textarea.addEventListener("keydown", (event) => {
@@ -172,6 +172,18 @@ if (root) {
   setInterval(poll, POLL_MS);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void poll();
+  });
+
+  // Cerrar (✕): volver a la página anterior si vino de WorkLink; si no, a la bandeja.
+  root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.addEventListener("click", (event) => {
+    const cameFromSite = document.referrer.startsWith(location.origin) && !document.referrer.includes(`/mensajes/${conversationId}`);
+    if (cameFromSite && history.length > 1) {
+      event.preventDefault();
+      history.back();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !textarea.value.trim()) root.querySelector<HTMLAnchorElement>("[data-chat-close]")?.click();
   });
 
   // Confirmación para "Ocultar".
