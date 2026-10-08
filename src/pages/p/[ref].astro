@@ -55,8 +55,9 @@ const isPublic = post.status === "published";
 const isOwner = user?.id === post.author_id;
 const type = POST_TYPE_LABELS[post.type];
 const headline = postHeadline(post, 70);
-const authorName = post.business?.name ?? (post.author ? displayName(post.author) : "");
-const authorHref = post.business ? businessPath(post.business.slug) : post.author ? profilePath(post.author.username) : null;
+// Arriba la persona que publicó (con su perfil para seguirla); debajo, el emprendimiento si lo hay.
+const personName = post.author ? displayName(post.author) : "";
+const personHref = post.author ? profilePath(post.author.username) : null;
 const site = Astro.site ?? new URL(Astro.url.origin);
 const absoluteUrl = new URL(canonical, site).toString();
 
@@ -70,11 +71,7 @@ const [more, { comments, hasOlder }, following, canModerateComments] = await Pro
     ? getFeed(supabase, { businessId: post.business_id, limit: 4 }).then((r) => r.posts.filter((p) => p.id !== post.id).slice(0, 3))
     : Promise.resolve([]),
   getComments(supabase, post.id, { before }),
-  user
-    ? post.business_id
-      ? isFollowing(supabase, user.id, "business", post.business_id)
-      : isFollowing(supabase, user.id, "profile", post.author_id)
-    : Promise.resolve(false),
+  user ? isFollowing(supabase, user.id, "profile", post.author_id) : Promise.resolve(false),
   user ? supabase.rpc("can_edit_post", { p_post_id: post.id }).then((r) => Boolean(r.data)) : Promise.resolve(false),
 ]);
 const reactions = await getViewerReactions(supabase, user?.id, [post.id, ...more.map((p) => p.id)]);
@@ -110,33 +107,37 @@ const jsonLd =
     )}
 
     <header class="flex flex-wrap items-center gap-3">
-      {authorHref && (
-        <a href={authorHref} class="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
-          <Avatar
-            name={authorName}
-            path={post.business?.logo_path ?? post.author?.avatar_path}
-            purpose={post.business ? "logo" : "avatar"}
-            shape={post.business ? "rounded" : "circle"}
-            size={48}
-          />
-          <span class="min-w-0">
-            <span class="flex flex-wrap items-center gap-x-2 font-semibold">
-              <span class="truncate">{authorName}{post.business?.verification === "verified" && <span class="text-seek"> ✓</span>}</span>
-              {!post.business && <SituationBadge situation={post.author?.situation} />}
-            </span>
-            {!post.business && post.author?.headline && <span class="block truncate text-sm text-ink-muted">{post.author.headline}</span>}
-            <span class="block text-sm text-ink-muted">
-              <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
-              {post.city && ` · ${post.city.name}`}
-            </span>
+      <div class="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
+        {personHref && (
+          <a href={personHref} class="shrink-0" aria-label={`Perfil de ${personName}`}>
+            <Avatar name={personName} path={post.author?.avatar_path} size={48} />
+          </a>
+        )}
+        <span class="min-w-0">
+          <span class="flex flex-wrap items-center gap-x-2 font-semibold">
+            {personHref ? <a href={personHref} class="truncate hover:underline">{personName}</a> : <span class="truncate">{personName}</span>}
+            <SituationBadge situation={post.author?.situation} />
           </span>
-        </a>
-      )}
+          {post.business ? (
+            <a href={businessPath(post.business.slug)} class="mt-0.5 flex w-fit max-w-full items-center gap-1.5 text-sm font-medium hover:underline">
+              <Avatar name={post.business.name} path={post.business.logo_path} purpose="logo" shape="rounded" size={18} />
+              <span class="truncate">{post.business.name}</span>
+              {post.business.verification === "verified" && <span class="text-seek">✓</span>}
+            </a>
+          ) : (
+            post.author?.headline && <span class="block truncate text-sm text-ink-muted">{post.author.headline}</span>
+          )}
+          <span class="block text-sm text-ink-muted">
+            <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
+            {post.city && ` · ${post.city.name}`}
+          </span>
+        </span>
+      </div>
       <span class:list={["rounded-full px-3 py-1 text-sm font-semibold", type.class]}>{type.label}</span>
       {showFollow && (
         <FollowButton
-          kind={post.business_id ? "business" : "profile"}
-          id={post.business_id ?? post.author_id}
+          kind="profile"
+          id={post.author_id}
           following={following}
           returnTo={canonical}
         />

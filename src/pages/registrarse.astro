@@ -8,14 +8,14 @@ import { routes } from "../config/site";
 import { getSubmittedValues } from "../utils/form";
 
 if (Astro.locals.user) {
-  return Astro.redirect(routes.dashboard);
+  return Astro.redirect(routes.home);
 }
 
 const result = Astro.getActionResult(actions.auth.signUp);
 
 // Sin confirmación de email (desarrollo): la sesión ya existe.
 if (result && !result.error && !result.data.needsConfirmation) {
-  return Astro.redirect(routes.dashboard);
+  return Astro.redirect(routes.home);
 }
 
 const sentTo = result && !result.error ? result.data.email : null;

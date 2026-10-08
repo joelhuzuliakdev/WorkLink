@@ -26,9 +26,10 @@ interface Props {
 const { post, priority = false, liked = false, saved = false } = Astro.props;
 const href = postPath(post);
 const type = POST_TYPE_LABELS[post.type];
-const isBusiness = Boolean(post.business);
-const authorName = post.business?.name ?? (post.author ? displayName(post.author) : "");
-const authorHref = post.business ? businessPath(post.business.slug) : post.author ? profilePath(post.author.username) : null;
+// Arriba siempre la persona (lleva a su perfil, donde se la puede seguir);
+// si publicó desde un emprendimiento, debajo va el nombre del emprendimiento.
+const personName = post.author ? displayName(post.author) : "";
+const profileHref = post.author ? profilePath(post.author.username) : null;
 const site = Astro.site ?? new URL(Astro.url.origin);
 const shareUrl = new URL(href, site).toString();
 const headline = postHeadline(post, 120);
@@ -37,30 +38,32 @@ const headline = postHeadline(post, 120);
 <article class="overflow-hidden rounded-wl-lg border border-line bg-surface">
   <header class="flex items-start gap-3 px-4 pt-3">
     {
-      authorHref && (
-        <a href={authorHref} class="shrink-0">
-          <Avatar
-            name={authorName}
-            path={post.business?.logo_path ?? post.author?.avatar_path}
-            purpose={isBusiness ? "logo" : "avatar"}
-            shape={isBusiness ? "rounded" : "circle"}
-            size={42}
-          />
+      profileHref && (
+        <a href={profileHref} class="shrink-0" aria-label={`Perfil de ${personName}`}>
+          <Avatar name={personName} path={post.author?.avatar_path} size={42} />
         </a>
       )
     }
     <div class="min-w-0 flex-1">
       <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 leading-tight">
-        {authorHref ? (
-          <a href={authorHref} class="font-semibold hover:underline">{authorName}</a>
+        {profileHref ? (
+          <a href={profileHref} class="font-semibold hover:underline">{personName}</a>
         ) : (
-          <span class="font-semibold">{authorName}</span>
+          <span class="font-semibold">{personName}</span>
         )}
-        {post.business?.verification === "verified" && <span class="text-seek" title="Verificado">✓</span>}
-        {!isBusiness && <SituationBadge situation={post.author?.situation} />}
+        <SituationBadge situation={post.author?.situation} />
       </p>
+      {
+        post.business && (
+          <a href={businessPath(post.business.slug)} class="mt-1 flex w-fit max-w-full items-center gap-1.5 text-sm font-medium text-ink hover:underline">
+            <Avatar name={post.business.name} path={post.business.logo_path} purpose="logo" shape="rounded" size={18} />
+            <span class="truncate">{post.business.name}</span>
+            {post.business.verification === "verified" && <span class="text-seek" title="Verificado">✓</span>}
+          </a>
+        )
+      }
       <p class="mt-0.5 truncate text-xs text-ink-muted">
-        {!isBusiness && post.author?.headline && <>{post.author.headline} · </>}
+        {!post.business && post.author?.headline && <>{post.author.headline} · </>}
         <a href={href} class="hover:underline">
           <time datetime={post.published_at} title={formatDate(post.published_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(post.published_at)}</time>
         </a>

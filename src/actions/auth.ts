@@ -28,7 +28,7 @@ export const auth = {
             last_name: input.last_name,
             intent: input.intent,
           },
-          emailRedirectTo: confirmUrl(routes.dashboard),
+          emailRedirectTo: confirmUrl(routes.home),
         },
       });
 
@@ -51,7 +51,7 @@ export const auth = {
 
       if (error) throw toActionError(error);
 
-      return { redirectTo: safeNextPath(input.next, routes.dashboard) };
+      return { redirectTo: safeNextPath(input.next, routes.home) };
     },
   }),
 
