@@ -1,0 +1,58 @@
+---
+/**
+ * Ayuda corta que aparece la primera vez que alguien entra a una sección.
+ * Al tocar "Entendido" no vuelve a aparecer en este navegador (se guarda en
+ * el navegador: es solo una comodidad). Sin JavaScript no se muestra.
+ */
+interface Props {
+  /** Identificador único de la ayuda (ej. "necesidades"). */
+  id: string;
+  title: string;
+  /** Pasos o puntos clave (2 a 4, cortos). */
+  points: string[];
+  link?: { href: string; label: string };
+  class?: string;
+}
+
+const { id, title, points, link, class: className = "" } = Astro.props;
+---
+
+<aside class:list={["relative rounded-wl-lg border border-brand/30 bg-seek-soft p-4 pr-10", className]} data-hint={id} hidden aria-label={title}>
+  <p class="flex items-center gap-2 font-semibold">
+    <span class="grid h-6 w-6 place-items-center rounded-full bg-brand text-xs font-bold text-brand-contrast" aria-hidden="true">?</span>
+    {title}
+  </p>
+  <ul class="mt-2 flex flex-col gap-1 text-sm">
+    {points.map((p) => <li class="flex gap-2"><span class="text-brand" aria-hidden="true">•</span><span>{p}</span></li>)}
+  </ul>
+  <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
+    <button type="button" class="h-8 rounded-wl bg-brand px-3 font-semibold text-brand-contrast hover:bg-brand-hover" data-hint-close>Entendido</button>
+    {link && <a href={link.href} class="font-semibold text-brand hover:underline">{link.label}</a>}
+  </div>
+  <button type="button" class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full text-ink-muted hover:bg-surface hover:text-ink" aria-label="Cerrar la ayuda" data-hint-close>✕</button>
+</aside>
+
+<script>
+  const KEY = "wl-ayudas";
+  const read = (): string[] => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  for (const hint of document.querySelectorAll<HTMLElement>("[data-hint]")) {
+    const id = hint.dataset.hint!;
+    if (!read().includes(id)) hint.hidden = false;
+    for (const button of hint.querySelectorAll("[data-hint-close]")) {
+      button.addEventListener("click", () => {
+        hint.hidden = true;
+        try {
+          localStorage.setItem(KEY, JSON.stringify([...new Set([...read(), id])]));
+        } catch {
+          /* modo privado: se ignora */
+        }
+      });
+    }
+  }
+</script>

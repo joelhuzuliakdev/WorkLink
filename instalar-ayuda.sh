@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · navegación nueva (barra de abajo, menú de la cuenta, Publicar) y tipos de publicación más claros
+# WorkLink · ayuda: página Cómo funciona, ayudas la primera vez, pantallas vacías y A quién seguir
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-navegacion.sh
+#     bash instalar-ayuda.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, (no trae migraciones nuevas). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0029 (sugerencias de a quién seguir). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -2242,6 +2242,7 @@ escribir 'src/components/home/HomeFeed.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * En pantallas grandes suma una columna con el perfil y accesos rápidos.
  */
 import Avatar from "../ui/Avatar.astro";
+import SectionHint from "../ui/SectionHint.astro";
 import Alert from "../ui/Alert.astro";
 import FeedPage from "../posts/FeedPage.astro";
 import SearchBox from "./SearchBox.astro";
@@ -2255,6 +2256,8 @@ import { getViewerReactions } from "../../services/social";
 import { displayName } from "../../services/profiles";
 import NeedCard from "../needs/NeedCard.astro";
 import { getHomeNeeds } from "../../services/needs";
+import FollowSuggestions from "../social/FollowSuggestions.astro";
+import { getSuggestions } from "../../services/suggestions";
 
 interface Props {
   viewer: ViewerProfile;
@@ -2271,11 +2274,14 @@ const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
   mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
   cursor,
 });
-const [reactions, needs] = await Promise.all([
+const [reactions, needs, suggestions] = await Promise.all([
   getViewerReactions(supabase, viewer.id, posts.map((p) => p.id)),
-  // Necesidades abiertas (solo en la primera página del inicio).
+  // Necesidades abiertas y "A quién seguir" (solo en la primera página del inicio).
   cursor ? Promise.resolve([]) : getHomeNeeds(supabase, 3),
+  cursor ? Promise.resolve({ people: [], businesses: [] }) : getSuggestions(supabase, 5),
 ]);
+// Quien sigue a pocas cuentas ve las sugerencias en el feed (también en el celular).
+const suggestInFeed = viewer.following_count < 10;
 const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
 
 const headings = {
@@ -2311,6 +2317,16 @@ const links = [
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
     <SearchBox />
     {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
+    <SectionHint
+      id="inicio"
+      title="¡Bienvenido/a a WorkLink!"
+      points={[
+        "Acá ves lo que publican las personas y emprendimientos que seguís. Seguí a los que te interesen.",
+        "Con el botón ＋ (o Publicar) mostrás lo que ofrecés o pedís presupuestos.",
+        "En Necesidades ves qué busca la gente de tu zona. En tu foto, arriba, está todo lo tuyo.",
+      ]}
+      link={{ href: "/como-funciona", label: "Cómo funciona" }}
+    />
     <Composer viewer={viewer} />
 
     {
@@ -2327,6 +2343,8 @@ const links = [
         </section>
       )
     }
+
+    {suggestInFeed && <FollowSuggestions people={suggestions.people} businesses={suggestions.businesses} variant="carousel" class="lg:hidden" />}
 
     <div class="pt-2">
       <h1 class="text-xl font-bold">{heading.title}</h1>
@@ -2386,6 +2404,7 @@ const links = [
           ))}
         </nav>
       </section>
+      <FollowSuggestions people={suggestions.people} businesses={suggestions.businesses} variant="list" />
     </div>
   </aside>
 </div>
@@ -2471,6 +2490,7 @@ const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!
       <div class="mt-8 flex flex-wrap gap-3">
         <Button href={routes.signup} size="lg">Crear cuenta gratis</Button>
         <Button href={routes.login} variant="secondary" size="lg">Ya tengo cuenta</Button>
+        <a href="/como-funciona" class="inline-flex h-12 items-center px-2 font-semibold text-brand hover:underline">¿Cómo funciona?</a>
       </div>
 
       <form action="/buscar" method="GET" role="search" class="mt-10 max-w-xl">
@@ -2818,6 +2838,7 @@ import { brand } from "../../config/brand";
 
 const year = new Date().getFullYear();
 const links = [
+  { href: "/como-funciona", label: "Cómo funciona" },
   { href: "/rubros", label: "Rubros" },
   { href: "/publicaciones", label: "Publicaciones" },
   { href: "/necesidades", label: "Necesidades" },
@@ -3037,6 +3058,7 @@ const groups: { href: string; label: string; hint?: string; d: string }[][] = [
     { href: "/panel/plan", label: "Mi plan", hint: viewer.role ? undefined : undefined, d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z" },
     { href: "/panel/perfil", label: "Editar perfil y cuenta", d: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0" },
     ...(viewer.role ? [{ href: "/admin", label: "Administración", d: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" }] : []),
+    { href: "/como-funciona", label: "Cómo funciona (ayuda)", d: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" },
   ],
 ];
 ---
@@ -4361,6 +4383,85 @@ const tab = (active: boolean) =>
 </script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/social/FollowSuggestions.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * "A quién seguir": personas y emprendimientos sugeridos con botón Seguir.
+ * - variant "carousel": tarjetas que se deslizan (en el feed).
+ * - variant "list": lista compacta (columna lateral en la computadora).
+ */
+import Avatar from "../ui/Avatar.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import FollowButton from "./FollowButton.astro";
+import type { SuggestedBusiness, SuggestedPerson } from "../../services/suggestions";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  people: SuggestedPerson[];
+  businesses: SuggestedBusiness[];
+  variant?: "carousel" | "list";
+  class?: string;
+}
+
+const { people, businesses, variant = "carousel", class: className = "" } = Astro.props;
+type Item =
+  | { kind: "profile"; id: string; href: string; name: string; sub: string; avatar: string | null; verified: boolean }
+  | { kind: "business"; id: string; href: string; name: string; sub: string; avatar: string | null; verified: boolean };
+// Se intercalan personas y emprendimientos.
+const items: Item[] = [];
+for (let i = 0; i < Math.max(people.length, businesses.length); i++) {
+  const p = people[i];
+  const b = businesses[i];
+  if (p) items.push({ kind: "profile", id: p.id, href: `/u/${p.username}`, name: displayName(p), sub: p.headline ?? p.city?.name ?? `@${p.username}`, avatar: p.avatar_path, verified: Boolean(p.verified_at) });
+  if (b) items.push({ kind: "business", id: b.id, href: `/e/${b.slug}`, name: b.name, sub: [b.category?.name, b.city?.name].filter(Boolean).join(" · ") || "Emprendimiento", avatar: b.logo_path, verified: b.verification === "verified" });
+}
+---
+
+{
+  items.length > 0 && (
+    <section class:list={["rounded-wl-lg border border-line bg-surface", className]} aria-labelledby={`sugerencias-${variant}`}>
+      <div class="flex items-baseline justify-between gap-3 px-4 pt-4">
+        <h2 id={`sugerencias-${variant}`} class="font-semibold">A quién seguir</h2>
+        <a href="/buscar?ver=personas" class="text-sm font-semibold text-brand hover:underline">Buscar más</a>
+      </div>
+      <p class="px-4 text-sm text-ink-muted">Seguí cuentas para ver lo que publican en tu inicio.</p>
+      {variant === "carousel" ? (
+        <ul class="flex snap-x gap-3 overflow-x-auto px-4 pb-4 pt-3" data-suggestions>
+          {items.map((item) => (
+            <li class="flex w-40 shrink-0 snap-start flex-col items-center rounded-wl-lg border border-line p-3 text-center">
+              <a href={item.href} class="flex flex-col items-center">
+                <Avatar name={item.name} path={item.avatar} purpose={item.kind === "business" ? "logo" : "avatar"} shape={item.kind === "business" ? "rounded" : "circle"} size={64} />
+                <span class="mt-2 flex max-w-full items-center gap-1 text-sm font-semibold">
+                  <span class="truncate">{item.name}</span>
+                  {item.verified && <VerifiedBadge size={13} />}
+                </span>
+                <span class="line-clamp-1 text-xs text-ink-muted">{item.kind === "business" ? `Emprendimiento · ${item.sub}` : item.sub}</span>
+              </a>
+              <FollowButton kind={item.kind} id={item.id} following={false} returnTo="/" class="mt-3 h-9 w-full" />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <ul class="flex flex-col gap-1 p-2" data-suggestions>
+          {items.slice(0, 6).map((item) => (
+            <li class="flex items-center gap-3 rounded-wl p-2 hover:bg-surface-muted">
+              <a href={item.href} class="flex min-w-0 flex-1 items-center gap-3">
+                <Avatar name={item.name} path={item.avatar} purpose={item.kind === "business" ? "logo" : "avatar"} shape={item.kind === "business" ? "rounded" : "circle"} size={40} />
+                <span class="min-w-0">
+                  <span class="flex items-center gap-1 text-sm font-semibold"><span class="truncate">{item.name}</span>{item.verified && <VerifiedBadge size={13} />}</span>
+                  <span class="block truncate text-xs text-ink-muted">{item.kind === "business" ? `Emprendimiento · ${item.sub}` : item.sub}</span>
+                </span>
+              </a>
+              <FollowButton kind={item.kind} id={item.id} following={false} returnTo="/" class="h-8 shrink-0 px-3 text-xs" />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/social/PostActions.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -4808,6 +4909,67 @@ const action = `${page}${page.includes("?") ? "&" : "?"}${String(actions.auth.go
     </>
   )
 }
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/ui/SectionHint.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Ayuda corta que aparece la primera vez que alguien entra a una sección.
+ * Al tocar "Entendido" no vuelve a aparecer en este navegador (se guarda en
+ * el navegador: es solo una comodidad). Sin JavaScript no se muestra.
+ */
+interface Props {
+  /** Identificador único de la ayuda (ej. "necesidades"). */
+  id: string;
+  title: string;
+  /** Pasos o puntos clave (2 a 4, cortos). */
+  points: string[];
+  link?: { href: string; label: string };
+  class?: string;
+}
+
+const { id, title, points, link, class: className = "" } = Astro.props;
+---
+
+<aside class:list={["relative rounded-wl-lg border border-brand/30 bg-seek-soft p-4 pr-10", className]} data-hint={id} hidden aria-label={title}>
+  <p class="flex items-center gap-2 font-semibold">
+    <span class="grid h-6 w-6 place-items-center rounded-full bg-brand text-xs font-bold text-brand-contrast" aria-hidden="true">?</span>
+    {title}
+  </p>
+  <ul class="mt-2 flex flex-col gap-1 text-sm">
+    {points.map((p) => <li class="flex gap-2"><span class="text-brand" aria-hidden="true">•</span><span>{p}</span></li>)}
+  </ul>
+  <div class="mt-3 flex flex-wrap items-center gap-3 text-sm">
+    <button type="button" class="h-8 rounded-wl bg-brand px-3 font-semibold text-brand-contrast hover:bg-brand-hover" data-hint-close>Entendido</button>
+    {link && <a href={link.href} class="font-semibold text-brand hover:underline">{link.label}</a>}
+  </div>
+  <button type="button" class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full text-ink-muted hover:bg-surface hover:text-ink" aria-label="Cerrar la ayuda" data-hint-close>✕</button>
+</aside>
+
+<script>
+  const KEY = "wl-ayudas";
+  const read = (): string[] => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  for (const hint of document.querySelectorAll<HTMLElement>("[data-hint]")) {
+    const id = hint.dataset.hint!;
+    if (!read().includes(id)) hint.hidden = false;
+    for (const button of hint.querySelectorAll("[data-hint-close]")) {
+      button.addEventListener("click", () => {
+        hint.hidden = true;
+        try {
+          localStorage.setItem(KEY, JSON.stringify([...new Set([...read(), id])]));
+        } catch {
+          /* modo privado: se ignora */
+        }
+      });
+    }
+  }
+</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/ui/SelectField.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -8724,6 +8886,162 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/como-funciona.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Cómo funciona WorkLink: los usos principales explicados en pasos simples.
+ * Página pública e indexable (ayuda a entender la plataforma antes de entrar).
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import { routes } from "../config/site";
+
+const { user } = Astro.locals;
+
+const guides = [
+  {
+    id: "buscar",
+    title: "Encontrar a quien necesitás",
+    who: "Para quien busca un servicio o un producto",
+    tone: "bg-seek-soft text-seek",
+    d: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5",
+    steps: [
+      { t: "Buscá", x: "Escribí lo que necesitás en el buscador (por ejemplo “electricista”) y elegí tu ciudad. También podés recorrer los rubros." },
+      { t: "Compará", x: "Mirá las páginas de los emprendimientos: catálogo, fotos, horarios y las reseñas de otros clientes." },
+      { t: "Hablá directo", x: "Escribile por mensaje privado o por WhatsApp. El trato lo arreglan entre ustedes." },
+    ],
+    cta: { href: "/buscar", label: "Ir al buscador" },
+  },
+  {
+    id: "presupuestos",
+    title: "Pedir presupuestos (Necesidades)",
+    who: "Para quien quiere que lo contacten con precios",
+    tone: "bg-seek-soft text-seek",
+    d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4",
+    steps: [
+      { t: "Contá qué necesitás", x: "Publicá una necesidad: qué, en qué ciudad, para cuándo y, si querés, tu presupuesto." },
+      { t: "Recibí propuestas", x: "Los emprendimientos de ese rubro en tu ciudad reciben un aviso y te mandan su propuesta con precio. Solo vos las ves." },
+      { t: "Elegí una", x: "Compará precio, disponibilidad y reseñas. Al aceptar una, se abre el chat con esa persona para coordinar." },
+    ],
+    cta: { href: "/necesidades/nueva", label: "Publicar una necesidad" },
+  },
+  {
+    id: "ofrecer",
+    title: "Ofrecer lo tuyo",
+    who: "Para quien trabaja por su cuenta o tiene un oficio",
+    tone: "bg-offer-soft text-offer",
+    d: "M4 10v4h3l5 4V6L7 10H4ZM16 9a4 4 0 0 1 0 6",
+    steps: [
+      { t: "Completá tu perfil", x: "Foto, descripción de lo que hacés, tu ciudad y un teléfono. Así te encuentran y te tienen confianza." },
+      { t: "Publicá", x: "Mostrá tus trabajos con fotos o video. Lo ven quienes te siguen y aparece en el buscador." },
+      { t: "Respondé necesidades", x: "En Necesidades ves lo que la gente está buscando en tu zona. Mandá tu propuesta con precio y ganá clientes." },
+    ],
+    cta: { href: "/publicar", label: "Publicar algo" },
+  },
+  {
+    id: "emprendimiento",
+    title: "La página de tu emprendimiento",
+    who: "Para negocios y emprendimientos",
+    tone: "bg-success-soft text-success",
+    d: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5",
+    steps: [
+      { t: "Creala gratis", x: "Logo, portada, descripción, rubro, horarios, WhatsApp y redes. Es como una página de Facebook de tu negocio." },
+      { t: "Cargá tu catálogo", x: "Productos y servicios con foto y precio. Podés publicar en nombre de la página y la gente la puede seguir." },
+      { t: "Juntá reseñas", x: "Quienes te contraten o hablen con vos por WorkLink pueden dejarte estrellas. Las buenas reseñas te hacen aparecer mejor." },
+    ],
+    cta: { href: "/panel/emprendimientos/nuevo", label: "Crear mi emprendimiento" },
+  },
+  {
+    id: "planes",
+    title: "Destacarte y verificarte (opcional)",
+    who: "Para quien quiere más visibilidad",
+    tone: "bg-warning-soft text-warning",
+    d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z",
+    steps: [
+      { t: "Destacado", x: "Tus publicaciones aparecen en “Destacados” y salís primero en el buscador." },
+      { t: "Emprendimiento Pro", x: "Tu emprendimiento sale primero en su rubro y ciudad, con insignia PRO y verificación incluida." },
+      { t: "Verificación", x: "La tilde azul: revisamos tu DNI y una selfie para confirmar que sos quien decís ser." },
+    ],
+    cta: { href: "/planes", label: "Ver planes y precios" },
+  },
+];
+
+const tips = [
+  { t: "Mensajes privados", x: "Hablá con cualquier persona sin compartir tu número. Te avisamos con un sonido cuando te escriben." },
+  { t: "Seguir", x: "Seguí personas y emprendimientos para ver lo que publican en tu inicio." },
+  { t: "Guardados", x: "Guardá publicaciones para verlas después: están en el menú de tu foto → Guardados." },
+  { t: "Denunciar", x: "Si ves algo que no corresponde, tocá “Denunciar”. El equipo de WorkLink lo revisa." },
+];
+---
+
+<BaseLayout title="Cómo funciona" description="Cómo usar WorkLink: buscar a quien necesitás, pedir presupuestos, ofrecer tus servicios, crear la página de tu emprendimiento y destacarte.">
+  <section class="mx-auto max-w-5xl px-4 py-10 sm:py-14">
+    <div class="max-w-2xl">
+      <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">Cómo funciona WorkLink</h1>
+      <p class="mt-3 text-lg text-ink-muted">
+        WorkLink conecta a quienes necesitan algo con quienes lo ofrecen, en su ciudad. Elegí lo que querés hacer:
+      </p>
+    </div>
+
+    <nav aria-label="Guías" class="mt-6 flex flex-wrap gap-2">
+      {guides.map((g) => <a href={`#${g.id}`} class="rounded-full border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:border-brand">{g.title}</a>)}
+    </nav>
+
+    <div class="mt-10 flex flex-col gap-8">
+      {
+        guides.map((g) => (
+          <section id={g.id} class="scroll-mt-20 rounded-wl-lg border border-line bg-surface p-5 sm:p-8" aria-labelledby={`${g.id}-t`}>
+            <div class="flex items-start gap-4">
+              <span class:list={["grid h-12 w-12 shrink-0 place-items-center rounded-full", g.tone]} aria-hidden="true">
+                <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-2"><path stroke-linecap="round" stroke-linejoin="round" d={g.d} /></svg>
+              </span>
+              <div>
+                <h2 id={`${g.id}-t`} class="text-xl font-bold sm:text-2xl">{g.title}</h2>
+                <p class="text-ink-muted">{g.who}</p>
+              </div>
+            </div>
+            <ol class="mt-6 grid gap-4 sm:grid-cols-3">
+              {g.steps.map((s, i) => (
+                <li class="rounded-wl border border-line p-4">
+                  <span class="grid h-8 w-8 place-items-center rounded-full bg-brand text-sm font-bold text-brand-contrast" aria-hidden="true">{i + 1}</span>
+                  <h3 class="mt-3 font-semibold">{s.t}</h3>
+                  <p class="mt-1 text-sm text-ink-muted">{s.x}</p>
+                </li>
+              ))}
+            </ol>
+            <div class="mt-5">
+              <Button href={user || g.id === "buscar" || g.id === "planes" ? g.cta.href : routes.signup} variant="secondary">
+                {user || g.id === "buscar" || g.id === "planes" ? g.cta.label : "Crear cuenta gratis"} →
+              </Button>
+            </div>
+          </section>
+        ))
+      }
+    </div>
+
+    <section class="mt-12" aria-labelledby="mas">
+      <h2 id="mas" class="text-2xl font-bold">Y además</h2>
+      <ul class="mt-4 grid gap-4 sm:grid-cols-2">
+        {tips.map((t) => (
+          <li class="rounded-wl-lg border border-line bg-surface p-4">
+            <h3 class="font-semibold">{t.t}</h3>
+            <p class="mt-1 text-sm text-ink-muted">{t.x}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {!user && (
+      <div class="mt-12 rounded-wl-lg bg-brand p-6 text-center text-brand-contrast sm:p-10">
+        <h2 class="text-2xl font-bold">¿Empezamos?</h2>
+        <p class="mt-2 opacity-90">Crear tu cuenta es gratis y lleva un minuto.</p>
+        <a href={routes.signup} class="mt-5 inline-flex h-12 items-center rounded-wl bg-brand-contrast px-6 font-semibold text-brand hover:opacity-90">Crear cuenta gratis</a>
+      </div>
+    )}
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/cuenta/nueva-contrasena.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -9567,6 +9885,7 @@ escribir 'src/pages/mensajes/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * panel "Chats" del encabezado.
  */
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import SectionHint from "../../components/ui/SectionHint.astro";
 import Avatar from "../../components/ui/Avatar.astro";
 import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
 import { getConversations } from "../../services/messages";
@@ -9595,6 +9914,17 @@ const hidden = Astro.url.searchParams.get("oculta") === "1";
       </a>
     </div>
 
+    <SectionHint
+      id="mensajes"
+      class="mt-3"
+      title="Tus mensajes privados"
+      points={[
+        "Solo los ven vos y la otra persona. No hace falta compartir tu número.",
+        "Para escribirle a alguien, entrá a su perfil, emprendimiento o publicación y tocá “Mensaje”.",
+        "Cuando te escriben, te avisamos con un número en el ícono y un sonido.",
+      ]}
+    />
+
     <label for="buscar-chat" class="sr-only">Buscar conversación</label>
     <input
       id="buscar-chat"
@@ -9613,6 +9943,7 @@ const hidden = Astro.url.searchParams.get("oculta") === "1";
         <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
           <p class="font-semibold">Todavía no tenés mensajes.</p>
           <p class="mt-1 text-sm text-ink-muted">Para escribirle a alguien, entrá a su perfil o a una publicación y tocá “Mensaje”.</p>
+          <a href="/buscar?ver=personas" class="mt-4 inline-flex h-10 items-center rounded-wl bg-brand px-4 text-sm font-semibold text-brand-contrast hover:bg-brand-hover">Buscar personas</a>
         </div>
       ) : (
         <ul class="-mx-2 mt-2" data-chat-items>
@@ -10080,6 +10411,7 @@ escribir 'src/pages/necesidades/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * y ciudad. Quien ofrece ese servicio entra y manda su propuesta.
  */
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import SectionHint from "../../components/ui/SectionHint.astro";
 import Button from "../../components/ui/Button.astro";
 import NeedCard from "../../components/needs/NeedCard.astro";
 import CityPicker from "../../islands/CityPicker.tsx";
@@ -10123,6 +10455,18 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       <Button href={user ? "/necesidades/nueva" : "/registrarse"}>Publicar una necesidad</Button>
     </div>
 
+    <SectionHint
+      id="necesidades"
+      class="mt-6"
+      title="¿Cómo funcionan las Necesidades?"
+      points={[
+        "Son cosas que la gente necesita contratar en tu zona: un arreglo, un trabajo, un producto.",
+        "Si es lo tuyo, entrá y mandá tu propuesta con precio y disponibilidad. Solo la ve quien la publicó.",
+        "¿Necesitás algo vos? Tocá “Publicar una necesidad” y recibí presupuestos sin salir a buscar.",
+      ]}
+      link={{ href: "/como-funciona#presupuestos", label: "Ver la guía completa" }}
+    />
+
     <form method="GET" action="/necesidades" class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
       <div class="flex flex-col gap-1.5">
         <label for="n-rubro" class="text-sm font-medium">Rubro</label>
@@ -10139,7 +10483,13 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       needs.length === 0 ? (
         <div class="mt-8 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{filtered ? "No hay necesidades abiertas con esos filtros." : "Todavía no hay necesidades abiertas."}</p>
-          <p class="mt-1 text-sm text-ink-muted">¿Buscás algo? Publicalo y que te lleguen propuestas.</p>
+          <p class="mt-1 text-sm text-ink-muted">
+            {filtered ? "Probá con otro rubro o sacá la ciudad." : "Cuando alguien de tu zona necesite algo, lo vas a ver acá."}
+          </p>
+          <div class="mt-4 flex flex-wrap justify-center gap-2">
+            {filtered && <Button href="/necesidades" variant="secondary" size="sm">Ver todas</Button>}
+            <Button href={user ? "/necesidades/nueva" : "/registrarse"} size="sm">Publicar lo que necesito</Button>
+          </div>
         </div>
       ) : (
         <div class="mt-6 flex flex-col gap-4">
@@ -11016,6 +11366,7 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/panel/emprendimientos/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import PanelLayout from "../../../layouts/PanelLayout.astro";
+import SectionHint from "../../../components/ui/SectionHint.astro";
 import Button from "../../../components/ui/Button.astro";
 import Alert from "../../../components/ui/Alert.astro";
 import Avatar from "../../../components/ui/Avatar.astro";
@@ -11034,6 +11385,17 @@ const statusLabel = {
 ---
 
 <PanelLayout title="Mis emprendimientos" description="Tus vidrieras en WorkLink.">
+  <SectionHint
+    id="emprendimientos"
+    class="mb-6"
+    title="¿Para qué sirve la página de emprendimiento?"
+    points={[
+      "Es como la página de Facebook de tu negocio: logo, portada, catálogo, horarios y contacto en un solo lugar.",
+      "Podés publicar en nombre de la página y la gente la puede seguir y dejarle reseñas.",
+      "Aparece en el buscador y en los rubros de tu ciudad, también para quien no tiene cuenta.",
+    ]}
+    link={{ href: "/como-funciona#emprendimiento", label: "Ver la guía" }}
+  />
   <Button slot="actions" href="/panel/emprendimientos/nuevo" variant="offer">Crear emprendimiento</Button>
 
   {removed && <Alert tone="success" class="mb-6">Eliminamos el emprendimiento.</Alert>}
@@ -11274,6 +11636,7 @@ escribir 'src/pages/panel/necesidades.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * propuestas (lo que ofrecí y en qué quedó). Solo las ve el usuario (RLS).
  */
 import PanelLayout from "../../layouts/PanelLayout.astro";
+import SectionHint from "../../components/ui/SectionHint.astro";
 import Button from "../../components/ui/Button.astro";
 import NeedCard from "../../components/needs/NeedCard.astro";
 import { getMyNeeds, getMyProposals, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
@@ -11288,7 +11651,16 @@ const tabClass = (active: boolean) =>
   `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
 ---
 
-<PanelLayout title="Necesidades" description="Lo que pediste y las propuestas que mandaste.">
+<PanelLayout title="Necesidades y propuestas" description="Lo que pediste y las propuestas que mandaste.">
+  <SectionHint
+    id="panel-necesidades"
+    class="mb-6"
+    title="Dos listas en un lugar"
+    points={[
+      "Mis necesidades: lo que pediste. Entrá a cada una para comparar las propuestas y elegir.",
+      "Mis propuestas: lo que ofreciste a otras personas y si te eligieron.",
+    ]}
+  />
   <Button slot="actions" href="/necesidades/nueva">Publicar una necesidad</Button>
 
   <div class="mb-5 flex flex-wrap gap-2">
@@ -11902,7 +12274,7 @@ const okText: Record<string, string> = {
     posts.length === 0 && !cursor ? (
       <div class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center">
         <h2 class="text-lg font-semibold">Todavía no publicaste nada</h2>
-        <p class="mx-auto mt-1 max-w-md text-ink-muted">Mostrá tus trabajos, promociones o contá qué estás buscando.</p>
+        <p class="mx-auto mt-1 max-w-md text-ink-muted">Mostrá lo que hacés: tus trabajos con fotos o video, un producto, una promoción, o contá que buscás trabajo.</p>
         <div class="mt-5"><Button href="/panel/publicaciones/nueva">Crear mi primera publicación</Button></div>
       </div>
     ) : (
@@ -13322,6 +13694,8 @@ export const GET: APIRoute = async ({ locals, site, url }) => {
     { loc: abs("/") },
     { loc: abs("/publicaciones") },
     { loc: abs("/necesidades") },
+    { loc: abs("/como-funciona") },
+    { loc: abs("/planes") },
     { loc: abs(directoryPath.index) },
     ...categories.filter((c) => c.businesses >= thresholds.minBusinessesAlt).map((c) => ({ loc: abs(directoryPath.category(c.slug)) })),
     ...((pairs.data ?? []) as { category_slug: string; province_slug: string; city_slug: string; last_updated: string }[]).map((p) => ({
@@ -18205,6 +18579,67 @@ export async function mediaExists(supabase: SupabaseClient, purpose: MediaPurpos
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/services/suggestions.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/** Sugerencias de "A quién seguir" (la base elige y ordena; acá se traen los datos). */
+export interface SuggestedPerson {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  headline: string | null;
+  verified_at: string | null;
+  followers_count: number;
+  city: { name: string } | null;
+}
+
+export interface SuggestedBusiness {
+  id: string;
+  slug: string;
+  name: string;
+  logo_path: string | null;
+  verification: string;
+  plan_tier: string;
+  followers_count: number;
+  category: { name: string } | null;
+  city: { name: string } | null;
+}
+
+const ordered = <T extends { id: string }>(ids: string[], rows: T[]) => {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return ids.map((id) => byId.get(id)).filter((r): r is T => Boolean(r));
+};
+
+export async function getSuggestions(supabase: SupabaseClient, limit = 5): Promise<{ people: SuggestedPerson[]; businesses: SuggestedBusiness[] }> {
+  const [p, b] = await Promise.all([
+    supabase.rpc("suggested_profile_ids", { p_limit: limit }),
+    supabase.rpc("suggested_business_ids", { p_limit: limit }),
+  ]);
+  const personIds = ((p.data ?? []) as { id: string }[]).map((r) => r.id);
+  const businessIds = ((b.data ?? []) as { id: string }[]).map((r) => r.id);
+  const [people, businesses] = await Promise.all([
+    personIds.length
+      ? supabase
+          .from("profiles")
+          .select("id, username, first_name, last_name, avatar_path, headline, verified_at, followers_count, city:cities ( name )")
+          .in("id", personIds)
+      : Promise.resolve({ data: [] }),
+    businessIds.length
+      ? supabase
+          .from("businesses")
+          .select("id, slug, name, logo_path, verification, plan_tier, followers_count, category:categories ( name ), city:cities ( name )")
+          .in("id", businessIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  return {
+    people: ordered(personIds, (people.data ?? []) as unknown as SuggestedPerson[]),
+    businesses: ordered(businessIds, (businesses.data ?? []) as unknown as SuggestedBusiness[]),
+  };
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /* =============================================================================
    WorkLink · estilos globales y tokens de diseño (identidad provisional)
@@ -22014,14 +22449,102 @@ grant select (cover_path) on public.profiles to anon;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002900_follow_suggestions.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0029 · "A quién seguir": sugerencias de personas y emprendimientos
+-- =============================================================================
+-- Para que el inicio de quien recién llega no esté vacío. Primero lo de su
+-- ciudad, después su provincia; suman los verificados, los que tienen foto,
+-- los que publicaron hace poco y los más seguidos. Nunca: la propia cuenta,
+-- lo que ya sigue, cuentas suspendidas ni personas con bloqueo.
+-- Devuelven solo ids (la app trae los datos con RLS).
+-- =============================================================================
+
+create or replace function public.suggested_profile_ids(p_limit integer default 6)
+returns table (id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with me as (
+    select p.id, p.city_id, c.province_id
+    from public.profiles p
+    left join public.cities c on c.id = p.city_id
+    where p.id = (select auth.uid())
+  )
+  select p.id
+  from public.profiles p
+  cross join me
+  left join public.cities c on c.id = p.city_id
+  where p.id <> me.id
+    and p.status = 'active'
+    and not exists (select 1 from public.profile_follows f where f.follower_id = me.id and f.followed_id = p.id)
+    and not public.is_blocked_between(me.id, p.id)
+  order by
+    (case when p.city_id = me.city_id then 4 when c.province_id = me.province_id then 2 else 0 end)
+    + (case when p.verified_at is not null then 2 else 0 end)
+    + (case when p.avatar_path is not null then 1 else 0 end)
+    + (case when exists (
+        select 1 from public.posts po
+        where po.author_id = p.id and po.status = 'published' and po.deleted_at is null and po.published_at > now() - interval '30 days'
+      ) then 2 else 0 end)
+    + (case when p.plan_tier <> 'free' then 1 else 0 end) desc,
+    p.followers_count desc,
+    p.created_at desc
+  limit least(greatest(coalesce(p_limit, 6), 1), 20);
+$$;
+
+create or replace function public.suggested_business_ids(p_limit integer default 6)
+returns table (id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with me as (
+    select p.id, p.city_id, c.province_id
+    from public.profiles p
+    left join public.cities c on c.id = p.city_id
+    where p.id = (select auth.uid())
+  )
+  select b.id
+  from public.businesses b
+  cross join me
+  left join public.cities c on c.id = b.city_id
+  where b.status = 'active'
+    and b.deleted_at is null
+    and b.owner_id <> me.id
+    and not exists (select 1 from public.business_members bm where bm.business_id = b.id and bm.user_id = me.id)
+    and not exists (select 1 from public.business_follows f where f.follower_id = me.id and f.business_id = b.id)
+    and not public.is_blocked_between(me.id, b.owner_id)
+  order by
+    (case when b.city_id = me.city_id then 4 when c.province_id = me.province_id then 2 else 0 end)
+    + (case when b.verification = 'verified' then 2 else 0 end)
+    + (case when b.logo_path is not null then 1 else 0 end)
+    + (case when b.rating_count > 0 then 1 else 0 end)
+    + (case when b.plan_tier <> 'free' then 1 else 0 end) desc,
+    b.followers_count desc,
+    b.created_at desc
+  limit least(greatest(coalesce(p_limit, 6), 1), 20);
+$$;
+
+revoke execute on function public.suggested_profile_ids(integer) from public, anon;
+revoke execute on function public.suggested_business_ids(integer) from public, anon;
+grant execute on function public.suggested_profile_ids(integer) to authenticated;
+grant execute on function public.suggested_business_ids(integer) to authenticated;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 218 archivos de las mejoras instalados."
+echo " Listo. 223 archivos de las mejoras instalados."
 echo " Siguientes pasos:"
-echo "   (no hace falta npx supabase db push)"
+echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"
 echo "============================================================"

@@ -4,6 +4,7 @@
  * propuestas (lo que ofrecí y en qué quedó). Solo las ve el usuario (RLS).
  */
 import PanelLayout from "../../layouts/PanelLayout.astro";
+import SectionHint from "../../components/ui/SectionHint.astro";
 import Button from "../../components/ui/Button.astro";
 import NeedCard from "../../components/needs/NeedCard.astro";
 import { getMyNeeds, getMyProposals, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
@@ -18,7 +19,16 @@ const tabClass = (active: boolean) =>
   `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
 ---
 
-<PanelLayout title="Necesidades" description="Lo que pediste y las propuestas que mandaste.">
+<PanelLayout title="Necesidades y propuestas" description="Lo que pediste y las propuestas que mandaste.">
+  <SectionHint
+    id="panel-necesidades"
+    class="mb-6"
+    title="Dos listas en un lugar"
+    points={[
+      "Mis necesidades: lo que pediste. Entrá a cada una para comparar las propuestas y elegir.",
+      "Mis propuestas: lo que ofreciste a otras personas y si te eligieron.",
+    ]}
+  />
   <Button slot="actions" href="/necesidades/nueva">Publicar una necesidad</Button>
 
   <div class="mb-5 flex flex-wrap gap-2">

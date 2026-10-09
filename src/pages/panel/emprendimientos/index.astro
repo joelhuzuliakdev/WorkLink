@@ -1,5 +1,6 @@
 ---
 import PanelLayout from "../../../layouts/PanelLayout.astro";
+import SectionHint from "../../../components/ui/SectionHint.astro";
 import Button from "../../../components/ui/Button.astro";
 import Alert from "../../../components/ui/Alert.astro";
 import Avatar from "../../../components/ui/Avatar.astro";
@@ -18,6 +19,17 @@ const statusLabel = {
 ---
 
 <PanelLayout title="Mis emprendimientos" description="Tus vidrieras en WorkLink.">
+  <SectionHint
+    id="emprendimientos"
+    class="mb-6"
+    title="¿Para qué sirve la página de emprendimiento?"
+    points={[
+      "Es como la página de Facebook de tu negocio: logo, portada, catálogo, horarios y contacto en un solo lugar.",
+      "Podés publicar en nombre de la página y la gente la puede seguir y dejarle reseñas.",
+      "Aparece en el buscador y en los rubros de tu ciudad, también para quien no tiene cuenta.",
+    ]}
+    link={{ href: "/como-funciona#emprendimiento", label: "Ver la guía" }}
+  />
   <Button slot="actions" href="/panel/emprendimientos/nuevo" variant="offer">Crear emprendimiento</Button>
 
   {removed && <Alert tone="success" class="mb-6">Eliminamos el emprendimiento.</Alert>}

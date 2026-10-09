@@ -1,0 +1,153 @@
+---
+/**
+ * Cómo funciona WorkLink: los usos principales explicados en pasos simples.
+ * Página pública e indexable (ayuda a entender la plataforma antes de entrar).
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import { routes } from "../config/site";
+
+const { user } = Astro.locals;
+
+const guides = [
+  {
+    id: "buscar",
+    title: "Encontrar a quien necesitás",
+    who: "Para quien busca un servicio o un producto",
+    tone: "bg-seek-soft text-seek",
+    d: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5",
+    steps: [
+      { t: "Buscá", x: "Escribí lo que necesitás en el buscador (por ejemplo “electricista”) y elegí tu ciudad. También podés recorrer los rubros." },
+      { t: "Compará", x: "Mirá las páginas de los emprendimientos: catálogo, fotos, horarios y las reseñas de otros clientes." },
+      { t: "Hablá directo", x: "Escribile por mensaje privado o por WhatsApp. El trato lo arreglan entre ustedes." },
+    ],
+    cta: { href: "/buscar", label: "Ir al buscador" },
+  },
+  {
+    id: "presupuestos",
+    title: "Pedir presupuestos (Necesidades)",
+    who: "Para quien quiere que lo contacten con precios",
+    tone: "bg-seek-soft text-seek",
+    d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4",
+    steps: [
+      { t: "Contá qué necesitás", x: "Publicá una necesidad: qué, en qué ciudad, para cuándo y, si querés, tu presupuesto." },
+      { t: "Recibí propuestas", x: "Los emprendimientos de ese rubro en tu ciudad reciben un aviso y te mandan su propuesta con precio. Solo vos las ves." },
+      { t: "Elegí una", x: "Compará precio, disponibilidad y reseñas. Al aceptar una, se abre el chat con esa persona para coordinar." },
+    ],
+    cta: { href: "/necesidades/nueva", label: "Publicar una necesidad" },
+  },
+  {
+    id: "ofrecer",
+    title: "Ofrecer lo tuyo",
+    who: "Para quien trabaja por su cuenta o tiene un oficio",
+    tone: "bg-offer-soft text-offer",
+    d: "M4 10v4h3l5 4V6L7 10H4ZM16 9a4 4 0 0 1 0 6",
+    steps: [
+      { t: "Completá tu perfil", x: "Foto, descripción de lo que hacés, tu ciudad y un teléfono. Así te encuentran y te tienen confianza." },
+      { t: "Publicá", x: "Mostrá tus trabajos con fotos o video. Lo ven quienes te siguen y aparece en el buscador." },
+      { t: "Respondé necesidades", x: "En Necesidades ves lo que la gente está buscando en tu zona. Mandá tu propuesta con precio y ganá clientes." },
+    ],
+    cta: { href: "/publicar", label: "Publicar algo" },
+  },
+  {
+    id: "emprendimiento",
+    title: "La página de tu emprendimiento",
+    who: "Para negocios y emprendimientos",
+    tone: "bg-success-soft text-success",
+    d: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5",
+    steps: [
+      { t: "Creala gratis", x: "Logo, portada, descripción, rubro, horarios, WhatsApp y redes. Es como una página de Facebook de tu negocio." },
+      { t: "Cargá tu catálogo", x: "Productos y servicios con foto y precio. Podés publicar en nombre de la página y la gente la puede seguir." },
+      { t: "Juntá reseñas", x: "Quienes te contraten o hablen con vos por WorkLink pueden dejarte estrellas. Las buenas reseñas te hacen aparecer mejor." },
+    ],
+    cta: { href: "/panel/emprendimientos/nuevo", label: "Crear mi emprendimiento" },
+  },
+  {
+    id: "planes",
+    title: "Destacarte y verificarte (opcional)",
+    who: "Para quien quiere más visibilidad",
+    tone: "bg-warning-soft text-warning",
+    d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z",
+    steps: [
+      { t: "Destacado", x: "Tus publicaciones aparecen en “Destacados” y salís primero en el buscador." },
+      { t: "Emprendimiento Pro", x: "Tu emprendimiento sale primero en su rubro y ciudad, con insignia PRO y verificación incluida." },
+      { t: "Verificación", x: "La tilde azul: revisamos tu DNI y una selfie para confirmar que sos quien decís ser." },
+    ],
+    cta: { href: "/planes", label: "Ver planes y precios" },
+  },
+];
+
+const tips = [
+  { t: "Mensajes privados", x: "Hablá con cualquier persona sin compartir tu número. Te avisamos con un sonido cuando te escriben." },
+  { t: "Seguir", x: "Seguí personas y emprendimientos para ver lo que publican en tu inicio." },
+  { t: "Guardados", x: "Guardá publicaciones para verlas después: están en el menú de tu foto → Guardados." },
+  { t: "Denunciar", x: "Si ves algo que no corresponde, tocá “Denunciar”. El equipo de WorkLink lo revisa." },
+];
+---
+
+<BaseLayout title="Cómo funciona" description="Cómo usar WorkLink: buscar a quien necesitás, pedir presupuestos, ofrecer tus servicios, crear la página de tu emprendimiento y destacarte.">
+  <section class="mx-auto max-w-5xl px-4 py-10 sm:py-14">
+    <div class="max-w-2xl">
+      <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">Cómo funciona WorkLink</h1>
+      <p class="mt-3 text-lg text-ink-muted">
+        WorkLink conecta a quienes necesitan algo con quienes lo ofrecen, en su ciudad. Elegí lo que querés hacer:
+      </p>
+    </div>
+
+    <nav aria-label="Guías" class="mt-6 flex flex-wrap gap-2">
+      {guides.map((g) => <a href={`#${g.id}`} class="rounded-full border border-line bg-surface px-3 py-1.5 text-sm font-medium hover:border-brand">{g.title}</a>)}
+    </nav>
+
+    <div class="mt-10 flex flex-col gap-8">
+      {
+        guides.map((g) => (
+          <section id={g.id} class="scroll-mt-20 rounded-wl-lg border border-line bg-surface p-5 sm:p-8" aria-labelledby={`${g.id}-t`}>
+            <div class="flex items-start gap-4">
+              <span class:list={["grid h-12 w-12 shrink-0 place-items-center rounded-full", g.tone]} aria-hidden="true">
+                <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-2"><path stroke-linecap="round" stroke-linejoin="round" d={g.d} /></svg>
+              </span>
+              <div>
+                <h2 id={`${g.id}-t`} class="text-xl font-bold sm:text-2xl">{g.title}</h2>
+                <p class="text-ink-muted">{g.who}</p>
+              </div>
+            </div>
+            <ol class="mt-6 grid gap-4 sm:grid-cols-3">
+              {g.steps.map((s, i) => (
+                <li class="rounded-wl border border-line p-4">
+                  <span class="grid h-8 w-8 place-items-center rounded-full bg-brand text-sm font-bold text-brand-contrast" aria-hidden="true">{i + 1}</span>
+                  <h3 class="mt-3 font-semibold">{s.t}</h3>
+                  <p class="mt-1 text-sm text-ink-muted">{s.x}</p>
+                </li>
+              ))}
+            </ol>
+            <div class="mt-5">
+              <Button href={user || g.id === "buscar" || g.id === "planes" ? g.cta.href : routes.signup} variant="secondary">
+                {user || g.id === "buscar" || g.id === "planes" ? g.cta.label : "Crear cuenta gratis"} →
+              </Button>
+            </div>
+          </section>
+        ))
+      }
+    </div>
+
+    <section class="mt-12" aria-labelledby="mas">
+      <h2 id="mas" class="text-2xl font-bold">Y además</h2>
+      <ul class="mt-4 grid gap-4 sm:grid-cols-2">
+        {tips.map((t) => (
+          <li class="rounded-wl-lg border border-line bg-surface p-4">
+            <h3 class="font-semibold">{t.t}</h3>
+            <p class="mt-1 text-sm text-ink-muted">{t.x}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {!user && (
+      <div class="mt-12 rounded-wl-lg bg-brand p-6 text-center text-brand-contrast sm:p-10">
+        <h2 class="text-2xl font-bold">¿Empezamos?</h2>
+        <p class="mt-2 opacity-90">Crear tu cuenta es gratis y lleva un minuto.</p>
+        <a href={routes.signup} class="mt-5 inline-flex h-12 items-center rounded-wl bg-brand-contrast px-6 font-semibold text-brand hover:opacity-90">Crear cuenta gratis</a>
+      </div>
+    )}
+  </section>
+</BaseLayout>

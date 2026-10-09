@@ -29,6 +29,7 @@ const groups: { href: string; label: string; hint?: string; d: string }[][] = [
     { href: "/panel/plan", label: "Mi plan", hint: viewer.role ? undefined : undefined, d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z" },
     { href: "/panel/perfil", label: "Editar perfil y cuenta", d: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0" },
     ...(viewer.role ? [{ href: "/admin", label: "Administración", d: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" }] : []),
+    { href: "/como-funciona", label: "Cómo funciona (ayuda)", d: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" },
   ],
 ];
 ---

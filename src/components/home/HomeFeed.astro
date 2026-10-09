@@ -5,6 +5,7 @@
  * En pantallas grandes suma una columna con el perfil y accesos rápidos.
  */
 import Avatar from "../ui/Avatar.astro";
+import SectionHint from "../ui/SectionHint.astro";
 import Alert from "../ui/Alert.astro";
 import FeedPage from "../posts/FeedPage.astro";
 import SearchBox from "./SearchBox.astro";
@@ -18,6 +19,8 @@ import { getViewerReactions } from "../../services/social";
 import { displayName } from "../../services/profiles";
 import NeedCard from "../needs/NeedCard.astro";
 import { getHomeNeeds } from "../../services/needs";
+import FollowSuggestions from "../social/FollowSuggestions.astro";
+import { getSuggestions } from "../../services/suggestions";
 
 interface Props {
   viewer: ViewerProfile;
@@ -34,11 +37,14 @@ const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
   mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
   cursor,
 });
-const [reactions, needs] = await Promise.all([
+const [reactions, needs, suggestions] = await Promise.all([
   getViewerReactions(supabase, viewer.id, posts.map((p) => p.id)),
-  // Necesidades abiertas (solo en la primera página del inicio).
+  // Necesidades abiertas y "A quién seguir" (solo en la primera página del inicio).
   cursor ? Promise.resolve([]) : getHomeNeeds(supabase, 3),
+  cursor ? Promise.resolve({ people: [], businesses: [] }) : getSuggestions(supabase, 5),
 ]);
+// Quien sigue a pocas cuentas ve las sugerencias en el feed (también en el celular).
+const suggestInFeed = viewer.following_count < 10;
 const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
 
 const headings = {
@@ -74,6 +80,16 @@ const links = [
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
     <SearchBox />
     {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
+    <SectionHint
+      id="inicio"
+      title="¡Bienvenido/a a WorkLink!"
+      points={[
+        "Acá ves lo que publican las personas y emprendimientos que seguís. Seguí a los que te interesen.",
+        "Con el botón ＋ (o Publicar) mostrás lo que ofrecés o pedís presupuestos.",
+        "En Necesidades ves qué busca la gente de tu zona. En tu foto, arriba, está todo lo tuyo.",
+      ]}
+      link={{ href: "/como-funciona", label: "Cómo funciona" }}
+    />
     <Composer viewer={viewer} />
 
     {
@@ -90,6 +106,8 @@ const links = [
         </section>
       )
     }
+
+    {suggestInFeed && <FollowSuggestions people={suggestions.people} businesses={suggestions.businesses} variant="carousel" class="lg:hidden" />}
 
     <div class="pt-2">
       <h1 class="text-xl font-bold">{heading.title}</h1>
@@ -149,6 +167,7 @@ const links = [
           ))}
         </nav>
       </section>
+      <FollowSuggestions people={suggestions.people} businesses={suggestions.businesses} variant="list" />
     </div>
   </aside>
 </div>

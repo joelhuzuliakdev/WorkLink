@@ -4,6 +4,7 @@
  * y ciudad. Quien ofrece ese servicio entra y manda su propuesta.
  */
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import SectionHint from "../../components/ui/SectionHint.astro";
 import Button from "../../components/ui/Button.astro";
 import NeedCard from "../../components/needs/NeedCard.astro";
 import CityPicker from "../../islands/CityPicker.tsx";
@@ -47,6 +48,18 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       <Button href={user ? "/necesidades/nueva" : "/registrarse"}>Publicar una necesidad</Button>
     </div>
 
+    <SectionHint
+      id="necesidades"
+      class="mt-6"
+      title="¿Cómo funcionan las Necesidades?"
+      points={[
+        "Son cosas que la gente necesita contratar en tu zona: un arreglo, un trabajo, un producto.",
+        "Si es lo tuyo, entrá y mandá tu propuesta con precio y disponibilidad. Solo la ve quien la publicó.",
+        "¿Necesitás algo vos? Tocá “Publicar una necesidad” y recibí presupuestos sin salir a buscar.",
+      ]}
+      link={{ href: "/como-funciona#presupuestos", label: "Ver la guía completa" }}
+    />
+
     <form method="GET" action="/necesidades" class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
       <div class="flex flex-col gap-1.5">
         <label for="n-rubro" class="text-sm font-medium">Rubro</label>
@@ -63,7 +76,13 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       needs.length === 0 ? (
         <div class="mt-8 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{filtered ? "No hay necesidades abiertas con esos filtros." : "Todavía no hay necesidades abiertas."}</p>
-          <p class="mt-1 text-sm text-ink-muted">¿Buscás algo? Publicalo y que te lleguen propuestas.</p>
+          <p class="mt-1 text-sm text-ink-muted">
+            {filtered ? "Probá con otro rubro o sacá la ciudad." : "Cuando alguien de tu zona necesite algo, lo vas a ver acá."}
+          </p>
+          <div class="mt-4 flex flex-wrap justify-center gap-2">
+            {filtered && <Button href="/necesidades" variant="secondary" size="sm">Ver todas</Button>}
+            <Button href={user ? "/necesidades/nueva" : "/registrarse"} size="sm">Publicar lo que necesito</Button>
+          </div>
         </div>
       ) : (
         <div class="mt-6 flex flex-col gap-4">
