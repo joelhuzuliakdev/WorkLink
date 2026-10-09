@@ -1,15 +1,154 @@
 ---
-/** Página legal provisional. Reemplazar por el texto definitivo antes del lanzamiento. */
-import BaseLayout from "../layouts/BaseLayout.astro";
+/** Términos y condiciones de uso de WorkLink. */
+import LegalPage from "../components/layout/LegalPage.astro";
+import { legal } from "../config/legal";
 
-export const prerender = true;
+const sections = [
+  { id: "que-es", title: "Qué es WorkLink" },
+  { id: "cuenta", title: "Tu cuenta" },
+  { id: "reglas", title: "Reglas de convivencia" },
+  { id: "contenido", title: "Lo que publicás" },
+  { id: "tratos", title: "Tratos entre usuarios" },
+  { id: "resenas", title: "Reseñas" },
+  { id: "planes", title: "Planes pagos" },
+  { id: "arrepentimiento", title: "Arrepentimiento y cancelación" },
+  { id: "verificacion", title: "Verificación de identidad" },
+  { id: "moderacion", title: "Moderación y suspensiones" },
+  { id: "responsabilidad", title: "Responsabilidad" },
+  { id: "cambios", title: "Cambios y contacto" },
+];
+const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "desde los canales de contacto publicados en el sitio";
 ---
 
-<BaseLayout title="Términos y condiciones" noindex>
-  <section class="mx-auto max-w-3xl px-4 py-12">
-    <h1 class="text-3xl font-bold">Términos y condiciones</h1>
-    <p class="mt-4 text-ink-muted">
-      Este texto está en preparación y se publicará antes del lanzamiento de WorkLink.
+<LegalPage
+  title="Términos y condiciones"
+  description="Las reglas para usar WorkLink: cuentas, publicaciones, reseñas, planes pagos, cancelación y moderación."
+  sections={sections}
+>
+  <p>
+    Bienvenido/a a WorkLink. Estos términos explican cómo funciona la plataforma y qué podés esperar de nosotros y de las demás personas.
+    Al crear una cuenta o usar el sitio aceptás estos términos y la <a href="/privacidad">política de privacidad</a>. Si no estás de acuerdo, no uses WorkLink.
+  </p>
+
+  <section>
+    <h2 id="que-es">1. Qué es WorkLink</h2>
+    <p>
+      WorkLink es una plataforma que conecta a personas que necesitan un producto o un servicio con personas y emprendimientos que lo ofrecen.
+      Permite crear un perfil y páginas de emprendimiento, publicar, seguir cuentas, enviar mensajes privados, publicar necesidades y recibir
+      propuestas, y dejar reseñas. WorkLink es operado por {legal.owner}.
     </p>
   </section>
-</BaseLayout>
+
+  <section>
+    <h2 id="cuenta">2. Tu cuenta</h2>
+    <ul>
+      <li>Para crear una cuenta tenés que ser mayor de 18 años y dar datos verdaderos.</li>
+      <li>Podés registrarte con tu email o con tu cuenta de Google. Sos responsable de cuidar tu contraseña y de lo que se haga con tu cuenta.</li>
+      <li>Una persona puede tener una sola cuenta personal. Las páginas de emprendimiento se crean desde esa cuenta.</li>
+      <li>Podés dejar de usar WorkLink y pedir que borremos tu cuenta cuando quieras.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="reglas">3. Reglas de convivencia</h2>
+    <p>En WorkLink no está permitido:</p>
+    <ul>
+      <li>Publicar contenido falso, engañoso, ofensivo, discriminatorio, violento, sexual o que incite al odio.</li>
+      <li>Hacerte pasar por otra persona o emprendimiento, o publicar datos personales de terceros sin su permiso.</li>
+      <li>Ofrecer productos o servicios ilegales, estafar o pedir pagos por adelantado con engaños.</li>
+      <li>Enviar spam, mensajes masivos no deseados o usar programas para automatizar el uso del sitio.</li>
+      <li>Escribir reseñas falsas, ofrecer o pedir reseñas a cambio de algo, o calificarte a vos mismo.</li>
+      <li>Intentar acceder a cuentas o datos ajenos, o interferir con el funcionamiento de la plataforma.</li>
+    </ul>
+    <p>Cualquier persona puede denunciar contenido con la opción “Denunciar”. Nuestro equipo revisa las denuncias.</p>
+  </section>
+
+  <section>
+    <h2 id="contenido">4. Lo que publicás</h2>
+    <p>
+      Lo que publicás (textos, fotos, videos, reseñas) sigue siendo tuyo. Nos das permiso para mostrarlo dentro de WorkLink, en los buscadores
+      y cuando alguien lo comparte, mientras esté publicado. Sos responsable de tener los derechos sobre lo que subís. Si lo borrás, deja de mostrarse.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="tratos">5. Tratos entre usuarios</h2>
+    <p>
+      WorkLink pone en contacto a las personas, pero <strong>no es parte</strong> de los acuerdos que hagan entre ellas: no vende, no presta los
+      servicios publicados ni cobra por ellos. El precio, la forma de pago, la calidad, los plazos y las garantías los acuerdan directamente quien
+      ofrece y quien contrata. Te recomendamos mirar las reseñas, conversar por los mensajes de WorkLink y no pagar por adelantado a quien no conocés.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="resenas">6. Reseñas</h2>
+    <p>
+      Solo pueden opinar quienes contrataron a una cuenta desde Necesidades o conversaron con ella por mensajes. Las reseñas tienen que reflejar
+      una experiencia real. El emprendimiento o la persona calificada puede responder. No borramos reseñas por ser negativas: solo las que
+      incumplen estas reglas.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="planes">7. Planes pagos</h2>
+    <ul>
+      <li>Usar WorkLink es gratis. Los planes pagos (Destacado, Emprendimiento Pro y Verificación) son opcionales y dan más visibilidad o la verificación de identidad.</li>
+      <li>Los precios se muestran en pesos argentinos en la página de <a href="/planes">planes</a>, con los impuestos que correspondan.</li>
+      <li>Los planes se cobran por mes, en forma automática, a través de Mercado Pago. WorkLink no recibe ni guarda los datos de tu tarjeta.</li>
+      <li>Los beneficios se activan cuando Mercado Pago confirma el pago y duran el mes pagado. Si un cobro es rechazado, los beneficios terminan al final del período pagado.</li>
+      <li>Si cambiamos el precio de un plan, te avisamos con al menos 30 días de anticipación; podés cancelar antes de que se aplique.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="arrepentimiento">8. Arrepentimiento y cancelación</h2>
+    <ul>
+      <li>
+        <strong>Derecho de arrepentimiento:</strong> según la Ley 24.240 de Defensa del Consumidor, podés arrepentirte de la contratación de un plan
+        dentro de los 10 días corridos desde que lo contrataste, sin dar explicaciones. Te devolvemos el importe completo por el mismo medio de pago.
+      </li>
+      <li>
+        <strong>Cancelación:</strong> podés cancelar un plan cuando quieras desde Mi panel → Mi plan. No se te vuelve a cobrar y conservás los
+        beneficios hasta el final del período que pagaste. Pasados los 10 días del arrepentimiento, los meses ya cobrados no se reintegran.
+      </li>
+      <li>Para ejercer el arrepentimiento o hacer cualquier reclamo, contactanos {contact}.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 id="verificacion">9. Verificación de identidad</h2>
+    <p>
+      Con el plan Verificación o Emprendimiento Pro podés pedir la tilde azul enviando una foto de tu DNI y una selfie. Las revisa la administración
+      de WorkLink y decide si aprueba la verificación. La tilde indica que verificamos la identidad de la persona: <strong>no es una garantía</strong>
+      sobre la calidad de sus productos o servicios. Si el plan se termina, la tilde se quita. Cómo tratamos esas imágenes está explicado en la
+      <a href="/privacidad#verificacion">política de privacidad</a>.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="moderacion">10. Moderación y suspensiones</h2>
+    <p>
+      Si una publicación, comentario, reseña, necesidad, perfil o emprendimiento incumple estos términos, podemos ocultarlo o quitarlo, y en casos
+      graves o repetidos suspender la cuenta. Las cuentas suspendidas no pueden publicar, comentar ni enviar mensajes. Si creés que nos equivocamos,
+      podés pedirnos que lo revisemos {contact}. Si suspendemos una cuenta por incumplir estos términos, no se reintegran los planes ya cobrados.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="responsabilidad">11. Responsabilidad</h2>
+    <p>
+      Trabajamos para que WorkLink funcione bien y sea seguro, pero el servicio se ofrece “tal como está” y puede tener interrupciones o errores.
+      No somos responsables por los acuerdos entre usuarios, ni por la veracidad de lo que publica cada persona, ni por daños que surjan de esos
+      tratos, en la medida en que lo permita la ley. Nada de esto limita los derechos que te da la Ley de Defensa del Consumidor.
+    </p>
+  </section>
+
+  <section>
+    <h2 id="cambios">12. Cambios y contacto</h2>
+    <p>
+      Podemos actualizar estos términos. Si el cambio es importante, te avisamos dentro de WorkLink antes de que se aplique. Estos términos se rigen
+      por las leyes de la República Argentina; ante cualquier conflicto son competentes {legal.jurisdiction}, sin perjuicio de los derechos que te
+      correspondan como consumidor. Para consultas o reclamos, contactanos {contact}.
+    </p>
+  </section>
+</LegalPage>

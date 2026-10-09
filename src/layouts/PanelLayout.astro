@@ -2,6 +2,9 @@
 /** Layout del área privada: navegación del panel + contenido. Siempre noindex. */
 import BaseLayout from "./BaseLayout.astro";
 import { getViewerProfile } from "../lib/viewer";
+import { showOnboarding } from "../lib/onboarding";
+import { actions } from "astro:actions";
+import Button from "../components/ui/Button.astro";
 
 interface Props {
   title: string;
@@ -16,8 +19,11 @@ const path = Astro.url.pathname;
 
 const viewer = await getViewerProfile(Astro.locals);
 
+const steps = showOnboarding(viewer, Astro.cookies);
+const logoutAction = `/salir${actions.auth.signOut}`;
+
 const links = [
-  { href: "/panel", label: "Resumen", active: path === "/panel" },
+  ...(steps ? [{ href: "/panel", label: "Primeros pasos", active: path === "/panel" }] : []),
   { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
   { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
   { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
@@ -58,5 +64,8 @@ const links = [
       <slot name="actions" />
     </div>
     <slot />
+    <form method="POST" action={logoutAction} class="mt-12 border-t border-line pt-6 sm:hidden">
+      <Button type="submit" variant="ghost" size="sm">Cerrar sesión</Button>
+    </form>
   </section>
 </BaseLayout>

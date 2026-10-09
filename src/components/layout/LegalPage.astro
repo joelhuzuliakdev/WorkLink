@@ -1,0 +1,35 @@
+---
+/** Estructura de las páginas legales: título, fecha, índice y contenido. */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { legal } from "../../config/legal";
+
+interface Props {
+  title: string;
+  description: string;
+  sections: { id: string; title: string }[];
+}
+
+const { title, description, sections } = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+  <article class="mx-auto max-w-3xl px-4 py-10 sm:py-14">
+    <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
+    <p class="mt-2 text-sm text-ink-muted">Última actualización: {legal.updatedAt}</p>
+    <nav aria-label="Contenido" class="mt-6 rounded-wl-lg border border-line bg-surface p-4">
+      <ol class="grid gap-1 text-sm sm:grid-cols-2">
+        {sections.map((s, i) => <li><a href={`#${s.id}`} class="text-brand hover:underline">{i + 1}. {s.title}</a></li>)}
+      </ol>
+    </nav>
+    <div class="legal mt-8 flex flex-col gap-8 leading-relaxed">
+      <slot />
+    </div>
+  </article>
+</BaseLayout>
+
+<style is:global>
+  .legal h2 { font-size: 1.25rem; font-weight: 700; scroll-margin-top: 5rem; }
+  .legal p, .legal ul { margin-top: 0.5rem; }
+  .legal ul { list-style: disc; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .legal a { color: var(--wl-brand); text-decoration: underline; }
+</style>

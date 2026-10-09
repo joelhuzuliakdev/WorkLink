@@ -4,6 +4,7 @@ import AuthLayout from "../layouts/AuthLayout.astro";
 import Field from "../components/ui/Field.astro";
 import Button from "../components/ui/Button.astro";
 import Alert from "../components/ui/Alert.astro";
+import GoogleButton from "../components/ui/GoogleButton.astro";
 import { routes, safeNextPath } from "../config/site";
 import { getSubmittedValues } from "../utils/form";
 
@@ -18,16 +19,18 @@ const result = Astro.getActionResult(actions.auth.signIn);
 if (result && !result.error) {
   return Astro.redirect(result.data.redirectTo);
 }
+const google = Astro.getActionResult(actions.auth.google);
+if (google && !google.error) return Astro.redirect(google.data.url, 303);
 
 const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
-const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const formError = result?.error && !isInputError(result.error) ? result.error.message : (google?.error?.message ?? null);
 
 const values = result?.error ? await getSubmittedValues(Astro.request) : {};
 const linkError = Astro.url.searchParams.get("error") === "link";
 const passwordChanged = Astro.url.searchParams.get("password") === "updated";
 ---
 
-<AuthLayout title="Ingresar" heading="Ingresá a WorkLink" subheading="Qué bueno verte de nuevo.">
+<AuthLayout title="Ingresar" heading="Ingresá a WorkLink" subheading="Qué bueno verte de nuevo." showcase>
   {linkError && (
     <Alert tone="warning" class="mb-5">
       El enlace venció o ya se usó. Ingresá con tu contraseña o pedí uno nuevo.
@@ -38,7 +41,9 @@ const passwordChanged = Astro.url.searchParams.get("password") === "updated";
   )}
   {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
 
-  <form method="POST" action={actions.auth.signIn} class="flex flex-col gap-4" novalidate>
+  <GoogleButton page={`/ingresar${next !== routes.home ? `?next=${encodeURIComponent(next)}` : ""}`} next={next} />
+
+  <form method="POST" action={actions.auth.signIn} class="flex flex-col gap-5" novalidate>
     <input type="hidden" name="next" value={next} />
     <Field
       name="email"

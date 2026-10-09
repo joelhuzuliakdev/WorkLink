@@ -114,7 +114,12 @@ function describe(n: NotificationView) {
 
 <BaseLayout title="Notificaciones" noindex>
   <section class="mx-auto max-w-2xl px-4 py-8">
-    <h1 class="text-2xl font-bold">Notificaciones</h1>
+    <div class="flex items-center justify-between gap-3">
+      <h1 class="text-2xl font-bold">Notificaciones</h1>
+      <button type="button" class="inline-flex h-9 items-center gap-2 rounded-wl border border-line bg-surface px-3 text-sm font-medium hover:bg-surface-muted" data-sound-toggle aria-pressed="true">
+        <span data-sound-icon aria-hidden="true">🔔</span><span data-sound-label>Sonido activado</span>
+      </button>
+    </div>
 
     {
       items.length === 0 ? (
@@ -163,3 +168,21 @@ function describe(n: NotificationView) {
     }
   </section>
 </BaseLayout>
+
+<script>
+  import { playChime, setSoundEnabled, soundEnabled } from "../scripts/sound";
+  const button = document.querySelector<HTMLButtonElement>("[data-sound-toggle]");
+  const render = () => {
+    if (!button) return;
+    const on = soundEnabled();
+    button.setAttribute("aria-pressed", String(on));
+    button.querySelector("[data-sound-icon]")!.textContent = on ? "🔔" : "🔕";
+    button.querySelector("[data-sound-label]")!.textContent = on ? "Sonido activado" : "Sonido apagado";
+  };
+  button?.addEventListener("click", () => {
+    setSoundEnabled(!soundEnabled());
+    render();
+    if (soundEnabled()) setTimeout(() => playChime("notification"), 50);
+  });
+  render();
+</script>

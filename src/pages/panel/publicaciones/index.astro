@@ -35,6 +35,7 @@ const okText: Record<string, string> = {
   <Button slot="actions" href="/panel/publicaciones/nueva">Nueva publicación</Button>
 
   {ok && okText[ok] && <Alert tone="success" class="mb-6">{okText[ok]}</Alert>}
+  {Astro.url.searchParams.get("password") === "updated" && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
   {actionError && <Alert tone="danger" class="mb-6">{actionError}</Alert>}
 
   {

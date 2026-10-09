@@ -60,19 +60,20 @@ const firstName = profile.first_name ?? name;
 <BaseLayout title={name} description={profile.headline ?? profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
   <div class="h-28 bg-gradient-to-r from-brand via-seek to-offer sm:h-40" aria-hidden="true"></div>
 
-  <section class="mx-auto max-w-3xl px-4">
-    <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end">
+  <section class="mx-auto max-w-5xl px-4">
+    <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-start sm:gap-5">
       <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
-      <div class="min-w-0 flex-1 sm:pb-2">
+      <div class="min-w-0 flex-1 sm:pt-[4.5rem]">
         <h1 class="flex items-center gap-2 text-2xl font-bold sm:text-3xl">{name}{profile.verified_at && <VerifiedBadge size={24} />}</h1>
         {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
         <p class="mt-1 text-sm text-ink-muted">
-          <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
-          {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
+          <a href={`${base}/seguidores`} class="hover:text-ink hover:underline"><span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span></a>
+          {" · "}
+          <a href={`${base}/seguidos`} class="hover:text-ink hover:underline">{profile.following_count.toLocaleString("es-AR")} seguidos</a>
         </p>
         <RatingBadge sum={profile.rating_sum} count={profile.rating_count} href="#resenas" variant="full" class="mt-1" />
       </div>
-      <div class="flex flex-wrap gap-2 sm:pb-2">
+      <div class="flex flex-wrap gap-2 sm:pt-[4.75rem]">
         {
           isMe ? (
             <>
@@ -96,7 +97,7 @@ const firstName = profile.first_name ?? name;
 
     {isMe && Astro.url.searchParams.get("guardado") === "1" && <Alert tone="success" class="mt-6">Guardamos los cambios de tu perfil.</Alert>}
 
-    <div class="mt-6 grid gap-6 md:grid-cols-[260px_minmax(0,1fr)]">
+    <div class="mt-6 grid gap-6 md:grid-cols-[300px_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-8">
       <aside class="flex flex-col gap-4">
         <section class="rounded-wl-lg border border-line bg-surface p-4">
           <h2 class="font-semibold">Información</h2>

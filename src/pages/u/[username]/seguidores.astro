@@ -1,0 +1,10 @@
+---
+/** Seguidores de una persona: /u/[usuario]/seguidores */
+import FollowList from "../../../components/social/FollowList.astro";
+import { loadFollowList } from "../../../lib/follow-list";
+
+const data = await loadFollowList(Astro, "followers");
+if (data instanceof Response) return data;
+---
+
+<FollowList data={data} />

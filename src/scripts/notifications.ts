@@ -4,8 +4,17 @@
  * hay sin leer. Si llega un mensaje nuevo, muestra un aviso abajo a la derecha
  * con quién lo mandó y el texto; al tocarlo se abre la conversación.
  * Es una consulta liviana; sin conexión, no hace nada.
+ *
+ * Con la pestaña en segundo plano sigue consultando (más espaciado) para
+ * sonar y mostrar "(2) WorkLink" en el título cuando llega algo nuevo.
  */
+import { playChime } from "./sound";
+
 const INTERVAL = 10_000;
+const BACKGROUND_INTERVAL = 30_000;
+let lastUnread: number | null = null;
+let lastMessages: number | null = null;
+const baseTitle = document.title.replace(/^\(\d+\+?\) /, "");
 let timer: number | undefined;
 let lastSeenAt: string | null = null;
 let primed = false;
@@ -73,8 +82,12 @@ document.addEventListener("click", (event) => {
   }
 });
 
+function setTitle(total: number) {
+  document.title = total > 0 ? `(${total > 99 ? "99+" : total}) ${baseTitle}` : baseTitle;
+}
+
 async function refresh() {
-  if (document.visibilityState !== "visible" || !enabled()) return;
+  if (!enabled()) return;
   try {
     const res = await fetch("/api/notificaciones", { headers: { Accept: "application/json" } });
     if (!res.ok) return;
@@ -84,8 +97,19 @@ async function refresh() {
     for (const link of document.querySelectorAll<HTMLElement>("[data-notifications-link]")) {
       link.setAttribute("aria-label", unread ? `Notificaciones (${unread} sin leer)` : "Notificaciones");
     }
-    // Aviso solo para mensajes que llegaron después de abrir la página.
-    if (latest && primed && (!lastSeenAt || latest.at > lastSeenAt) && !isViewing(latest.conversationId)) announce(latest);
+    setTitle(unread + messages);
+    // Aviso (y sonido) solo para lo que llegó después de abrir la página.
+    const newMessage = Boolean(latest && primed && (!lastSeenAt || latest.at > lastSeenAt) && !isViewing(latest.conversationId));
+    if (newMessage && latest) {
+      if (document.visibilityState === "visible") announce(latest);
+      playChime("message");
+    } else if (primed && lastUnread !== null && unread > lastUnread) {
+      playChime("notification");
+    } else if (primed && lastMessages !== null && messages > lastMessages && !newMessage) {
+      playChime("message");
+    }
+    lastUnread = unread;
+    lastMessages = messages;
     if (latest && (!lastSeenAt || latest.at > lastSeenAt)) lastSeenAt = latest.at;
     if (!lastSeenAt) lastSeenAt = new Date().toISOString();
     primed = true;
@@ -96,17 +120,13 @@ async function refresh() {
 
 function start() {
   window.clearInterval(timer);
-  timer = window.setInterval(refresh, INTERVAL);
+  timer = window.setInterval(refresh, document.visibilityState === "visible" ? INTERVAL : BACKGROUND_INTERVAL);
 }
 
 if (enabled()) {
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      void refresh();
-      start();
-    } else {
-      window.clearInterval(timer);
-    }
+    if (document.visibilityState === "visible") void refresh();
+    start();
   });
   window.addEventListener("focus", () => void refresh());
   window.addEventListener("wl:refresh-badges", () => void refresh());

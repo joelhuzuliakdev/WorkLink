@@ -12,6 +12,8 @@ export interface ViewerProfile {
   following_count: number;
   verified_at: string | null;
   status: "active" | "suspended" | "banned";
+  /** Perfil completo: foto, descripción, ciudad y teléfono (los "primeros pasos"). */
+  profileComplete: boolean;
   /** Rol en el equipo de WorkLink (null si no es staff). */
   role: "moderator" | "admin" | "super_admin" | null;
 }
@@ -26,7 +28,7 @@ export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | nu
     const [{ data, error }, { data: role }] = await Promise.all([
       locals.supabase
         .from("profiles")
-        .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at, status")
+        .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at, status, bio, city_id, whatsapp, phone")
         .eq("id", locals.user!.id)
         .maybeSingle(),
       locals.supabase.from("user_roles").select("role").eq("user_id", locals.user!.id).maybeSingle(),
@@ -35,7 +37,13 @@ export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | nu
       console.error("[viewer]", error.message);
       return null;
     }
-    return data ? ({ ...data, role: (role?.role as ViewerProfile["role"]) ?? null } as ViewerProfile) : null;
+    if (!data) return null;
+    const { bio, city_id, whatsapp, phone, ...rest } = data as Record<string, unknown>;
+    return {
+      ...rest,
+      role: (role?.role as ViewerProfile["role"]) ?? null,
+      profileComplete: Boolean(rest.avatar_path && bio && city_id && (whatsapp || phone)),
+    } as ViewerProfile;
   })();
   return locals.viewerProfile;
 }

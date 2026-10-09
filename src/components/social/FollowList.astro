@@ -1,0 +1,84 @@
+---
+/**
+ * Seguidores o seguidos de una persona (como en Instagram). Los datos los
+ * carga la página con loadFollowList (lib/follow-list.ts).
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../ui/Avatar.astro";
+import Button from "../ui/Button.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import FollowButton from "./FollowButton.astro";
+import SituationBadge from "./SituationBadge.astro";
+import { displayName } from "../../services/profiles";
+import { profilePath } from "../../lib/urls";
+import type { FollowListData } from "../../lib/follow-list";
+
+interface Props {
+  data: FollowListData;
+}
+
+const { kind, profile, people, following, page, hasMore, base, self, viewerId } = Astro.props.data;
+const name = displayName(profile);
+const isMe = viewerId === profile.id;
+const title = kind === "followers" ? `Seguidores de ${name}` : `${name} sigue a`;
+const empty =
+  kind === "followers"
+    ? isMe ? "Todavía nadie te sigue. ¡Publicá algo para que te conozcan!" : `${profile.first_name ?? name} todavía no tiene seguidores.`
+    : isMe ? "Todavía no seguís a nadie." : `${profile.first_name ?? name} todavía no sigue a nadie.`;
+const tab = (active: boolean) =>
+  `flex-1 border-b-2 px-3 py-3 text-center text-sm font-semibold ${active ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink"}`;
+---
+
+<BaseLayout title={title} noindex>
+  <section class="mx-auto max-w-2xl px-4 py-6">
+    <a href={base} class="inline-flex items-center gap-2 text-sm font-medium text-ink-muted hover:text-ink">
+      <Avatar name={name} path={profile.avatar_path} size={28} />
+      ← {name}
+    </a>
+    <h1 class="sr-only">{title}</h1>
+    <nav class="mt-4 flex border-b border-line" aria-label="Seguidores y seguidos">
+      <a href={`${base}/seguidores`} class={tab(kind === "followers")} aria-current={kind === "followers" ? "page" : undefined}>
+        {profile.followers_count.toLocaleString("es-AR")} seguidores
+      </a>
+      <a href={`${base}/seguidos`} class={tab(kind === "following")} aria-current={kind === "following" ? "page" : undefined}>
+        {profile.following_count.toLocaleString("es-AR")} seguidos
+      </a>
+    </nav>
+
+    {
+      people.length === 0 ? (
+        <p class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">{page > 1 ? "No hay más." : empty}</p>
+      ) : (
+        <ul class="mt-2 divide-y divide-line" data-follow-list>
+          {people.map((p) => {
+            const pname = displayName(p);
+            return (
+              <li class="flex items-center gap-3 py-3">
+                <a href={profilePath(p.username)} class="shrink-0"><Avatar name={pname} path={p.avatar_path} size={48} /></a>
+                <a href={profilePath(p.username)} class="min-w-0 flex-1">
+                  <span class="flex items-center gap-1 font-semibold"><span class="truncate">{pname}</span>{p.verified_at && <VerifiedBadge size={14} />}</span>
+                  <span class="block truncate text-sm text-ink-muted">{p.headline ?? `@${p.username}`}</span>
+                  <SituationBadge situation={p.situation} class="mt-1" />
+                </a>
+                {p.id !== viewerId && <FollowButton kind="profile" id={p.id} following={following.has(p.id)} returnTo={self} class="shrink-0" />}
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+
+    {
+      (page > 1 || hasMore) && (
+        <nav class="mt-4 flex justify-between gap-4" aria-label="Páginas">
+          {page > 1 ? <Button href={page === 2 ? self : `${self}?pagina=${page - 1}`} variant="secondary" size="sm">← Anteriores</Button> : <span />}
+          {hasMore && <Button href={`${self}?pagina=${page + 1}`} variant="secondary" size="sm">Ver más →</Button>}
+        </nav>
+      )
+    }
+  </section>
+</BaseLayout>
+
+<script>
+  import "../../scripts/social";
+</script>

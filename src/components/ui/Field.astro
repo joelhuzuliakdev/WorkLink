@@ -16,24 +16,65 @@ type Props = {
 const { name, label, error, hint, class: className = "", id = name, ...inputProps } = Astro.props;
 
 const hintId = hint ? `${id}-hint` : undefined;
+// Contraseñas: botón con el ojito para ver lo que se escribió.
+const isPassword = inputProps.type === "password";
 const errorId = error ? `${id}-error` : undefined;
 const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
 ---
 
 <div class:list={["flex flex-col gap-1.5", className]}>
   <label for={id} class="text-sm font-medium text-ink">{label}</label>
-  <input
-    id={id}
-    name={name}
-    aria-invalid={error ? "true" : undefined}
-    aria-describedby={describedBy}
-    class:list={[
-      "h-11 w-full rounded-wl border bg-surface px-3 text-base text-ink placeholder:text-ink-muted/70",
-      "transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25",
-      error ? "border-danger" : "border-line",
-    ]}
-    {...inputProps}
-  />
+  <div class="relative">
+    <input
+      id={id}
+      name={name}
+      aria-invalid={error ? "true" : undefined}
+      aria-describedby={describedBy}
+      class:list={[
+        "h-11 w-full rounded-wl border bg-surface px-3 text-base text-ink placeholder:text-ink-muted/70",
+        "transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25",
+        error ? "border-danger" : "border-line",
+        isPassword && "pr-12",
+      ]}
+      {...inputProps}
+    />
+    {
+      isPassword && (
+        <button
+          type="button"
+          class="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-r-wl text-ink-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-brand"
+          aria-label="Mostrar contraseña"
+          aria-pressed="false"
+          aria-controls={id}
+          data-reveal-password
+        >
+          <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true" data-eye-open>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" />
+          </svg>
+          <svg viewBox="0 0 24 24" class="hidden h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true" data-eye-closed>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M10.6 5.6A9.7 9.7 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3 3.8M6.6 6.6C3.9 8.3 2.5 12 2.5 12S6 18.5 12 18.5c1.8 0 3.3-.5 4.6-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+          </svg>
+        </button>
+      )
+    }
+  </div>
   {hint && !error && <p id={hintId} class="text-xs text-ink-muted">{hint}</p>}
   {error && <p id={errorId} class="text-sm text-danger" role="alert">{error}</p>}
 </div>
+
+<script>
+  // Mostrar / ocultar la contraseña (un solo manejador para toda la página).
+  document.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-reveal-password]");
+    if (!button) return;
+    const input = document.getElementById(button.getAttribute("aria-controls")!) as HTMLInputElement | null;
+    if (!input) return;
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    button.setAttribute("aria-pressed", String(show));
+    button.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña");
+    button.querySelector("[data-eye-open]")?.classList.toggle("hidden", show);
+    button.querySelector("[data-eye-closed]")?.classList.toggle("hidden", !show);
+    input.focus();
+  });
+</script>

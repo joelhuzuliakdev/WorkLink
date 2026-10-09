@@ -4,6 +4,7 @@ import AuthLayout from "../layouts/AuthLayout.astro";
 import Field from "../components/ui/Field.astro";
 import Button from "../components/ui/Button.astro";
 import Alert from "../components/ui/Alert.astro";
+import GoogleButton from "../components/ui/GoogleButton.astro";
 import { routes } from "../config/site";
 import { getSubmittedValues } from "../utils/form";
 
@@ -18,9 +19,12 @@ if (result && !result.error && !result.data.needsConfirmation) {
   return Astro.redirect(routes.home);
 }
 
+const google = Astro.getActionResult(actions.auth.google);
+if (google && !google.error) return Astro.redirect(google.data.url, 303);
+
 const sentTo = result && !result.error ? result.data.email : null;
 const fieldErrors = result?.error && isInputError(result.error) ? result.error.fields : {};
-const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const formError = result?.error && !isInputError(result.error) ? result.error.message : (google?.error?.message ?? null);
 
 const values = result?.error ? await getSubmittedValues(Astro.request) : {};
 const preselected = (values.intent ?? Astro.url.searchParams.get("intent")) === "provider" ? "provider" : "seeker";
@@ -47,6 +51,7 @@ const intents = [
   title="Crear cuenta"
   heading={sentTo ? "Revisá tu email" : "Creá tu cuenta"}
   subheading={sentTo ? undefined : "Es gratis. Podés buscar y ofrecer con la misma cuenta."}
+  showcase={!sentTo}
 >
   {
     sentTo ? (
@@ -63,14 +68,16 @@ const intents = [
       <>
         {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
 
-        <form method="POST" action={actions.auth.signUp} class="flex flex-col gap-4" novalidate>
+        <GoogleButton page="/registrarse" label="Registrarme con Google" consent />
+
+        <form method="POST" action={actions.auth.signUp} class="flex flex-col gap-6" novalidate>
           <fieldset class="flex flex-col gap-2">
-            <legend class="mb-2 text-sm font-medium text-ink">¿Qué venís a hacer?</legend>
-            <div class="grid gap-2 sm:grid-cols-2">
+            <legend class="mb-3 text-sm font-medium text-ink">¿Qué venís a hacer?</legend>
+            <div class="grid gap-3 sm:grid-cols-2">
               {intents.map((option) => (
                 <label
                   class:list={[
-                    "flex cursor-pointer flex-col gap-1 rounded-wl border border-line bg-surface p-3 transition-colors",
+                    "flex cursor-pointer flex-col gap-1.5 rounded-wl border border-line bg-surface p-4 transition-colors",
                     "hover:bg-surface-muted has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40",
                     option.ring,
                   ]}
@@ -94,7 +101,7 @@ const intents = [
             {fieldErrors.intent?.[0] && <p class="text-sm text-danger">{fieldErrors.intent[0]}</p>}
           </fieldset>
 
-          <div class="grid gap-4 sm:grid-cols-2">
+          <div class="grid gap-5 sm:grid-cols-2">
             <Field
               name="first_name"
               value={values.first_name}

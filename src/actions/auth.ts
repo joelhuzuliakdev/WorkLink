@@ -1,4 +1,5 @@
 import { ActionError, defineAction } from "astro:actions";
+import { z } from "astro/zod";
 import { PUBLIC_SITE_URL } from "astro:env/client";
 import { forgotPasswordSchema, resetPasswordSchema, signInSchema, signUpSchema } from "../schemas/auth";
 import { toActionError } from "../lib/auth/errors";
@@ -52,6 +53,25 @@ export const auth = {
       if (error) throw toActionError(error);
 
       return { redirectTo: safeNextPath(input.next, routes.home) };
+    },
+  }),
+
+  /** Ingresar o crear cuenta con Google: devuelve la URL de Google a la que hay que ir. */
+  google: defineAction({
+    accept: "form",
+    input: z.object({ next: z.string().optional() }),
+    handler: async ({ next }, { locals }) => {
+      const { data, error } = await locals.supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          // Vuelve a /auth/confirm (?code=...), que abre la sesión y redirige.
+          redirectTo: confirmUrl(safeNextPath(next, routes.home)),
+          queryParams: { prompt: "select_account" },
+        },
+      });
+      if (error) throw toActionError(error, "No pudimos conectar con Google. Probá de nuevo.");
+      if (!data.url) throw new ActionError({ code: "INTERNAL_SERVER_ERROR", message: "No pudimos conectar con Google. Probá de nuevo." });
+      return { url: data.url };
     },
   }),
 
