@@ -21,6 +21,7 @@ const links = [
   { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
   { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
   { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
+  { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
   ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),

@@ -92,6 +92,20 @@ function describe(n: NotificationView) {
         tone: "bg-seek text-white",
       };
     }
+    case "plan_activated":
+      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "★", tone: "bg-brand text-brand-contrast" };
+    case "plan_payment_failed":
+      return {
+        name: "WorkLink",
+        text: "Mercado Pago no pudo cobrar tu plan. Revisá tu medio de pago para no perder los beneficios.",
+        href: "/panel/plan",
+        icon: "!",
+        tone: "bg-warning text-white",
+      };
+    case "verification_approved":
+      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "✓", tone: "bg-seek text-white" };
+    case "verification_rejected":
+      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "!", tone: "bg-warning text-white" };
     default:
       return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }

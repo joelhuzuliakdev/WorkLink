@@ -23,6 +23,7 @@ const meta = [hideCategory ? null : b.category?.name, b.city ? `${b.city.name}${
     <span class="flex flex-wrap items-center gap-x-2">
       <span class="font-semibold">{b.name}</span>
       {b.verification === "verified" && <span class="text-sm text-seek" title="Verificado">✓ Verificado</span>}
+      {b.plan_tier === "pro" && <span class="rounded bg-brand px-1.5 py-0.5 text-[10px] font-bold leading-none text-brand-contrast" title="Emprendimiento Pro">PRO</span>}
     </span>
     {meta && <span class="block truncate text-sm text-ink-muted">{meta}</span>}
     <RatingBadge sum={b.rating_sum} count={b.rating_count} size={13} class="mt-0.5" />

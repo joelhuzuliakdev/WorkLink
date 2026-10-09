@@ -25,4 +25,6 @@ export const DONE_MESSAGES: Record<string, string> = {
   unverify: "Listo: se quitó la verificación.",
   dismiss: "Listo: descartaste la denuncia.",
   role: "Listo: cambiaste el rol.",
+  rechazada: "Listo: rechazaste el pedido y le avisamos a la persona.",
+  plan: "Listo: guardaste el plan.",
 };

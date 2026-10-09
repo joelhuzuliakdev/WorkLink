@@ -1,0 +1,89 @@
+---
+/**
+ * Pedidos de verificación (DNI + selfie). Las fotos están en un bucket
+ * privado: se muestran con links firmados que vencen en 10 minutos.
+ * Solo administración.
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import { getAdminStats } from "../../services/admin";
+import { getPendingVerifications } from "../../services/billing";
+import { requireAdmin } from "../../lib/admin-guard";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const denied = await requireAdmin(Astro);
+if (denied) return denied;
+const { supabase, user } = Astro.locals;
+
+const reviewed = Astro.getActionResult(actions.billing.reviewVerification);
+if (reviewed && !reviewed.error) return Astro.redirect(`/admin/verificaciones?hecho=${reviewed.data.decision === "approve" ? "verify" : "rechazada"}`, 303);
+
+const [requests, stats] = await Promise.all([getPendingVerifications(supabase), getAdminStats(supabase)]);
+const storage = supabase.storage.from("verification");
+const withImages = await Promise.all(
+  requests.map(async (r) => {
+    const [doc, selfie] = await Promise.all([
+      storage.createSignedUrl(`${r.document_path}/1600.webp`, 600),
+      storage.createSignedUrl(`${r.selfie_path}/1600.webp`, 600),
+    ]);
+    return { ...r, docUrl: doc.data?.signedUrl ?? null, selfieUrl: selfie.data?.signedUrl ?? null };
+  }),
+);
+---
+
+<AdminLayout
+  title="Verificaciones"
+  description="Revisá que el nombre del DNI coincida con el de la cuenta y que la selfie sea de la misma persona. Las fotos son privadas."
+  openReports={stats?.reports_open}
+  error={reviewed?.error?.message}
+>
+  {
+    withImages.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No hay pedidos para revisar.</p>
+    ) : (
+      <ul class="flex flex-col gap-4">
+        {withImages.map((r) => {
+          const name = r.user ? displayName(r.user) : "—";
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4" data-verification={r.id}>
+              <div class="flex items-center gap-3">
+                <Avatar name={name} path={r.user?.avatar_path} size={40} />
+                <div>
+                  <p class="font-semibold">{name} <span class="font-normal text-ink-muted">@{r.user?.username}</span></p>
+                  <p class="text-xs text-ink-muted">Pedido del {formatDate(r.created_at, { dateStyle: "medium", timeStyle: "short" })} · cuenta desde {r.user ? formatDate(r.user.created_at, { dateStyle: "medium" }) : "—"}</p>
+                </div>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                {[["DNI", r.docUrl], ["Selfie con DNI", r.selfieUrl]].map(([label, src]) => (
+                  <figure class="overflow-hidden rounded-wl border border-line bg-surface-muted">
+                    {src ? (
+                      <a href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt={`${label} de ${name}`} class="max-h-80 w-full object-contain" referrerpolicy="no-referrer" /></a>
+                    ) : (
+                      <p class="p-6 text-center text-sm text-ink-muted">No se pudo cargar la imagen.</p>
+                    )}
+                    <figcaption class="px-3 py-1.5 text-xs text-ink-muted">{label}</figcaption>
+                  </figure>
+                ))}
+              </div>
+              {r.user_id === user!.id ? (
+                <p class="mt-3 text-sm text-ink-muted">Es tu propio pedido: lo tiene que revisar otra persona del equipo.</p>
+              ) : (
+                <form method="POST" action={actions.billing.reviewVerification} class="mt-3 flex flex-col gap-2">
+                  <input type="hidden" name="request_id" value={r.id} />
+                  <label class="sr-only" for={`reason-${r.id}`}>Motivo si la rechazás</label>
+                  <input id={`reason-${r.id}`} name="reason" maxlength="300" placeholder="Motivo si la rechazás (lo ve la persona). Ej.: la foto del DNI está borrosa." class="h-10 rounded-wl border border-line bg-surface px-3 text-sm" />
+                  <div class="flex flex-wrap gap-2">
+                    <button name="decision" value="approve" class="h-9 rounded-wl border border-success/40 bg-success-soft px-4 text-sm font-semibold text-success">Aprobar ✓</button>
+                    <button name="decision" value="reject" class="h-9 rounded-wl border border-danger/40 bg-danger-soft px-4 text-sm font-semibold text-danger">Rechazar</button>
+                  </div>
+                </form>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+</AdminLayout>

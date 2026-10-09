@@ -48,6 +48,7 @@ export const ACTION_LABELS: Record<string, string> = {
   unverify: "Quitó la verificación",
   dismiss: "Descartó la denuncia",
   role: "Cambió el rol",
+  verify_rejected: "Rechazó la verificación de",
 };
 
 export interface ModerationTarget {

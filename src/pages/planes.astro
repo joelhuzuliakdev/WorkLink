@@ -1,0 +1,59 @@
+---
+/** Planes y precios (página pública). Los precios salen de la base. */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import { getPlans } from "../services/billing";
+import { formatMoney } from "../lib/format";
+
+const { supabase } = Astro.locals;
+const plans = await getPlans(supabase);
+// Sin sesión, /panel/plan lleva a ingresar (y vuelve al plan elegido).
+const cta = (id: string) => `/panel/plan?elegir=${id}#plan-${id}`;
+const faqs = [
+  { q: "¿Tengo que pagar para usar WorkLink?", a: "No. Perfil, emprendimiento, publicaciones, mensajes, reseñas y necesidades son gratis. Los planes son para que te vean más." },
+  { q: "¿Cómo pago?", a: "Con Mercado Pago: tarjeta de crédito, débito o dinero en tu cuenta. Se cobra automáticamente todos los meses." },
+  { q: "¿Puedo cancelar?", a: "Sí, cuando quieras desde Mi panel → Mi plan. No se te vuelve a cobrar y mantenés los beneficios hasta el final del mes que pagaste." },
+  { q: "¿Cómo funciona la verificación?", a: "Con el plan Verificación o Emprendimiento Pro subís una foto de tu DNI y una selfie. Las revisa la administración de WorkLink (son privadas) y, si está todo bien, aparece la tilde azul al lado de tu nombre." },
+];
+---
+
+<BaseLayout title="Planes y precios" description="Planes de WorkLink para que más clientes encuentren tu trabajo o tu emprendimiento. Pagás con Mercado Pago y cancelás cuando quieras.">
+  <section class="mx-auto max-w-5xl px-4 py-10 sm:py-14">
+    <div class="mx-auto max-w-2xl text-center">
+      <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">Que te encuentren más</h1>
+      <p class="mt-3 text-lg text-ink-muted">Usar WorkLink es gratis. Con un plan, tus publicaciones y tu emprendimiento aparecen primero.</p>
+    </div>
+
+    <div class="mt-10 grid gap-5 md:grid-cols-3">
+      {
+        plans.map((plan) => (
+          <article class:list={["flex flex-col rounded-wl-lg border bg-surface p-6", plan.id === "pro" ? "border-brand shadow-[0_18px_40px_-28px_rgb(20_22_31/0.5)]" : "border-line"]}>
+            {plan.id === "pro" && <p class="mb-2 w-fit rounded-full bg-brand px-2.5 py-0.5 text-xs font-bold text-brand-contrast">El que más conviene</p>}
+            <h2 class="text-xl font-bold">{plan.name}</h2>
+            <p class="mt-1 text-sm text-ink-muted">{plan.description}</p>
+            <p class="mt-4 text-4xl font-bold">{formatMoney(plan.price)}<span class="text-base font-normal text-ink-muted"> /mes</span></p>
+            <ul class="mt-4 flex flex-1 flex-col gap-2 text-sm">
+              {plan.features.map((f) => <li class="flex gap-2"><span class="text-success" aria-hidden="true">✓</span>{f}</li>)}
+            </ul>
+            <Button href={cta(plan.id)} variant={plan.id === "pro" ? "primary" : "secondary"} class="mt-6" block>Elegir {plan.name}</Button>
+          </article>
+        ))
+      }
+    </div>
+    <p class="mt-4 text-center text-sm text-ink-muted">Precios finales en pesos argentinos. Se cobran por mes con Mercado Pago.</p>
+
+    <div class="mx-auto mt-14 max-w-3xl">
+      <h2 class="text-2xl font-bold">Preguntas frecuentes</h2>
+      <div class="mt-4 divide-y divide-line border-y border-line">
+        {faqs.map((f) => (
+          <details class="group py-4">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-semibold">
+              {f.q}<span class="text-xl font-normal text-ink-muted transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+            </summary>
+            <p class="mt-2 text-ink-muted">{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+</BaseLayout>

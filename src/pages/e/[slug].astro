@@ -132,6 +132,9 @@ const jsonLd = [
         <div class="min-w-0 flex-1">
           <h1 class="flex flex-wrap items-center gap-2 text-2xl font-bold sm:text-3xl">
             {business.name}
+            {business.plan_tier === "pro" && (
+              <span class="rounded bg-brand px-2 py-0.5 text-xs font-bold text-brand-contrast" title="Emprendimiento Pro">PRO</span>
+            )}
             {business.verification === "verified" && (
               <span class="inline-flex items-center gap-1 rounded-full bg-seek-soft px-2 py-0.5 text-xs font-semibold text-seek" title="Emprendedor verificado por WorkLink">
                 ✓ Verificado

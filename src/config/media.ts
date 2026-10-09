@@ -3,10 +3,10 @@
  * carpeta `{user_id}/{uuid}` con una variante WebP por tamaño: `{size}.webp`.
  * En la base se guarda solo la carpeta (ej. avatar_path = "uuid-usuario/uuid-imagen").
  */
-export type MediaPurpose = "avatar" | "logo" | "cover" | "catalog" | "post";
+export type MediaPurpose = "avatar" | "logo" | "cover" | "catalog" | "post" | "verification";
 
 export interface MediaPreset {
-  bucket: "avatars" | "covers" | "post-media";
+  bucket: "avatars" | "covers" | "post-media" | "verification";
   /** Anchos generados, de menor a mayor. */
   sizes: readonly number[];
   /** Relación ancho / alto del recorte; null = sin recorte (se mantiene la forma original). */
@@ -22,6 +22,8 @@ export const mediaPresets: Record<MediaPurpose, MediaPreset> = {
   cover: { bucket: "covers", sizes: [800, 1600], aspect: 3, maxInputBytes: 20 * 1024 * 1024, quality: 0.8 },
   catalog: { bucket: "post-media", sizes: [320, 800], aspect: 1, maxInputBytes: 15 * 1024 * 1024, quality: 0.82 },
   post: { bucket: "post-media", sizes: [480, 960, 1600], aspect: null, maxInputBytes: 20 * 1024 * 1024, quality: 0.8 },
+  // DNI y selfie (bucket privado): una sola variante, sin metadatos.
+  verification: { bucket: "verification", sizes: [1600], aspect: null, maxInputBytes: 20 * 1024 * 1024, quality: 0.85 },
 };
 
 export const acceptedImageTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];

@@ -21,6 +21,10 @@ const done = DONE_MESSAGES[Astro.url.searchParams.get("hecho") ?? ""] ?? null;
 const { supabase, user } = Astro.locals;
 const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
 const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super administración" };
+const isAdmin = role?.role === "admin" || role?.role === "super_admin";
+const { count: pendingVerifications } = isAdmin
+  ? await supabase.from("verification_requests").select("id", { count: "exact", head: true }).eq("status", "pending")
+  : { count: null };
 
 const links = [
   { href: "/admin", label: "Resumen", active: path === "/admin" },
@@ -28,6 +32,13 @@ const links = [
   { href: "/admin/usuarios", label: "Usuarios", active: path.startsWith("/admin/usuarios") },
   { href: "/admin/emprendimientos", label: "Emprendimientos", active: path.startsWith("/admin/emprendimientos") },
   { href: "/admin/historial", label: "Historial", active: path.startsWith("/admin/historial") },
+  // Plata y documentos: solo administración.
+  ...(isAdmin
+    ? [
+        { href: "/admin/ingresos", label: "Ingresos", active: path.startsWith("/admin/ingresos") },
+        { href: "/admin/verificaciones", label: "Verificaciones", active: path.startsWith("/admin/verificaciones"), badge: pendingVerifications },
+      ]
+    : []),
 ];
 ---
 

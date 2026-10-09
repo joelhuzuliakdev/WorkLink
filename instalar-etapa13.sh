@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 12 (administración y moderación)
+# WorkLink · instalador de la Etapa 13 (suscripciones con Mercado Pago, verificación paga e ingresos)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa12.sh
+#     bash instalar-etapa13.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0024 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega las migraciones 0025 y 0026 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 12..."
+echo "Instalando archivos de la Etapa 13..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -206,6 +206,175 @@ export const auth = {
       if (error) throw toActionError(error, "No pudimos cambiar tu contraseña. Probá de nuevo.");
 
       return { redirectTo: routes.dashboard };
+    },
+  }),
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/billing.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { PUBLIC_SITE_URL } from "astro:env/client";
+import { reviewVerificationSchema, subscribeSchema, subscriptionRefSchema, updatePlanSchema, verificationSchema } from "../schemas/billing";
+import { dbError, requireUser } from "../lib/auth/guards";
+import { createSupabaseAdminClient } from "../lib/supabase/admin";
+import { cancelPreapproval, createPreapproval, isMercadoPagoConfigured, MercadoPagoError } from "../lib/mercadopago";
+import { syncSubscription } from "../services/billing";
+
+/**
+ * Suscripciones y verificación. Reglas y permisos en la base (funciones con
+ * su propio control); los datos de pago solo los escribe el servidor después
+ * de consultarlos a Mercado Pago.
+ */
+const fromDb = (error: { code?: string; message?: string; hint?: string | null }, fallback: string) =>
+  error.message && ["42501", "23514"].includes(error.code ?? "") && !error.message.startsWith("permission") && !error.message.startsWith("new row")
+    ? new ActionError({ code: "FORBIDDEN", message: error.message })
+    : dbError(error, fallback);
+
+const fromMp = (error: unknown, fallback: string) =>
+  error instanceof MercadoPagoError
+    ? new ActionError({ code: "BAD_GATEWAY", message: error.message })
+    : (console.error("[billing]", error), new ActionError({ code: "INTERNAL_SERVER_ERROR", message: fallback }));
+
+export const billing = {
+  subscribe: defineAction({
+    accept: "form",
+    input: subscribeSchema,
+    handler: async (input, { locals, url }) => {
+      requireUser(locals.user);
+      if (!isMercadoPagoConfigured()) {
+        throw new ActionError({ code: "SERVICE_UNAVAILABLE", message: "Los pagos todavía no están habilitados. Probá más tarde." });
+      }
+      // 1) La base valida y crea la suscripción pendiente (con el precio de hoy).
+      const { data, error } = await locals.supabase.rpc("start_subscription", {
+        p_plan_id: input.plan_id,
+        p_business_id: input.business_id ?? null,
+        p_payer_email: input.payer_email,
+      });
+      if (error) throw fromDb(error, "No pudimos iniciar la suscripción.");
+      const sub = (data as { id: string; price: number; plan_name: string }[])[0];
+
+      // 2) Mercado Pago crea el cobro mensual y nos da el link de pago.
+      const site = (PUBLIC_SITE_URL || url.origin).replace(/\/$/, "");
+      let pre;
+      try {
+        pre = await createPreapproval({
+          subscriptionId: sub.id,
+          reason: `WorkLink · ${sub.plan_name}`,
+          payerEmail: input.payer_email,
+          amount: Number(sub.price),
+          backUrl: `${site}/panel/plan?sub=${sub.id}`,
+        });
+      } catch (e) {
+        throw fromMp(e, "No pudimos conectar con Mercado Pago.");
+      }
+      if (!pre.init_point) throw new ActionError({ code: "INTERNAL_SERVER_ERROR", message: "Mercado Pago no devolvió el link de pago." });
+
+      // 3) Se guarda el id de Mercado Pago (solo el servidor puede hacerlo).
+      const admin = createSupabaseAdminClient();
+      const attached = await admin.rpc("sub_attach_preapproval", {
+        p_subscription_id: sub.id,
+        p_preapproval_id: pre.id,
+        p_init_point: pre.init_point,
+      });
+      if (attached.error) throw dbError(attached.error, "No pudimos guardar la suscripción.");
+      return { checkoutUrl: pre.init_point };
+    },
+  }),
+
+  /** Consulta a Mercado Pago el estado actual (al volver del pago o con "Actualizar"). */
+  sync: defineAction({
+    accept: "form",
+    input: subscriptionRefSchema,
+    handler: async ({ subscription_id }, { locals }) => {
+      const user = requireUser(locals.user);
+      // RLS: solo se encuentra si es del usuario.
+      const { data: sub } = await locals.supabase
+        .from("subscriptions")
+        .select("id, mp_preapproval_id, user_id")
+        .eq("id", subscription_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!sub) throw new ActionError({ code: "NOT_FOUND", message: "No encontramos esa suscripción." });
+      try {
+        await syncSubscription(createSupabaseAdminClient(), sub);
+      } catch (e) {
+        throw fromMp(e, "No pudimos consultar el estado del pago.");
+      }
+      return { ok: true };
+    },
+  }),
+
+  cancel: defineAction({
+    accept: "form",
+    input: subscriptionRefSchema,
+    handler: async ({ subscription_id }, { locals }) => {
+      const user = requireUser(locals.user);
+      const { data: sub } = await locals.supabase
+        .from("subscriptions")
+        .select("id, mp_preapproval_id, user_id, status")
+        .eq("id", subscription_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!sub || sub.status === "cancelled") throw new ActionError({ code: "NOT_FOUND", message: "No encontramos esa suscripción activa." });
+      const admin = createSupabaseAdminClient();
+      try {
+        if (sub.mp_preapproval_id) {
+          await cancelPreapproval(sub.mp_preapproval_id);
+          await syncSubscription(admin, sub);
+        } else {
+          const done = await admin.rpc("sub_sync", { p_subscription_id: sub.id, p_preapproval_id: null, p_status: "cancelled", p_next_payment_at: null });
+          if (done.error) throw done.error;
+        }
+      } catch (e) {
+        throw fromMp(e, "No pudimos cancelar en Mercado Pago. Probá de nuevo.");
+      }
+      return { ok: true };
+    },
+  }),
+
+  submitVerification: defineAction({
+    accept: "form",
+    input: verificationSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("submit_verification", {
+        p_document_path: input.document_path,
+        p_selfie_path: input.selfie_path,
+      });
+      if (error) throw fromDb(error, "No pudimos enviar tu documentación.");
+      return { ok: true };
+    },
+  }),
+
+  // --- Administración -------------------------------------------------------
+  reviewVerification: defineAction({
+    accept: "form",
+    input: reviewVerificationSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("review_verification", {
+        p_request_id: input.request_id,
+        p_approve: input.decision === "approve",
+        p_reason: input.reason ?? null,
+      });
+      if (error) throw fromDb(error, "No pudimos guardar la decisión.");
+      return { decision: input.decision };
+    },
+  }),
+
+  updatePlan: defineAction({
+    accept: "form",
+    input: updatePlanSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase
+        .from("plans")
+        .update({ price: input.price, active: input.active })
+        .eq("id", input.plan_id)
+        .select("id");
+      if (error) throw fromDb(error, "No pudimos guardar el plan.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "Solo administración puede cambiar los planes." });
+      return { ok: true };
     },
   }),
 };
@@ -554,6 +723,7 @@ import { messages } from "./messages";
 import { needs } from "./needs";
 import { reviews } from "./reviews";
 import { admin } from "./admin";
+import { billing } from "./billing";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -570,6 +740,7 @@ export const server = {
   needs,
   reviews,
   admin,
+  billing,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -1899,6 +2070,7 @@ const meta = [hideCategory ? null : b.category?.name, b.city ? `${b.city.name}${
     <span class="flex flex-wrap items-center gap-x-2">
       <span class="font-semibold">{b.name}</span>
       {b.verification === "verified" && <span class="text-sm text-seek" title="Verificado">✓ Verificado</span>}
+      {b.plan_tier === "pro" && <span class="rounded bg-brand px-1.5 py-0.5 text-[10px] font-bold leading-none text-brand-contrast" title="Emprendimiento Pro">PRO</span>}
     </span>
     {meta && <span class="block truncate text-sm text-ink-muted">{meta}</span>}
     <RatingBadge sum={b.rating_sum} count={b.rating_count} size={13} class="mt-0.5" />
@@ -2199,7 +2371,7 @@ const features = [
 ];
 
 const faqs = [
-  { q: "¿Cuánto cuesta?", a: "Crear tu cuenta, armar tu perfil, publicar y crear la página de tu emprendimiento es gratis. Más adelante vas a poder destacar tus publicaciones con una suscripción opcional." },
+  { q: "¿Cuánto cuesta?", a: "Crear tu cuenta, armar tu perfil, publicar y crear la página de tu emprendimiento es gratis. Si querés que te vean más, hay planes opcionales para destacarte y verificar tu identidad: mirá los planes en /planes." },
   { q: "¿Necesito tener un emprendimiento?", a: "No. Podés usar WorkLink solo con tu perfil personal, para buscar trabajo, ofrecer tus servicios o encontrar a quien contratar. La página de emprendimiento es opcional." },
   { q: "¿Quién ve mi WhatsApp?", a: "Solo las personas que tienen cuenta en WorkLink. Los visitantes sin cuenta y los buscadores como Google no lo ven." },
   { q: "¿En qué ciudades funciona?", a: "Arrancamos en Córdoba, pero podés sumarte desde cualquier ciudad de Argentina." },
@@ -2483,6 +2655,7 @@ const links = [
   { href: "/rubros", label: "Rubros" },
   { href: "/publicaciones", label: "Publicaciones" },
   { href: "/necesidades", label: "Necesidades" },
+  { href: "/planes", label: "Planes" },
   { href: "/buscar", label: "Buscar" },
   { href: "/terminos", label: "Términos" },
   { href: "/privacidad", label: "Privacidad" },
@@ -4271,10 +4444,10 @@ escribir 'src/config/media.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * carpeta `{user_id}/{uuid}` con una variante WebP por tamaño: `{size}.webp`.
  * En la base se guarda solo la carpeta (ej. avatar_path = "uuid-usuario/uuid-imagen").
  */
-export type MediaPurpose = "avatar" | "logo" | "cover" | "catalog" | "post";
+export type MediaPurpose = "avatar" | "logo" | "cover" | "catalog" | "post" | "verification";
 
 export interface MediaPreset {
-  bucket: "avatars" | "covers" | "post-media";
+  bucket: "avatars" | "covers" | "post-media" | "verification";
   /** Anchos generados, de menor a mayor. */
   sizes: readonly number[];
   /** Relación ancho / alto del recorte; null = sin recorte (se mantiene la forma original). */
@@ -4290,6 +4463,8 @@ export const mediaPresets: Record<MediaPurpose, MediaPreset> = {
   cover: { bucket: "covers", sizes: [800, 1600], aspect: 3, maxInputBytes: 20 * 1024 * 1024, quality: 0.8 },
   catalog: { bucket: "post-media", sizes: [320, 800], aspect: 1, maxInputBytes: 15 * 1024 * 1024, quality: 0.82 },
   post: { bucket: "post-media", sizes: [480, 960, 1600], aspect: null, maxInputBytes: 20 * 1024 * 1024, quality: 0.8 },
+  // DNI y selfie (bucket privado): una sola variante, sin metadatos.
+  verification: { bucket: "verification", sizes: [1600], aspect: null, maxInputBytes: 20 * 1024 * 1024, quality: 0.85 },
 };
 
 export const acceptedImageTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
@@ -5129,6 +5304,10 @@ const done = DONE_MESSAGES[Astro.url.searchParams.get("hecho") ?? ""] ?? null;
 const { supabase, user } = Astro.locals;
 const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
 const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super administración" };
+const isAdmin = role?.role === "admin" || role?.role === "super_admin";
+const { count: pendingVerifications } = isAdmin
+  ? await supabase.from("verification_requests").select("id", { count: "exact", head: true }).eq("status", "pending")
+  : { count: null };
 
 const links = [
   { href: "/admin", label: "Resumen", active: path === "/admin" },
@@ -5136,6 +5315,13 @@ const links = [
   { href: "/admin/usuarios", label: "Usuarios", active: path.startsWith("/admin/usuarios") },
   { href: "/admin/emprendimientos", label: "Emprendimientos", active: path.startsWith("/admin/emprendimientos") },
   { href: "/admin/historial", label: "Historial", active: path.startsWith("/admin/historial") },
+  // Plata y documentos: solo administración.
+  ...(isAdmin
+    ? [
+        { href: "/admin/ingresos", label: "Ingresos", active: path.startsWith("/admin/ingresos") },
+        { href: "/admin/verificaciones", label: "Verificaciones", active: path.startsWith("/admin/verificaciones"), badge: pendingVerifications },
+      ]
+    : []),
 ];
 ---
 
@@ -5313,6 +5499,7 @@ const links = [
   { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
   { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
   { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
+  { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
   ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
@@ -5381,7 +5568,23 @@ export const DONE_MESSAGES: Record<string, string> = {
   unverify: "Listo: se quitó la verificación.",
   dismiss: "Listo: descartaste la denuncia.",
   role: "Listo: cambiaste el rol.",
+  rechazada: "Listo: rechazaste el pedido y le avisamos a la persona.",
+  plan: "Listo: guardaste el plan.",
 };
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/lib/admin-guard.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { AstroGlobal } from "astro";
+
+/** Páginas de plata y documentos: solo administración (la base también lo exige). */
+export async function requireAdmin(Astro: AstroGlobal): Promise<Response | null> {
+  const { data } = await Astro.locals.supabase.rpc("has_role", { min_role: "admin" });
+  if (data === true) return null;
+  return new Response("Solo administración puede ver esta página.", {
+    status: 403,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/lib/auth/errors.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -5756,6 +5959,162 @@ export function mediaFiles(purpose: MediaPurpose, basePath: string): string[] {
 /** URL pública de un archivo cualquiera de post-media (video o portada). */
 export function postFileUrl(basePath: string, fileName: string): string {
   return `${PUBLIC_SUPABASE_URL}/storage/v1/object/public/post-media/${basePath}/${fileName}`;
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/lib/mercadopago.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { getSecret } from "astro:env/server";
+
+/**
+ * Cliente mínimo de la API de Mercado Pago para suscripciones (preapproval).
+ * Solo servidor: usa el Access Token secreto. Nunca importar desde código que
+ * llegue al navegador.
+ *
+ * Regla de oro: los datos de un pago se leen SIEMPRE de esta API (con
+ * nuestro token), nunca del aviso (webhook) ni del navegador.
+ */
+
+export class MercadoPagoError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+export interface Preapproval {
+  id: string;
+  status: "pending" | "authorized" | "paused" | "cancelled" | string;
+  external_reference: string | null;
+  init_point?: string;
+  next_payment_date?: string | null;
+  payer_email?: string | null;
+}
+
+export interface AuthorizedPayment {
+  id: number | string;
+  preapproval_id: string;
+  status: string;
+  transaction_amount?: number;
+  payment?: { id: number | string; status: string } | null;
+}
+
+export interface Payment {
+  id: number | string;
+  status: string;
+  transaction_amount: number;
+  date_approved: string | null;
+  date_created: string;
+  fee_details?: { amount: number }[];
+  transaction_details?: { net_received_amount?: number };
+  point_of_interaction?: { transaction_data?: { subscription_id?: string } };
+  metadata?: Record<string, unknown>;
+}
+
+export const isMercadoPagoConfigured = () => Boolean(getSecret("MP_ACCESS_TOKEN"));
+
+async function call<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
+  const token = getSecret("MP_ACCESS_TOKEN");
+  if (!token) throw new MercadoPagoError("Los pagos todavía no están configurados.", 503);
+  const base = (getSecret("MP_API_URL") || "https://api.mercadopago.com").replace(/\/$/, "");
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(idempotencyKey ? { "X-Idempotency-Key": idempotencyKey } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    console.error("[mercadopago]", method, path, response.status, text.slice(0, 500));
+    throw new MercadoPagoError("Mercado Pago no respondió bien. Probá de nuevo en unos minutos.", response.status);
+  }
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/** Crea la suscripción en Mercado Pago (queda pendiente hasta que la persona paga). */
+export function createPreapproval(input: {
+  subscriptionId: string;
+  reason: string;
+  payerEmail: string;
+  amount: number;
+  backUrl: string;
+}): Promise<Preapproval> {
+  return call<Preapproval>(
+    "POST",
+    "/preapproval",
+    {
+      reason: input.reason,
+      external_reference: input.subscriptionId,
+      payer_email: input.payerEmail,
+      back_url: input.backUrl,
+      status: "pending",
+      auto_recurring: {
+        frequency: 1,
+        frequency_type: "months",
+        transaction_amount: input.amount,
+        currency_id: "ARS",
+      },
+    },
+    input.subscriptionId,
+  );
+}
+
+export const getPreapproval = (id: string) => call<Preapproval>("GET", `/preapproval/${encodeURIComponent(id)}`);
+
+export const cancelPreapproval = (id: string) =>
+  call<Preapproval>("PUT", `/preapproval/${encodeURIComponent(id)}`, { status: "cancelled" });
+
+export const getAuthorizedPayment = (id: string) => call<AuthorizedPayment>("GET", `/authorized_payments/${encodeURIComponent(id)}`);
+
+export async function searchAuthorizedPayments(preapprovalId: string): Promise<AuthorizedPayment[]> {
+  const data = await call<{ results?: AuthorizedPayment[] }>(
+    "GET",
+    `/authorized_payments/search?preapproval_id=${encodeURIComponent(preapprovalId)}&limit=100`,
+  );
+  return data.results ?? [];
+}
+
+export const getPayment = (id: string) => call<Payment>("GET", `/v1/payments/${encodeURIComponent(id)}`);
+
+/** Comisión total y neto de un pago. */
+export function paymentAmounts(payment: Payment) {
+  const fee = (payment.fee_details ?? []).reduce((sum, f) => sum + (Number(f.amount) || 0), 0);
+  const net = payment.transaction_details?.net_received_amount ?? payment.transaction_amount - fee;
+  return { amount: Number(payment.transaction_amount) || 0, fee, net: Number(net) || 0 };
+}
+
+/**
+ * Valida la firma de un aviso de Mercado Pago (header x-signature).
+ * Mensaje firmado: "id:<data.id>;request-id:<x-request-id>;ts:<ts>;" con HMAC-SHA256.
+ */
+export function verifyWebhookSignature(opts: { signature: string | null; requestId: string | null; dataId: string; secret: string }): boolean {
+  if (!opts.signature) return false;
+  const parts = Object.fromEntries(
+    opts.signature.split(",").map((part) => {
+      const [key, ...rest] = part.trim().split("=");
+      return [key, rest.join("=")];
+    }),
+  );
+  const ts = parts.ts;
+  const v1 = parts.v1;
+  if (!ts || !v1) return false;
+  // Avisos de más de 15 minutos se rechazan (evita reenvíos viejos).
+  const age = Math.abs(Date.now() - Number(ts) * (ts.length > 11 ? 1 : 1000));
+  if (!Number.isFinite(age) || age > 15 * 60 * 1000) return false;
+  const id = /^[a-z0-9]+$/i.test(opts.dataId) ? opts.dataId.toLowerCase() : opts.dataId;
+  let manifest = `id:${id};`;
+  if (opts.requestId) manifest += `request-id:${opts.requestId};`;
+  manifest += `ts:${ts};`;
+  const expected = createHmac("sha256", opts.secret).update(manifest).digest("hex");
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(v1, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -6388,6 +6747,288 @@ const cards = stats
 </AdminLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/admin/ingresos/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Ingresos: suscriptores, ingreso mensual, cobros del mes, evolución de 12
+ * meses, por plan, lista de suscripciones y de pagos (con exportación CSV).
+ * Precios de los planes editables. Solo administración.
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../../layouts/AdminLayout.astro";
+import { getAdminStats } from "../../../services/admin";
+import { getAdminPayments, getAdminSubscriptions, getPlans, getRevenueSummary, coveredUntil, isEntitled, PAYMENT_STATUS, SUBSCRIPTION_STATUS } from "../../../services/billing";
+import { requireAdmin } from "../../../lib/admin-guard";
+import { displayName } from "../../../services/profiles";
+import { formatDate, formatMoney } from "../../../lib/format";
+
+const denied = await requireAdmin(Astro);
+if (denied) return denied;
+const { supabase } = Astro.locals;
+
+const planSaved = Astro.getActionResult(actions.billing.updatePlan);
+if (planSaved && !planSaved.error) return Astro.redirect("/admin/ingresos?hecho=plan#planes", 303);
+
+const now = new Date();
+const thisMonth = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Cordoba", year: "numeric", month: "2-digit" }).format(now).slice(0, 7);
+const mes = /^\d{4}-\d{2}$/.test(Astro.url.searchParams.get("mes") ?? "") ? Astro.url.searchParams.get("mes")! : thisMonth;
+const subsView = (["live", "all", "cancelled", "pending"] as const).find((v) => v === Astro.url.searchParams.get("subs")) ?? "live";
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+
+const [summary, plans, subs, payments, stats] = await Promise.all([
+  getRevenueSummary(supabase),
+  getPlans(supabase, { includeInactive: true }),
+  getAdminSubscriptions(supabase, { status: subsView, q }),
+  getAdminPayments(supabase, mes),
+  getAdminStats(supabase),
+]);
+
+const money = (n: number) => formatMoney(Math.round(n));
+const monthName = (ym: string, opts: Intl.DateTimeFormatOptions = { month: "short" }) =>
+  new Intl.DateTimeFormat("es-AR", { ...opts, timeZone: "UTC" }).format(new Date(`${ym}-15T12:00:00Z`));
+const change = summary && summary.prev_gross > 0 ? Math.round(((summary.month_gross - summary.prev_gross) / summary.prev_gross) * 100) : null;
+
+// Gráfico de barras (12 meses): ingresos brutos.
+const series = summary?.monthly ?? [];
+const max = Math.max(1, ...series.map((m) => m.gross));
+const W = 720, H = 200, PAD = 28, barW = (W - PAD * 2) / Math.max(series.length, 1);
+const approved = payments.filter((p) => p.status === "approved");
+const totals = approved.reduce((t, p) => ({ gross: t.gross + p.amount, fee: t.fee + p.fee, net: t.net + p.net }), { gross: 0, fee: 0, net: 0 });
+const months = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date(Date.UTC(Number(thisMonth.slice(0, 4)), Number(thisMonth.slice(5, 7)) - 1 - i, 15));
+  return d.toISOString().slice(0, 7);
+});
+const subsLink = (v: string) => `/admin/ingresos?subs=${v}${q ? `&q=${encodeURIComponent(q)}` : ""}#suscripciones`;
+const tab = (active: boolean) => `rounded-full px-3 py-1.5 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+const cell = "px-3 py-2 text-left";
+---
+
+<AdminLayout title="Ingresos" description="Lo que entra por suscripciones. Los montos son los que confirma Mercado Pago." openReports={stats?.reports_open} error={planSaved?.error?.message}>
+  {
+    !summary ? (
+      <p class="text-ink-muted">No pudimos cargar los números.</p>
+    ) : (
+      <>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Ingreso mensual recurrente</p>
+            <p class="mt-1 text-2xl font-bold">{money(summary.mrr)}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">suscripciones que se siguen cobrando</p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Cobrado este mes</p>
+            <p class="mt-1 text-2xl font-bold">{money(summary.month_gross)}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">
+              neto {money(summary.month_net)} · {change === null ? `mes anterior ${money(summary.prev_gross)}` : `${change >= 0 ? "+" : ""}${change}% vs. mes anterior`}
+            </p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Cuentas que pagan</p>
+            <p class="mt-1 text-2xl font-bold">{summary.active_subscribers}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">{summary.active_subscriptions} planes con beneficios activos</p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Este mes</p>
+            <p class="mt-1 text-2xl font-bold">+{summary.month_new} <span class="text-base font-normal text-ink-muted">/ −{summary.month_cancelled}</span></p>
+            <p class="mt-0.5 text-xs text-ink-muted">altas / bajas · {summary.month_failed} cobros rechazados</p>
+          </div>
+        </div>
+
+        <section class="mt-6 rounded-wl-lg border border-line bg-surface p-4" aria-labelledby="evolucion">
+          <h2 id="evolucion" class="font-semibold">Últimos 12 meses</h2>
+          <svg viewBox={`0 0 ${W} ${H + 24}`} class="mt-3 w-full" role="img" aria-label="Ingresos brutos por mes">
+            {series.map((m, i) => {
+              const h = Math.round((m.gross / max) * (H - PAD));
+              const x = PAD + i * barW + barW * 0.15;
+              return (
+                <g>
+                  <title>{`${monthName(m.month, { month: "long", year: "numeric" })}: ${money(m.gross)} (${m.payments} pagos)`}</title>
+                  <rect x={x} y={H - h} width={barW * 0.7} height={Math.max(h, m.gross > 0 ? 2 : 0)} rx="3" class="fill-brand" />
+                  {m.gross > 0 && <text x={x + barW * 0.35} y={H - h - 4} text-anchor="middle" class="fill-ink-muted text-[10px]">{Math.round(m.gross / 1000)}k</text>}
+                  <text x={x + barW * 0.35} y={H + 16} text-anchor="middle" class="fill-ink-muted text-[11px]">{monthName(m.month)}</text>
+                </g>
+              );
+            })}
+            <line x1={PAD} x2={W - PAD} y1={H} y2={H} class="stroke-line" />
+          </svg>
+          <table class="sr-only">
+            <caption>Ingresos por mes</caption>
+            <tr><th>Mes</th><th>Bruto</th><th>Neto</th><th>Pagos</th></tr>
+            {series.map((m) => <tr><td>{m.month}</td><td>{money(m.gross)}</td><td>{money(m.net)}</td><td>{m.payments}</td></tr>)}
+          </table>
+        </section>
+
+        <section id="planes" class="mt-6 scroll-mt-20" aria-labelledby="por-plan">
+          <h2 id="por-plan" class="font-semibold">Por plan</h2>
+          <div class="mt-3 grid gap-3 md:grid-cols-3">
+            {summary.by_plan.map((bp) => {
+              const plan = plans.find((p) => p.id === bp.plan_id);
+              return (
+                <div class="rounded-wl-lg border border-line bg-surface p-4" data-plan-row={bp.plan_id}>
+                  <p class="font-semibold">{bp.name}</p>
+                  <p class="mt-1 text-sm text-ink-muted">{bp.active} activos · {money(bp.mrr)} por mes · {money(bp.month_gross)} cobrado este mes</p>
+                  {plan && (
+                    <form method="POST" action={actions.billing.updatePlan} class="mt-3 flex flex-wrap items-end gap-2">
+                      <input type="hidden" name="plan_id" value={plan.id} />
+                      <label class="flex flex-col gap-1 text-xs text-ink-muted">
+                        Precio por mes
+                        <input name="price" inputmode="numeric" value={String(Math.round(plan.price))} class="h-9 w-28 rounded-wl border border-line bg-surface px-2 text-sm text-ink" />
+                      </label>
+                      <label class="flex items-center gap-1.5 pb-2 text-xs">
+                        <input type="checkbox" name="active" checked={plan.active} class="accent-brand" /> Se puede contratar
+                      </label>
+                      <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold hover:bg-surface-muted">Guardar</button>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p class="mt-2 text-xs text-ink-muted">Un precio nuevo vale para las suscripciones nuevas; quienes ya están suscriptos siguen pagando su precio.</p>
+        </section>
+
+        <section id="suscripciones" class="mt-8 scroll-mt-20" aria-labelledby="subs-titulo">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="subs-titulo" class="font-semibold">Suscripciones</h2>
+            <form method="GET" class="flex gap-2">
+              <input type="hidden" name="subs" value={subsView} />
+              <label for="q" class="sr-only">Buscar</label>
+              <input id="q" name="q" value={q} type="search" placeholder="Nombre, usuario o email" class="h-9 rounded-wl border border-line bg-surface px-3 text-sm" />
+              <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold">Buscar</button>
+            </form>
+          </div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <a href={subsLink("live")} class={tab(subsView === "live")}>Activas</a>
+            <a href={subsLink("pending")} class={tab(subsView === "pending")}>Sin pagar</a>
+            <a href={subsLink("cancelled")} class={tab(subsView === "cancelled")}>Canceladas</a>
+            <a href={subsLink("all")} class={tab(subsView === "all")}>Todas</a>
+          </div>
+          {subs.length === 0 ? (
+            <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">No hay suscripciones en esta lista.</p>
+          ) : (
+            <div class="mt-3 overflow-x-auto rounded-wl-lg border border-line bg-surface">
+              <table class="w-full min-w-[720px] text-sm">
+                <thead class="border-b border-line text-xs text-ink-muted">
+                  <tr><th class={cell}>Cuenta</th><th class={cell}>Plan</th><th class={cell}>Precio</th><th class={cell}>Estado</th><th class={cell}>Desde</th><th class={cell}>Cubierto hasta</th><th class={cell}>Próximo cobro</th></tr>
+                </thead>
+                <tbody class="divide-y divide-line">
+                  {subs.map((s) => (
+                    <tr data-sub-row={s.id}>
+                      <td class={cell}>
+                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : "—"}
+                        <span class="block text-xs text-ink-muted">{s.payer_email}</span>
+                      </td>
+                      <td class={cell}>{s.plan?.name}{s.business && <span class="block text-xs text-ink-muted">{s.business.name}</span>}</td>
+                      <td class={cell}>{money(s.price)}</td>
+                      <td class={cell}><span class:list={["rounded-full px-2 py-0.5 text-xs font-semibold", SUBSCRIPTION_STATUS[s.status].class]}>{SUBSCRIPTION_STATUS[s.status].label}</span>{isEntitled(s) && s.status !== "authorized" && <span class="block text-xs text-ink-muted">con beneficios</span>}</td>
+                      <td class={cell}>{s.started_at ? formatDate(s.started_at, { dateStyle: "medium" }) : "—"}</td>
+                      <td class={cell}>{s.paid_through ? formatDate(coveredUntil(s.paid_through), { dateStyle: "medium" }) : "—"}</td>
+                      <td class={cell}>{s.next_payment_at ? formatDate(s.next_payment_at, { dateStyle: "medium" }) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section id="pagos" class="mt-8 scroll-mt-20" aria-labelledby="pagos-titulo">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="pagos-titulo" class="font-semibold">Pagos de {monthName(mes, { month: "long", year: "numeric" })}</h2>
+            <div class="flex flex-wrap gap-2">
+              <form method="GET" action="/admin/ingresos#pagos" class="flex gap-2">
+                <label for="mes" class="sr-only">Mes</label>
+                <select id="mes" name="mes" class="h-9 rounded-wl border border-line bg-surface px-2 text-sm">
+                  {months.map((m) => <option value={m} selected={m === mes}>{monthName(m, { month: "long", year: "numeric" })}</option>)}
+                </select>
+                <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold">Ver</button>
+              </form>
+              <a href={`/admin/ingresos/pagos.csv?mes=${mes}`} class="inline-flex h-9 items-center rounded-wl bg-brand px-3 text-sm font-semibold text-brand-contrast" download>Descargar CSV (Excel)</a>
+            </div>
+          </div>
+          <p class="mt-2 text-sm text-ink-muted">
+            Acreditados: <strong>{approved.length}</strong> · bruto <strong>{money(totals.gross)}</strong> · comisión Mercado Pago {money(totals.fee)} · neto <strong>{money(totals.net)}</strong>
+          </p>
+          {payments.length === 0 ? (
+            <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">No hubo pagos en este mes.</p>
+          ) : (
+            <div class="mt-3 overflow-x-auto rounded-wl-lg border border-line bg-surface">
+              <table class="w-full min-w-[720px] text-sm">
+                <thead class="border-b border-line text-xs text-ink-muted">
+                  <tr><th class={cell}>Fecha</th><th class={cell}>Cuenta</th><th class={cell}>Plan</th><th class={cell}>Estado</th><th class={cell}>Bruto</th><th class={cell}>Comisión</th><th class={cell}>Neto</th><th class={cell}>N.º MP</th></tr>
+                </thead>
+                <tbody class="divide-y divide-line">
+                  {payments.map((p) => (
+                    <tr data-payment-row={p.mp_payment_id}>
+                      <td class={cell}>{formatDate(p.paid_at ?? p.created_at, { dateStyle: "short", timeStyle: "short" })}</td>
+                      <td class={cell}>{p.user ? displayName(p.user) : "—"}</td>
+                      <td class={cell}>{p.plan?.name}</td>
+                      <td class={cell}>{PAYMENT_STATUS[p.status] ?? p.status}</td>
+                      <td class={cell}>{money(p.amount)}</td>
+                      <td class={cell}>{money(p.fee)}</td>
+                      <td class={cell}>{money(p.net)}</td>
+                      <td class={`${cell} font-mono text-xs`}>{p.mp_payment_id}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/admin/ingresos/pagos.csv.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { getAdminPayments, PAYMENT_STATUS } from "../../../services/billing";
+
+/**
+ * Pagos de un mes en CSV (se abre con Excel): para el contador.
+ * Solo administración: se revisa el rol en la base y RLS solo devuelve los
+ * pagos a administración.
+ */
+export const GET: APIRoute = async ({ locals, url }) => {
+  const { data: isAdmin } = await locals.supabase.rpc("has_role", { min_role: "admin" });
+  if (isAdmin !== true) return new Response("Solo administración.", { status: 403 });
+
+  const mes = /^\d{4}-\d{2}$/.test(url.searchParams.get("mes") ?? "") ? url.searchParams.get("mes")! : new Date().toISOString().slice(0, 7);
+  const payments = await getAdminPayments(locals.supabase, mes);
+
+  // Excel en español: separador ";" y coma decimal. Evita que una celda empiece con = + - @ (inyección de fórmulas).
+  const safe = (v: string) => {
+    const text = v.replace(/"/g, '""');
+    return `"${/^[=+\-@]/.test(text) ? `'${text}` : text}"`;
+  };
+  const amount = (n: number) => n.toFixed(2).replace(".", ",");
+  const lines = [
+    ["Fecha", "Usuario", "Nombre", "Plan", "Estado", "Bruto", "Comisión MP", "Neto", "N.º pago Mercado Pago"].map(safe).join(";"),
+    ...payments.map((p) =>
+      [
+        safe(new Date(p.paid_at ?? p.created_at).toLocaleString("es-AR", { timeZone: "America/Argentina/Cordoba" })),
+        safe(p.user?.username ?? ""),
+        safe([p.user?.first_name, p.user?.last_name].filter(Boolean).join(" ")),
+        safe(p.plan?.name ?? p.plan_id),
+        safe(PAYMENT_STATUS[p.status] ?? p.status),
+        amount(p.amount),
+        amount(p.fee),
+        amount(p.net),
+        safe(p.mp_payment_id),
+      ].join(";"),
+    ),
+  ];
+  return new Response("﻿" + lines.join("\r\n"), {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="worklink-pagos-${mes}.csv"`,
+      "Cache-Control": "private, no-store",
+    },
+  });
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/admin/usuarios.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -6507,6 +7148,98 @@ const selectClass = "h-10 rounded-wl border border-line bg-surface px-3 text-sm"
 </AdminLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/admin/verificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Pedidos de verificación (DNI + selfie). Las fotos están en un bucket
+ * privado: se muestran con links firmados que vencen en 10 minutos.
+ * Solo administración.
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import { getAdminStats } from "../../services/admin";
+import { getPendingVerifications } from "../../services/billing";
+import { requireAdmin } from "../../lib/admin-guard";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const denied = await requireAdmin(Astro);
+if (denied) return denied;
+const { supabase, user } = Astro.locals;
+
+const reviewed = Astro.getActionResult(actions.billing.reviewVerification);
+if (reviewed && !reviewed.error) return Astro.redirect(`/admin/verificaciones?hecho=${reviewed.data.decision === "approve" ? "verify" : "rechazada"}`, 303);
+
+const [requests, stats] = await Promise.all([getPendingVerifications(supabase), getAdminStats(supabase)]);
+const storage = supabase.storage.from("verification");
+const withImages = await Promise.all(
+  requests.map(async (r) => {
+    const [doc, selfie] = await Promise.all([
+      storage.createSignedUrl(`${r.document_path}/1600.webp`, 600),
+      storage.createSignedUrl(`${r.selfie_path}/1600.webp`, 600),
+    ]);
+    return { ...r, docUrl: doc.data?.signedUrl ?? null, selfieUrl: selfie.data?.signedUrl ?? null };
+  }),
+);
+---
+
+<AdminLayout
+  title="Verificaciones"
+  description="Revisá que el nombre del DNI coincida con el de la cuenta y que la selfie sea de la misma persona. Las fotos son privadas."
+  openReports={stats?.reports_open}
+  error={reviewed?.error?.message}
+>
+  {
+    withImages.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No hay pedidos para revisar.</p>
+    ) : (
+      <ul class="flex flex-col gap-4">
+        {withImages.map((r) => {
+          const name = r.user ? displayName(r.user) : "—";
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4" data-verification={r.id}>
+              <div class="flex items-center gap-3">
+                <Avatar name={name} path={r.user?.avatar_path} size={40} />
+                <div>
+                  <p class="font-semibold">{name} <span class="font-normal text-ink-muted">@{r.user?.username}</span></p>
+                  <p class="text-xs text-ink-muted">Pedido del {formatDate(r.created_at, { dateStyle: "medium", timeStyle: "short" })} · cuenta desde {r.user ? formatDate(r.user.created_at, { dateStyle: "medium" }) : "—"}</p>
+                </div>
+              </div>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                {[["DNI", r.docUrl], ["Selfie con DNI", r.selfieUrl]].map(([label, src]) => (
+                  <figure class="overflow-hidden rounded-wl border border-line bg-surface-muted">
+                    {src ? (
+                      <a href={src} target="_blank" rel="noopener noreferrer"><img src={src} alt={`${label} de ${name}`} class="max-h-80 w-full object-contain" referrerpolicy="no-referrer" /></a>
+                    ) : (
+                      <p class="p-6 text-center text-sm text-ink-muted">No se pudo cargar la imagen.</p>
+                    )}
+                    <figcaption class="px-3 py-1.5 text-xs text-ink-muted">{label}</figcaption>
+                  </figure>
+                ))}
+              </div>
+              {r.user_id === user!.id ? (
+                <p class="mt-3 text-sm text-ink-muted">Es tu propio pedido: lo tiene que revisar otra persona del equipo.</p>
+              ) : (
+                <form method="POST" action={actions.billing.reviewVerification} class="mt-3 flex flex-col gap-2">
+                  <input type="hidden" name="request_id" value={r.id} />
+                  <label class="sr-only" for={`reason-${r.id}`}>Motivo si la rechazás</label>
+                  <input id={`reason-${r.id}`} name="reason" maxlength="300" placeholder="Motivo si la rechazás (lo ve la persona). Ej.: la foto del DNI está borrosa." class="h-10 rounded-wl border border-line bg-surface px-3 text-sm" />
+                  <div class="flex flex-wrap gap-2">
+                    <button name="decision" value="approve" class="h-9 rounded-wl border border-success/40 bg-success-soft px-4 text-sm font-semibold text-success">Aprobar ✓</button>
+                    <button name="decision" value="reject" class="h-9 rounded-wl border border-danger/40 bg-danger-soft px-4 text-sm font-semibold text-danger">Rechazar</button>
+                  </div>
+                </form>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/api/ciudades.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 
@@ -6598,6 +7331,8 @@ escribir 'src/pages/api/cron/limpiar-archivos.ts' << '__WORKLINK_FIN_DEL_ARCHIVO
 import type { APIRoute } from "astro";
 import { getSecret } from "astro:env/server";
 import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
+import { isMercadoPagoConfigured } from "../../../lib/mercadopago";
+import { syncSubscription } from "../../../services/billing";
 
 /**
  * Limpieza diaria de archivos sin usar (la ejecuta Vercel Cron, ver vercel.json).
@@ -6608,6 +7343,9 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
  *
  * Además borra las notificaciones leídas hace más de 90 días y marca como
  * vencidas las necesidades que pasaron sus 30 días sin resolverse.
+ *
+ * Suscripciones: consulta a Mercado Pago las que están vivas (por si se perdió
+ * algún aviso) y quita los beneficios vencidos.
  *
  * Vercel envía "Authorization: Bearer <CRON_SECRET>": sin ese secreto, 401.
  * Procesa en lotes para no exceder el tiempo de una función.
@@ -6666,8 +7404,31 @@ export const GET: APIRoute = async ({ request }) => {
   const { data: expiredNeeds, error: needsError } = await supabase.rpc("expire_needs");
   if (needsError) console.error("[cron/limpiar-archivos] necesidades", needsError.message);
 
+  let syncedSubscriptions = 0;
+  if (isMercadoPagoConfigured()) {
+    const { data: live } = await supabase
+      .from("subscriptions")
+      .select("id, mp_preapproval_id")
+      .in("status", ["pending", "authorized", "paused"])
+      .not("mp_preapproval_id", "is", null)
+      .order("updated_at")
+      .limit(100);
+    for (const sub of live ?? []) {
+      try {
+        await syncSubscription(supabase, sub);
+        syncedSubscriptions++;
+      } catch (error) {
+        console.error("[cron/limpiar-archivos] suscripción", sub.id, error);
+      }
+    }
+  }
+  const { data: refreshed, error: entitlementsError } = await supabase.rpc("expire_entitlements");
+  if (entitlementsError) console.error("[cron/limpiar-archivos] beneficios", entitlementsError.message);
+
   return Response.json({
     ok: true,
+    syncedSubscriptions,
+    refreshedAccounts: Number(refreshed ?? 0),
     expiredNeeds: Number(expiredNeeds ?? 0),
     media: removedRows.length,
     files: removedFiles,
@@ -6823,6 +7584,76 @@ function json(data: unknown, status = 200) {
     headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/api/webhooks/mercadopago.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { getSecret } from "astro:env/server";
+import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
+import { getAuthorizedPayment, getPayment, getPreapproval, verifyWebhookSignature } from "../../../lib/mercadopago";
+import { syncSubscription } from "../../../services/billing";
+
+/**
+ * Avisos (webhooks) de Mercado Pago: suscripciones y cobros.
+ *
+ * Seguridad:
+ *  - Se valida la firma (x-signature) con MP_WEBHOOK_SECRET.
+ *  - El aviso solo dice "algo cambió en el recurso X": los datos reales se
+ *    consultan a la API de Mercado Pago con nuestro token. Un aviso falso no
+ *    puede marcar a nadie como pago.
+ *
+ * Configuración en Mercado Pago: Tus integraciones → tu app → Webhooks →
+ * URL https://TU-DOMINIO/api/webhooks/mercadopago con los eventos
+ * "Planes y suscripciones" y "Pagos".
+ */
+export const POST: APIRoute = async ({ request, url }) => {
+  let body: { type?: string; topic?: string; action?: string; data?: { id?: string | number } } = {};
+  try {
+    body = await request.json();
+  } catch {
+    /* algunos avisos vienen solo con parámetros en la URL */
+  }
+  const type = body.type ?? body.topic ?? url.searchParams.get("type") ?? url.searchParams.get("topic") ?? "";
+  const dataId = String(url.searchParams.get("data.id") ?? body.data?.id ?? url.searchParams.get("id") ?? "");
+  if (!dataId || !/^[\w-]{1,64}$/.test(dataId)) return new Response("ok", { status: 200 });
+
+  const secret = getSecret("MP_WEBHOOK_SECRET");
+  if (secret) {
+    const valid = verifyWebhookSignature({
+      signature: request.headers.get("x-signature"),
+      requestId: request.headers.get("x-request-id"),
+      dataId: String(url.searchParams.get("data.id") ?? dataId),
+      secret,
+    });
+    if (!valid) return new Response("Firma inválida", { status: 401 });
+  }
+
+  try {
+    const admin = createSupabaseAdminClient();
+    // ¿Qué suscripción tocó este aviso?
+    let preapprovalId: string | null = null;
+    if (type === "subscription_preapproval" || type === "preapproval") {
+      preapprovalId = (await getPreapproval(dataId)).id;
+    } else if (type === "subscription_authorized_payment" || type === "authorized_payment") {
+      preapprovalId = (await getAuthorizedPayment(dataId)).preapproval_id;
+    } else if (type === "payment") {
+      const payment = await getPayment(dataId);
+      preapprovalId =
+        payment.point_of_interaction?.transaction_data?.subscription_id ??
+        (typeof payment.metadata?.preapproval_id === "string" ? payment.metadata.preapproval_id : null);
+    }
+    if (!preapprovalId) return new Response("ok", { status: 200 });
+
+    const { data: sub } = await admin.from("subscriptions").select("id, mp_preapproval_id").eq("mp_preapproval_id", preapprovalId).maybeSingle();
+    if (!sub) return new Response("ok", { status: 200 }); // no es una suscripción de WorkLink
+    await syncSubscription(admin, sub);
+    return new Response("ok", { status: 200 });
+  } catch (error) {
+    console.error("[webhook mercadopago]", type, dataId, error);
+    // 500: Mercado Pago reintenta más tarde.
+    return new Response("Error", { status: 500 });
+  }
+};
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/auth/confirm.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -7403,6 +8234,9 @@ const jsonLd = [
         <div class="min-w-0 flex-1">
           <h1 class="flex flex-wrap items-center gap-2 text-2xl font-bold sm:text-3xl">
             {business.name}
+            {business.plan_tier === "pro" && (
+              <span class="rounded bg-brand px-2 py-0.5 text-xs font-bold text-brand-contrast" title="Emprendimiento Pro">PRO</span>
+            )}
             {business.verification === "verified" && (
               <span class="inline-flex items-center gap-1 rounded-full bg-seek-soft px-2 py-0.5 text-xs font-semibold text-seek" title="Emprendedor verificado por WorkLink">
                 ✓ Verificado
@@ -8780,6 +9614,20 @@ function describe(n: NotificationView) {
         tone: "bg-seek text-white",
       };
     }
+    case "plan_activated":
+      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "★", tone: "bg-brand text-brand-contrast" };
+    case "plan_payment_failed":
+      return {
+        name: "WorkLink",
+        text: "Mercado Pago no pudo cobrar tu plan. Revisá tu medio de pago para no perder los beneficios.",
+        href: "/panel/plan",
+        icon: "!",
+        tone: "bg-warning text-white",
+      };
+    case "verification_approved":
+      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "✓", tone: "bg-seek text-white" };
+    case "verification_rejected":
+      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "!", tone: "bg-warning text-white" };
     default:
       return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }
@@ -9856,6 +10704,270 @@ const situation = v("situation", profile.situation);
 </PanelLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/panel/plan.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Mi plan: suscripciones (Mercado Pago), verificación con DNI y selfie y
+ * pagos realizados. Los beneficios se activan cuando Mercado Pago confirma
+ * el pago (lo consulta el servidor, nunca el navegador).
+ */
+import { actions, isInputError } from "astro:actions";
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import ImageUploader from "../../islands/ImageUploader.tsx";
+import {
+  getMyPayments,
+  getMySubscriptions,
+  getMyVerification,
+  getPlans,
+  coveredUntil,
+  isEntitled,
+  PAYMENT_STATUS,
+  SUBSCRIPTION_STATUS,
+  syncSubscription,
+  type PlanId,
+} from "../../services/billing";
+import { getMyBusinesses } from "../../services/businesses";
+import { createSupabaseAdminClient } from "../../lib/supabase/admin";
+import { isMercadoPagoConfigured } from "../../lib/mercadopago";
+import { formatDate, formatMoney } from "../../lib/format";
+import { getSubmittedForm } from "../../utils/form";
+
+const { supabase, user } = Astro.locals;
+
+// Formularios: suscribirse (va a Mercado Pago), actualizar, cancelar y verificación.
+const subscribed = Astro.getActionResult(actions.billing.subscribe);
+if (subscribed && !subscribed.error) return Astro.redirect(subscribed.data.checkoutUrl, 303);
+const synced = Astro.getActionResult(actions.billing.sync);
+const cancelled = Astro.getActionResult(actions.billing.cancel);
+const verification = Astro.getActionResult(actions.billing.submitVerification);
+if (synced && !synced.error) return Astro.redirect("/panel/plan?ok=actualizado", 303);
+if (cancelled && !cancelled.error) return Astro.redirect("/panel/plan?ok=cancelado", 303);
+if (verification && !verification.error) return Astro.redirect("/panel/plan?ok=verificacion#verificacion", 303);
+const failed = subscribed?.error ?? synced?.error ?? cancelled?.error ?? verification?.error ?? null;
+const fieldErrors = failed && isInputError(failed) ? (failed.fields as Record<string, string[] | undefined>) : {};
+const formError = failed ? (isInputError(failed) ? Object.values(fieldErrors).flat()[0] ?? "Revisá los datos." : failed.message) : null;
+const submitted = subscribed?.error ? await getSubmittedForm(Astro.request) : null;
+
+// Al volver de Mercado Pago (?sub=...): se consulta el estado en el momento.
+const returningId = Astro.url.searchParams.get("sub");
+let returnNotice: string | null = null;
+if (returningId && /^[0-9a-f-]{36}$/.test(returningId)) {
+  const { data: mine } = await supabase.from("subscriptions").select("id, mp_preapproval_id").eq("id", returningId).eq("user_id", user!.id).maybeSingle();
+  if (mine) {
+    try {
+      await syncSubscription(createSupabaseAdminClient(), mine);
+    } catch (error) {
+      console.error("[plan] sync", error);
+    }
+    returnNotice = "¡Gracias! Si el pago se acreditó, tu plan ya está activo. Si no lo ves todavía, tocá “Actualizar” en unos minutos.";
+  }
+}
+
+const [plans, subscriptions, payments, request, businesses, { data: hasVerificationPlan }] = await Promise.all([
+  getPlans(supabase),
+  getMySubscriptions(supabase, user!.id),
+  getMyPayments(supabase, user!.id),
+  getMyVerification(supabase, user!.id),
+  getMyBusinesses(supabase, user!.id),
+  supabase.rpc("has_verification_plan"),
+]);
+const { data: me } = await supabase.from("profiles").select("verified_at, verified_source, plan_tier").eq("id", user!.id).single();
+const ownBusinesses = businesses.filter((b) => b.role === "owner" && b.status !== "suspended");
+const live = subscriptions.filter((s) => s.status !== "cancelled" || isEntitled(s));
+const takenPlans = new Set(live.filter((s) => s.status === "authorized" || s.status === "paused").map((s) => `${s.plan_id}:${s.business_id ?? ""}`));
+const proBusinessesTaken = new Set(live.filter((s) => s.plan_id === "pro" && s.status !== "pending").map((s) => s.business_id));
+const freeBusinesses = ownBusinesses.filter((b) => !proBusinessesTaken.has(b.id));
+const available = plans.filter((p) => (p.requires_business ? freeBusinesses.length > 0 : !takenPlans.has(`${p.id}:`)));
+const paymentsEnabled = isMercadoPagoConfigured();
+const okMessages: Record<string, string> = {
+  actualizado: "Actualizamos el estado con Mercado Pago.",
+  cancelado: "Cancelaste la suscripción. Seguís con los beneficios hasta el final del período pagado.",
+  verificacion: "¡Recibimos tu documentación! La revisamos y te avisamos por notificación.",
+};
+const ok = okMessages[Astro.url.searchParams.get("ok") ?? ""] ?? null;
+const chosen = (Astro.url.searchParams.get("elegir") ?? "") as PlanId | "";
+const emailDefault = String(submitted?.get("payer_email") ?? user!.email ?? "");
+const inputClass =
+  "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<PanelLayout title="Mi plan" description="Planes, verificación y pagos.">
+  {ok && <Alert tone="success" class="mb-4">{ok}</Alert>}
+  {returnNotice && <Alert tone="info" class="mb-4">{returnNotice}</Alert>}
+  {formError && <Alert tone="danger" class="mb-4">{formError}</Alert>}
+
+  <section aria-labelledby="mis-planes">
+    <h2 id="mis-planes" class="text-lg font-semibold">Tus planes</h2>
+    {
+      live.length === 0 ? (
+        <p class="mt-2 rounded-wl-lg border border-dashed border-line bg-surface p-5 text-sm text-ink-muted">
+          Estás usando WorkLink gratis. Elegí un plan para que te encuentren más.
+        </p>
+      ) : (
+        <ul class="mt-3 flex flex-col gap-3">
+          {live.map((s) => {
+            const status = SUBSCRIPTION_STATUS[s.status];
+            const entitled = isEntitled(s);
+            return (
+              <li class="rounded-wl-lg border border-line bg-surface p-4" data-subscription={s.plan_id}>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <p class="font-semibold">
+                    {s.plan?.name ?? s.plan_id}
+                    {s.business && <span class="font-normal text-ink-muted"> · {s.business.name}</span>}
+                  </p>
+                  <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", status.class]}>{status.label}</span>
+                </div>
+                <p class="mt-1 text-sm text-ink-muted">
+                  {formatMoney(s.price)} por mes · Mercado Pago: {s.payer_email}
+                </p>
+                <p class="mt-1 text-sm">
+                  {entitled ? (
+                    <>
+                      ✓ Beneficios activos hasta el <strong>{formatDate(coveredUntil(s.paid_through!), { day: "numeric", month: "long" })}</strong>
+                      {s.status === "authorized" && s.next_payment_at && <span class="text-ink-muted"> · próximo cobro {formatDate(s.next_payment_at, { day: "numeric", month: "long" })}</span>}
+                    </>
+                  ) : s.status === "pending" ? (
+                    "Todavía no recibimos el pago."
+                  ) : (
+                    "Sin beneficios activos: revisá el medio de pago en Mercado Pago."
+                  )}
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  {s.status === "pending" && s.init_point && <Button href={s.init_point} size="sm">Pagar en Mercado Pago</Button>}
+                  {s.mp_preapproval_id && s.status !== "cancelled" && (
+                    <form method="POST" action={actions.billing.sync}>
+                      <input type="hidden" name="subscription_id" value={s.id} />
+                      <Button type="submit" size="sm" variant="secondary">Actualizar</Button>
+                    </form>
+                  )}
+                  {s.status !== "cancelled" && (
+                    <form method="POST" action={actions.billing.cancel} data-confirm="¿Cancelar la suscripción? No se te va a volver a cobrar y seguís con los beneficios hasta el final del período pagado.">
+                      <input type="hidden" name="subscription_id" value={s.id} />
+                      <Button type="submit" size="sm" variant="ghost" class="text-danger">Cancelar</Button>
+                    </form>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+  </section>
+
+  {
+    available.length > 0 && (
+      <section aria-labelledby="elegir-plan" class="mt-10">
+        <h2 id="elegir-plan" class="text-lg font-semibold">{live.length ? "Sumá otro plan" : "Elegí un plan"}</h2>
+        <p class="mt-1 text-sm text-ink-muted">Se cobra todos los meses con Mercado Pago (tarjeta o dinero en cuenta). Cancelás cuando quieras.</p>
+        {!paymentsEnabled && <Alert tone="warning" class="mt-3">Los pagos todavía no están habilitados. Muy pronto vas a poder suscribirte.</Alert>}
+        <div class="mt-4 grid gap-4 md:grid-cols-3">
+          {available.map((plan) => (
+            <article
+              id={`plan-${plan.id}`}
+              class:list={["flex flex-col rounded-wl-lg border bg-surface p-5", chosen === plan.id || plan.id === "pro" ? "border-brand" : "border-line"]}
+              data-plan={plan.id}
+            >
+              {plan.id === "pro" && <p class="mb-2 w-fit rounded-full bg-brand px-2.5 py-0.5 text-xs font-bold text-brand-contrast">El que más conviene</p>}
+              <h3 class="text-lg font-bold">{plan.name}</h3>
+              <p class="mt-1 text-sm text-ink-muted">{plan.description}</p>
+              <p class="mt-3 text-3xl font-bold">{formatMoney(plan.price)}<span class="text-base font-normal text-ink-muted"> /mes</span></p>
+              <ul class="mt-3 flex flex-1 flex-col gap-1.5 text-sm">
+                {plan.features.map((f) => <li class="flex gap-2"><span class="text-success" aria-hidden="true">✓</span>{f}</li>)}
+              </ul>
+              <form method="POST" action={actions.billing.subscribe} class="mt-4 flex flex-col gap-3">
+                <input type="hidden" name="plan_id" value={plan.id} />
+                {plan.requires_business && (
+                  <label class="flex flex-col gap-1 text-sm font-medium">
+                    ¿Para qué emprendimiento?
+                    <select name="business_id" required class={inputClass}>
+                      {freeBusinesses.map((b) => <option value={b.id}>{b.name}</option>)}
+                    </select>
+                  </label>
+                )}
+                <label class="flex flex-col gap-1 text-sm font-medium">
+                  Email de tu cuenta de Mercado Pago
+                  <input type="email" name="payer_email" required value={emailDefault} autocomplete="email" class={inputClass} />
+                </label>
+                <Button type="submit" disabled={!paymentsEnabled}>Suscribirme con Mercado Pago</Button>
+              </form>
+            </article>
+          ))}
+        </div>
+        {plans.some((p) => p.requires_business) && ownBusinesses.length === 0 && (
+          <p class="mt-3 text-sm text-ink-muted">Para el plan Emprendimiento Pro primero <a href="/panel/emprendimientos/nuevo" class="font-semibold text-brand hover:underline">creá la página de tu emprendimiento</a>.</p>
+        )}
+      </section>
+    )
+  }
+
+  <section id="verificacion" aria-labelledby="verificacion-titulo" class="mt-10 scroll-mt-20">
+    <h2 id="verificacion-titulo" class="text-lg font-semibold">Verificación de identidad</h2>
+    {
+      me?.verified_at ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">✓ Tu cuenta está verificada: la tilde azul aparece al lado de tu nombre.</p>
+      ) : !hasVerificationPlan ? (
+        <p class="mt-2 text-sm text-ink-muted">
+          La tilde azul viene con el plan <strong>Verificación</strong> o con <strong>Emprendimiento Pro</strong>. Después de pagar, subís tu DNI y una selfie y nosotros lo revisamos.
+        </p>
+      ) : request?.status === "pending" ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">Recibimos tu documentación el {formatDate(request.created_at, { day: "numeric", month: "long" })}. La estamos revisando: te avisamos por notificación.</p>
+      ) : request?.status === "approved" ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">Tu identidad ya fue aprobada. La tilde se activa mientras tu plan esté al día.</p>
+      ) : (
+        <div class="mt-3 rounded-wl-lg border border-line bg-surface p-4">
+          {request?.status === "rejected" && (
+            <Alert tone="warning" class="mb-4" title="No pudimos aprobar tu verificación">
+              {request.reject_reason} Podés mandar las fotos de nuevo.
+            </Alert>
+          )}
+          <p class="text-sm">
+            Subí una foto del <strong>frente de tu DNI</strong> y una <strong>selfie sosteniendo el DNI</strong>, con buena luz y que se lea bien.
+            Las fotos son privadas: solo las ve la administración de WorkLink para verificarte.
+          </p>
+          <form method="POST" action={actions.billing.submitVerification} class="mt-4 flex flex-col gap-5">
+            <div class="grid gap-5 sm:grid-cols-2">
+              <ImageUploader client:load name="document_path" purpose="verification" label="Frente del DNI" supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY} />
+              <ImageUploader client:load name="selfie_path" purpose="verification" label="Selfie con tu DNI" supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY} />
+            </div>
+            <div><Button type="submit">Enviar para revisar</Button></div>
+          </form>
+        </div>
+      )
+    }
+  </section>
+
+  {
+    payments.length > 0 && (
+      <section aria-labelledby="pagos" class="mt-10">
+        <h2 id="pagos" class="text-lg font-semibold">Tus pagos</h2>
+        <ul class="mt-3 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface text-sm">
+          {payments.map((p) => (
+            <li class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+              <span>{p.plan?.name ?? p.plan_id} · {formatDate(p.paid_at ?? p.created_at, { dateStyle: "medium" })}</span>
+              <span class="flex items-center gap-3">
+                <span class:list={["text-xs font-semibold", p.status === "approved" ? "text-success" : "text-ink-muted"]}>{PAYMENT_STATUS[p.status] ?? p.status}</span>
+                <strong>{formatMoney(p.amount)}</strong>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )
+  }
+</PanelLayout>
+
+<script>
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-confirm]");
+    if (form && !window.confirm(form.dataset.confirm!)) event.preventDefault();
+  });
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/panel/publicaciones/[id].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import { actions, isInputError } from "astro:actions";
@@ -10090,6 +11202,68 @@ const personalCity = defaultBusinessId ? null : (profile?.city ?? null);
     />
   </div>
 </PanelLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/planes.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Planes y precios (página pública). Los precios salen de la base. */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import { getPlans } from "../services/billing";
+import { formatMoney } from "../lib/format";
+
+const { supabase } = Astro.locals;
+const plans = await getPlans(supabase);
+// Sin sesión, /panel/plan lleva a ingresar (y vuelve al plan elegido).
+const cta = (id: string) => `/panel/plan?elegir=${id}#plan-${id}`;
+const faqs = [
+  { q: "¿Tengo que pagar para usar WorkLink?", a: "No. Perfil, emprendimiento, publicaciones, mensajes, reseñas y necesidades son gratis. Los planes son para que te vean más." },
+  { q: "¿Cómo pago?", a: "Con Mercado Pago: tarjeta de crédito, débito o dinero en tu cuenta. Se cobra automáticamente todos los meses." },
+  { q: "¿Puedo cancelar?", a: "Sí, cuando quieras desde Mi panel → Mi plan. No se te vuelve a cobrar y mantenés los beneficios hasta el final del mes que pagaste." },
+  { q: "¿Cómo funciona la verificación?", a: "Con el plan Verificación o Emprendimiento Pro subís una foto de tu DNI y una selfie. Las revisa la administración de WorkLink (son privadas) y, si está todo bien, aparece la tilde azul al lado de tu nombre." },
+];
+---
+
+<BaseLayout title="Planes y precios" description="Planes de WorkLink para que más clientes encuentren tu trabajo o tu emprendimiento. Pagás con Mercado Pago y cancelás cuando quieras.">
+  <section class="mx-auto max-w-5xl px-4 py-10 sm:py-14">
+    <div class="mx-auto max-w-2xl text-center">
+      <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">Que te encuentren más</h1>
+      <p class="mt-3 text-lg text-ink-muted">Usar WorkLink es gratis. Con un plan, tus publicaciones y tu emprendimiento aparecen primero.</p>
+    </div>
+
+    <div class="mt-10 grid gap-5 md:grid-cols-3">
+      {
+        plans.map((plan) => (
+          <article class:list={["flex flex-col rounded-wl-lg border bg-surface p-6", plan.id === "pro" ? "border-brand shadow-[0_18px_40px_-28px_rgb(20_22_31/0.5)]" : "border-line"]}>
+            {plan.id === "pro" && <p class="mb-2 w-fit rounded-full bg-brand px-2.5 py-0.5 text-xs font-bold text-brand-contrast">El que más conviene</p>}
+            <h2 class="text-xl font-bold">{plan.name}</h2>
+            <p class="mt-1 text-sm text-ink-muted">{plan.description}</p>
+            <p class="mt-4 text-4xl font-bold">{formatMoney(plan.price)}<span class="text-base font-normal text-ink-muted"> /mes</span></p>
+            <ul class="mt-4 flex flex-1 flex-col gap-2 text-sm">
+              {plan.features.map((f) => <li class="flex gap-2"><span class="text-success" aria-hidden="true">✓</span>{f}</li>)}
+            </ul>
+            <Button href={cta(plan.id)} variant={plan.id === "pro" ? "primary" : "secondary"} class="mt-6" block>Elegir {plan.name}</Button>
+          </article>
+        ))
+      }
+    </div>
+    <p class="mt-4 text-center text-sm text-ink-muted">Precios finales en pesos argentinos. Se cobran por mes con Mercado Pago.</p>
+
+    <div class="mx-auto mt-14 max-w-3xl">
+      <h2 class="text-2xl font-bold">Preguntas frecuentes</h2>
+      <div class="mt-4 divide-y divide-line border-y border-line">
+        {faqs.map((f) => (
+          <details class="group py-4">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-semibold">
+              {f.q}<span class="text-xl font-normal text-ink-muted transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+            </summary>
+            <p class="mt-2 text-ink-muted">{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+</BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/privacidad.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11527,6 +12701,48 @@ export const resetPasswordSchema = z
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/schemas/billing.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const uuid = z.string().regex(UUID);
+const emptyToUndefined = (value: unknown) => (value === "" || value === null ? undefined : value);
+const storagePath = z.string().regex(/^[0-9a-f-]{36}\/[0-9a-f-]{36}$/, { error: "Subí la foto de nuevo" });
+
+export const subscribeSchema = z.object({
+  plan_id: z.enum(["destacado", "pro", "verificacion"]),
+  business_id: z.preprocess(emptyToUndefined, uuid.optional()),
+  payer_email: z
+    .string({ error: "Escribí el email de tu cuenta de Mercado Pago" })
+    .trim()
+    .toLowerCase()
+    .max(200)
+    .email({ error: "Escribí un email válido" }),
+});
+
+export const subscriptionRefSchema = z.object({ subscription_id: uuid });
+
+export const verificationSchema = z.object({
+  document_path: storagePath,
+  selfie_path: storagePath,
+});
+
+export const reviewVerificationSchema = z.object({
+  request_id: uuid,
+  decision: z.enum(["approve", "reject"]),
+  reason: z.preprocess(emptyToUndefined, z.string().trim().max(300).optional()),
+});
+
+export const updatePlanSchema = z.object({
+  plan_id: z.enum(["destacado", "pro", "verificacion"]),
+  price: z.preprocess(
+    (v) => (typeof v === "string" ? Number(v.replace(/[$\s.]/g, "").replace(",", ".")) : v),
+    z.number({ error: "Escribí el precio" }).min(100, { error: "El precio mínimo es $100" }).max(10_000_000),
+  ),
+  active: z.preprocess((v) => v === "on" || v === "true" || v === true, z.boolean()),
+});
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/business.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -13192,6 +14408,7 @@ export const ACTION_LABELS: Record<string, string> = {
   unverify: "Quitó la verificación",
   dismiss: "Descartó la denuncia",
   role: "Cambió el rol",
+  verify_rejected: "Rechazó la verificación de",
 };
 
 export interface ModerationTarget {
@@ -13499,13 +14716,286 @@ export async function searchAdminBusinesses(
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/services/billing.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getPayment, getPreapproval, paymentAmounts, searchAuthorizedPayments } from "../lib/mercadopago";
+
+/**
+ * Planes, suscripciones y pagos. Lo que pagó cada persona lo escribe solo el
+ * servidor (con la service role) después de consultarlo a Mercado Pago.
+ */
+
+export type PlanId = "destacado" | "pro" | "verificacion";
+export type SubscriptionStatus = "pending" | "authorized" | "paused" | "cancelled";
+
+export interface Plan {
+  id: PlanId;
+  name: string;
+  description: string;
+  features: string[];
+  price: number;
+  currency: string;
+  includes_verification: boolean;
+  requires_business: boolean;
+  active: boolean;
+  sort: number;
+}
+
+export interface SubscriptionView {
+  id: string;
+  user_id: string;
+  plan_id: PlanId;
+  business_id: string | null;
+  status: SubscriptionStatus;
+  price: number;
+  payer_email: string;
+  mp_preapproval_id: string | null;
+  init_point: string | null;
+  paid_through: string | null;
+  next_payment_at: string | null;
+  started_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  plan: { name: string } | null;
+  business: { slug: string; name: string } | null;
+}
+
+export interface VerificationRequest {
+  id: string;
+  user_id: string;
+  document_path: string;
+  selfie_path: string;
+  status: "pending" | "approved" | "rejected";
+  reject_reason: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
+
+export async function getPlans(supabase: SupabaseClient, { includeInactive = false } = {}): Promise<Plan[]> {
+  let query = supabase.from("plans").select("*").order("sort");
+  if (!includeInactive) query = query.eq("active", true);
+  const { data, error } = await query;
+  if (error) throw error;
+  return ((data ?? []) as Plan[]).map((p) => ({ ...p, price: num(p.price) }));
+}
+
+const SUB_COLUMNS = `id, user_id, plan_id, business_id, status, price, payer_email, mp_preapproval_id, init_point, paid_through,
+  next_payment_at, started_at, cancelled_at, created_at, plan:plans ( name ), business:businesses ( slug, name )`;
+
+/** Suscripciones del usuario (las que importan: vivas o con beneficios vigentes). */
+export async function getMySubscriptions(supabase: SupabaseClient, userId: string): Promise<SubscriptionView[]> {
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select(SUB_COLUMNS)
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) throw error;
+  const now = Date.now();
+  return ((data ?? []) as unknown as SubscriptionView[])
+    .map((s) => ({ ...s, price: num(s.price) }))
+    .filter((s) => s.status !== "cancelled" || (s.paid_through && new Date(s.paid_through).getTime() > now));
+}
+
+export async function getMyPayments(supabase: SupabaseClient, userId: string) {
+  const { data, error } = await supabase
+    .from("subscription_payments")
+    .select("id, plan_id, status, amount, paid_at, created_at, plan:plans ( name )")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(24);
+  if (error) throw error;
+  return ((data ?? []) as unknown as { id: string; plan_id: PlanId; status: string; amount: number; paid_at: string | null; created_at: string; plan: { name: string } | null }[]).map(
+    (p) => ({ ...p, amount: num(p.amount) }),
+  );
+}
+
+export async function getMyVerification(supabase: SupabaseClient, userId: string): Promise<VerificationRequest | null> {
+  const { data, error } = await supabase
+    .from("verification_requests")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as VerificationRequest | null) ?? null;
+}
+
+/** Hasta cuándo está pago (paid_through incluye 3 días de gracia para reintentos de cobro). */
+export const coveredUntil = (paidThrough: string) => new Date(new Date(paidThrough).getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+export const isEntitled = (s: Pick<SubscriptionView, "paid_through">) => Boolean(s.paid_through && new Date(s.paid_through).getTime() > Date.now());
+
+export const SUBSCRIPTION_STATUS: Record<SubscriptionStatus, { label: string; class: string }> = {
+  pending: { label: "Esperando el pago", class: "bg-warning-soft text-warning" },
+  authorized: { label: "Activa", class: "bg-success-soft text-success" },
+  paused: { label: "Pausada", class: "bg-warning-soft text-warning" },
+  cancelled: { label: "Cancelada", class: "bg-surface-muted text-ink-muted" },
+};
+
+export const PAYMENT_STATUS: Record<string, string> = {
+  approved: "Acreditado",
+  pending: "Pendiente",
+  in_process: "En proceso",
+  rejected: "Rechazado",
+  refunded: "Devuelto",
+  cancelled: "Cancelado",
+  charged_back: "Contracargo",
+};
+
+/**
+ * Trae de Mercado Pago el estado de la suscripción y todos sus cobros, y los
+ * guarda (con el cliente de la service role). Idempotente: se puede llamar
+ * desde el aviso de Mercado Pago, al volver del pago o desde el cron.
+ */
+export async function syncSubscription(admin: SupabaseClient, sub: { id: string; mp_preapproval_id: string | null }): Promise<void> {
+  if (!sub.mp_preapproval_id) return;
+  const pre = await getPreapproval(sub.mp_preapproval_id);
+  if (pre.external_reference !== sub.id) throw new Error("El preapproval no corresponde a esta suscripción");
+
+  const synced = await admin.rpc("sub_sync", {
+    p_subscription_id: sub.id,
+    p_preapproval_id: pre.id,
+    p_status: pre.status,
+    p_next_payment_at: pre.next_payment_date ?? null,
+  });
+  if (synced.error) throw synced.error;
+
+  const charges = await searchAuthorizedPayments(pre.id);
+  for (const charge of charges) {
+    if (!charge.payment?.id) continue; // cobro programado, todavía sin pago
+    const payment = await getPayment(String(charge.payment.id));
+    const { amount, fee, net } = paymentAmounts(payment);
+    const recorded = await admin.rpc("sub_record_payment", {
+      p_preapproval_id: pre.id,
+      p_mp_payment_id: String(payment.id),
+      p_mp_authorized_payment_id: String(charge.id),
+      p_status: payment.status,
+      p_amount: amount,
+      p_fee: fee,
+      p_net: net,
+      p_paid_at: payment.date_approved ?? null,
+    });
+    if (recorded.error) throw recorded.error;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Administración: ingresos
+// -----------------------------------------------------------------------------
+export interface RevenueSummary {
+  active_subscribers: number;
+  active_subscriptions: number;
+  mrr: number;
+  month_gross: number;
+  month_fee: number;
+  month_net: number;
+  month_payments: number;
+  prev_gross: number;
+  prev_net: number;
+  month_new: number;
+  month_cancelled: number;
+  month_failed: number;
+  pending_verifications: number;
+  by_plan: { plan_id: PlanId; name: string; price: number; active: number; mrr: number; month_gross: number }[];
+  monthly: { month: string; gross: number; net: number; payments: number; subscribers: number }[];
+}
+
+export async function getRevenueSummary(supabase: SupabaseClient): Promise<RevenueSummary | null> {
+  const { data, error } = await supabase.rpc("admin_revenue_summary");
+  if (error) {
+    console.error("[ingresos]", error.message);
+    return null;
+  }
+  return data as RevenueSummary;
+}
+
+export interface AdminSubscription extends SubscriptionView {
+  user: { username: string; first_name: string | null; last_name: string | null } | null;
+}
+
+export async function getAdminSubscriptions(
+  supabase: SupabaseClient,
+  { status, q }: { status: "live" | "all" | "cancelled" | "pending"; q: string },
+): Promise<AdminSubscription[]> {
+  let query = supabase
+    .from("subscriptions")
+    .select(`${SUB_COLUMNS}, user:profiles!subscriptions_user_id_fkey ( username, first_name, last_name )`)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (status === "live") query = query.in("status", ["authorized", "paused"]);
+  if (status === "cancelled") query = query.eq("status", "cancelled");
+  if (status === "pending") query = query.eq("status", "pending");
+  const { data, error } = await query;
+  if (error) throw error;
+  let rows = ((data ?? []) as unknown as AdminSubscription[]).map((s) => ({ ...s, price: num(s.price) }));
+  const term = q.trim().toLowerCase();
+  if (term) {
+    rows = rows.filter((s) =>
+      [s.user?.username, s.user?.first_name, s.user?.last_name, s.payer_email, s.business?.name].some((v) => v?.toLowerCase().includes(term)),
+    );
+  }
+  return rows;
+}
+
+export interface AdminPayment {
+  id: string;
+  mp_payment_id: string;
+  plan_id: PlanId;
+  status: string;
+  amount: number;
+  fee: number;
+  net: number;
+  paid_at: string | null;
+  created_at: string;
+  user: { username: string; first_name: string | null; last_name: string | null } | null;
+  plan: { name: string } | null;
+}
+
+/** Pagos de un mes ("2026-10"), del más nuevo al más viejo. */
+export async function getAdminPayments(supabase: SupabaseClient, month: string): Promise<AdminPayment[]> {
+  const [y, m] = month.split("-").map(Number);
+  // Mes en hora de Córdoba (UTC-3).
+  const from = new Date(Date.UTC(y, m - 1, 1, 3)).toISOString();
+  const to = new Date(Date.UTC(y, m, 1, 3)).toISOString();
+  const { data, error } = await supabase
+    .from("subscription_payments")
+    .select(
+      `id, mp_payment_id, plan_id, status, amount, fee, net, paid_at, created_at,
+       user:profiles!subscription_payments_user_id_fkey ( username, first_name, last_name ), plan:plans ( name )`,
+    )
+    .gte("created_at", from)
+    .lt("created_at", to)
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  if (error) throw error;
+  return ((data ?? []) as unknown as AdminPayment[]).map((p) => ({ ...p, amount: num(p.amount), fee: num(p.fee), net: num(p.net) }));
+}
+
+export async function getPendingVerifications(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from("verification_requests")
+    .select("*, user:profiles!verification_requests_user_id_fkey ( id, username, first_name, last_name, avatar_path, created_at )")
+    .eq("status", "pending")
+    .order("created_at")
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []) as unknown as (VerificationRequest & {
+    user: { id: string; username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; created_at: string } | null;
+  })[];
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/services/businesses.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Business, CatalogItem } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
 const BASE_COLUMNS = `id, owner_id, slug, name, tagline, description, logo_path, cover_path, status, verification,
-  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count, rating_dist,
+  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count, rating_dist, plan_tier,
   created_at, updated_at,
   categories ( id, name, slug, seo_noun ),
   cities ( ${CITY_EMBED} ),
@@ -14334,7 +15824,14 @@ export type NotificationType =
   | "proposal_accepted"
   | "need_match"
   | "review_received"
-  | "review_reply";
+  | "review_reply"
+  | "plan_activated"
+  | "plan_payment_failed"
+  | "verification_approved"
+  | "verification_rejected";
+
+/** Avisos del sistema: no tienen una persona que los envíe (actor null). */
+export const SYSTEM_NOTIFICATIONS: NotificationType[] = ["plan_activated", "plan_payment_failed", "verification_approved", "verification_rejected"];
 
 export interface NotificationView {
   id: string;
@@ -14381,7 +15878,7 @@ export async function getNotifications(
   const last = page[page.length - 1];
   return {
     // Si la cuenta de quien la generó fue suspendida, RLS devuelve actor null: se omite.
-    items: page.filter((n) => n.actor),
+    items: page.filter((n) => n.actor || SYSTEM_NOTIFICATIONS.includes(n.type)),
     nextCursor: rows.length > NOTIFICATIONS_PAGE && last ? encodeCursor({ published_at: last.created_at, id: last.id }) : null,
   };
 }
@@ -14881,6 +16378,7 @@ export interface BusinessResult {
   posts_count: number;
   rating_sum: number;
   rating_count: number;
+  plan_tier: string;
   category: { name: string; slug: string } | null;
   city: { name: string; slug: string; provinces: { name: string; slug: string } | null } | null;
 }
@@ -14932,7 +16430,7 @@ export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, l
   return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };
 }
 
-export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count, rating_sum, rating_count,
+export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count, rating_sum, rating_count, plan_tier,
   category:categories ( name, slug ), city:cities ( name, slug, provinces ( name, slug ) )`;
 
 export async function searchBusinesses(
@@ -15410,6 +16908,8 @@ export interface Business {
   rating_count: number;
   /** Cantidad de reseñas por estrella: [1★, 2★, 3★, 4★, 5★]. */
   rating_dist: number[];
+  /** "pro" con el plan Emprendimiento Pro al día. */
+  plan_tier: string;
   created_at: string;
   updated_at: string;
 }
@@ -15507,6 +17007,13 @@ export default defineConfig({
       SUPABASE_SERVICE_ROLE_KEY: envField.string({ context: "server", access: "secret", optional: true }),
       // Secreto que Vercel Cron envía para autorizar las tareas programadas.
       CRON_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
+      // Mercado Pago (suscripciones). Access token de producción (APP_USR-...)
+      // o de prueba (TEST-...). Nunca con prefijo PUBLIC_.
+      MP_ACCESS_TOKEN: envField.string({ context: "server", access: "secret", optional: true }),
+      // Clave secreta de los avisos (webhooks) de Mercado Pago, para validar la firma.
+      MP_WEBHOOK_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
+      // Solo para pruebas locales: dirección de la API (por defecto la oficial).
+      MP_API_URL: envField.string({ context: "server", access: "secret", optional: true }),
     },
     validateSecrets: true,
   },
@@ -15553,6 +17060,12 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 # Secreto para las tareas programadas (Vercel Cron). Inventá uno largo y al azar.
 CRON_SECRET=
+
+# Mercado Pago (suscripciones). Solo servidor, NUNCA con prefijo PUBLIC_.
+# Mercado Pago Developers -> Tus integraciones -> tu app -> Credenciales de producción -> Access Token (APP_USR-...)
+MP_ACCESS_TOKEN=
+# Mercado Pago Developers -> tu app -> Webhooks -> Clave secreta
+MP_WEBHOOK_SECRET=
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'scripts/importar-localidades.mjs' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -18033,13 +19546,802 @@ grant  execute on function public.admin_report_groups(public.report_status, inte
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002500_subscriptions_types.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0025 · Tipos para suscripciones y verificación paga (Etapa 13)
+-- =============================================================================
+-- En una migración aparte: los valores nuevos de un enum no se pueden usar en
+-- la misma transacción en la que se agregan.
+-- =============================================================================
+
+alter type public.notification_type add value if not exists 'plan_activated';
+alter type public.notification_type add value if not exists 'plan_payment_failed';
+alter type public.notification_type add value if not exists 'verification_approved';
+alter type public.notification_type add value if not exists 'verification_rejected';
+
+-- Estado de una suscripción, como lo informa Mercado Pago (preapproval).
+create type public.subscription_status as enum ('pending', 'authorized', 'paused', 'cancelled');
+
+create type public.verification_request_status as enum ('pending', 'approved', 'rejected');
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'supabase/migrations/20261008002600_subscriptions.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0026 · Suscripciones con Mercado Pago y verificación paga (Etapa 13)
+-- =============================================================================
+-- Planes (precios editables por administración):
+--   * destacado     $10.000/mes: publicaciones en "Destacados" del inicio,
+--                   primero en el buscador, propuestas sin límite.
+--   * pro           $20.000/mes: lo mismo para la persona y para UNO de sus
+--                   emprendimientos (primero en su rubro y ciudad, insignia
+--                   PRO) + verificación incluida.
+--   * verificacion  $12.000/mes: tilde azul (con revisión de DNI y selfie).
+--
+-- Cómo se cobra: cada suscripción es un "preapproval" de Mercado Pago. Los
+-- datos de pago SOLO los escribe el servidor (service_role) después de
+-- consultarlos a la API de Mercado Pago: la app no puede marcarse como paga.
+--
+-- Qué da derecho a los beneficios: un pago acreditado. Cada pago extiende
+-- "paid_through" un mes (+3 días de gracia por reintentos de cobro). Al
+-- cancelar, los beneficios siguen hasta esa fecha.
+--
+-- Verificación paga: con la suscripción al día, la persona sube foto del DNI
+-- y una selfie (bucket privado "verification"); administración las revisa.
+-- Si la suscripción se termina, la tilde paga se quita sola (la tilde que
+-- puso administración a mano no se toca).
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Perfil: nuevo nivel "destacado" y origen de la verificación
+-- -----------------------------------------------------------------------------
+alter table public.profiles drop constraint if exists profiles_plan_tier;
+alter table public.profiles
+  add constraint profiles_plan_tier check (plan_tier in ('free', 'destacado', 'pro', 'premium'));
+
+alter table public.profiles
+  add column if not exists verified_source text,
+  add constraint profiles_verified_source check (verified_source is null or verified_source in ('manual', 'paid'));
+
+create or replace function public.tg_profiles_protect()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if new.id <> old.id or new.created_at <> old.created_at then
+    raise exception 'No se pueden modificar id ni created_at' using errcode = '42501';
+  end if;
+
+  if new.followers_count <> old.followers_count
+     or new.following_count <> old.following_count
+     or new.plan_tier <> old.plan_tier
+     or new.rating_sum <> old.rating_sum
+     or new.rating_count <> old.rating_count
+     or new.verified_source is distinct from old.verified_source then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+
+  if new.verified_at is distinct from old.verified_at and not (select public.has_role('admin')) then
+    raise exception 'Solo la administración puede verificar cuentas' using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status and not (select public.has_role('moderator')) then
+    raise exception 'Solo moderación puede cambiar el estado de una cuenta' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Avisos del sistema (pagos, verificación): no tienen una persona que los envíe.
+alter table public.notifications alter column actor_id drop not null;
+alter table public.notifications drop constraint if exists notifications_not_self;
+alter table public.notifications
+  add constraint notifications_not_self check (actor_id is null or recipient_id <> actor_id);
+
+-- -----------------------------------------------------------------------------
+-- Planes
+-- -----------------------------------------------------------------------------
+create table public.plans (
+  id                     text primary key,
+  name                   text not null,
+  description            text not null,
+  features               text[] not null default '{}',
+  price                  numeric(12, 2) not null,
+  currency               char(3) not null default 'ARS',
+  includes_verification  boolean not null default false,
+  requires_business      boolean not null default false,
+  active                 boolean not null default true,
+  sort                   smallint not null default 0,
+  updated_at             timestamptz not null default now(),
+  constraint plans_id check (id in ('destacado', 'pro', 'verificacion')),
+  constraint plans_price check (price >= 100 and price <= 10000000),
+  constraint plans_name_len check (char_length(name) between 2 and 40),
+  constraint plans_description_len check (char_length(description) between 5 and 300)
+);
+
+create trigger plans_set_updated_at
+  before update on public.plans
+  for each row execute function public.set_updated_at();
+
+insert into public.plans (id, name, description, features, price, includes_verification, requires_business, sort) values
+  ('destacado', 'Destacado',
+   'Para personas y freelancers que quieren que los vean más.',
+   array['Tus publicaciones aparecen en "Destacados" del inicio',
+         'Salís primero en el buscador de personas',
+         'Propuestas sin límite en Necesidades'],
+   10000, false, false, 1),
+  ('pro', 'Emprendimiento Pro',
+   'Para emprendimientos que quieren más clientes.',
+   array['Todo lo del plan Destacado',
+         'Tu emprendimiento sale primero en su rubro y ciudad',
+         'Insignia PRO en tu página y en el buscador',
+         'Verificación con tilde azul incluida'],
+   20000, true, true, 2),
+  ('verificacion', 'Verificación',
+   'Tilde azul: le mostrás a todos que tu identidad está verificada.',
+   array['Tilde azul al lado de tu nombre',
+         'Revisamos tu DNI y una selfie (privados, solo los ve administración)'],
+   12000, true, false, 3)
+on conflict (id) do nothing;
+
+-- -----------------------------------------------------------------------------
+-- Suscripciones y pagos
+-- -----------------------------------------------------------------------------
+create table public.subscriptions (
+  id                 uuid primary key default gen_random_uuid(),
+  user_id            uuid not null references public.profiles (id) on delete cascade,
+  plan_id            text not null references public.plans (id),
+  business_id        uuid references public.businesses (id) on delete set null,
+  status             public.subscription_status not null default 'pending',
+  price              numeric(12, 2) not null,
+  currency           char(3) not null default 'ARS',
+  payer_email        text not null,
+  mp_preapproval_id  text unique,
+  init_point         text,
+  paid_through       timestamptz,
+  next_payment_at    timestamptz,
+  started_at         timestamptz,
+  cancelled_at       timestamptz,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  constraint subscriptions_email check (payer_email ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' and char_length(payer_email) <= 200)
+);
+
+-- Una suscripción viva por plan (y por emprendimiento en el Pro).
+create unique index subscriptions_one_live
+  on public.subscriptions (user_id, plan_id, coalesce(business_id, '00000000-0000-0000-0000-000000000000'::uuid))
+  where status in ('pending', 'authorized', 'paused');
+create index subscriptions_user_idx on public.subscriptions (user_id, created_at desc);
+create index subscriptions_live_idx on public.subscriptions (status) where status in ('pending', 'authorized', 'paused');
+
+create trigger subscriptions_set_updated_at
+  before update on public.subscriptions
+  for each row execute function public.set_updated_at();
+
+create table public.subscription_payments (
+  id                        uuid primary key default gen_random_uuid(),
+  subscription_id           uuid not null references public.subscriptions (id) on delete cascade,
+  user_id                   uuid not null references public.profiles (id) on delete cascade,
+  plan_id                   text not null references public.plans (id),
+  mp_payment_id             text not null unique,
+  mp_authorized_payment_id  text,
+  status                    text not null,
+  amount                    numeric(12, 2) not null,
+  fee                       numeric(12, 2) not null default 0,
+  net                       numeric(12, 2) not null default 0,
+  currency                  char(3) not null default 'ARS',
+  paid_at                   timestamptz,
+  created_at                timestamptz not null default now(),
+  updated_at                timestamptz not null default now()
+);
+
+create index subscription_payments_paid_idx on public.subscription_payments (paid_at desc) where status = 'approved';
+create index subscription_payments_sub_idx on public.subscription_payments (subscription_id, created_at desc);
+
+create trigger subscription_payments_set_updated_at
+  before update on public.subscription_payments
+  for each row execute function public.set_updated_at();
+
+alter table public.notifications
+  add column if not exists subscription_id uuid references public.subscriptions (id) on delete cascade;
+
+-- -----------------------------------------------------------------------------
+-- Pedidos de verificación (DNI + selfie)
+-- -----------------------------------------------------------------------------
+create table public.verification_requests (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references public.profiles (id) on delete cascade,
+  document_path   text not null,
+  selfie_path     text not null,
+  status          public.verification_request_status not null default 'pending',
+  reject_reason   text,
+  reviewed_by     uuid references public.profiles (id) on delete set null,
+  reviewed_at     timestamptz,
+  created_at      timestamptz not null default now(),
+  constraint verification_requests_reason_len check (reject_reason is null or char_length(reject_reason) <= 300)
+);
+
+create unique index verification_requests_one_pending on public.verification_requests (user_id) where status = 'pending';
+create index verification_requests_pending_idx on public.verification_requests (created_at) where status = 'pending';
+
+-- -----------------------------------------------------------------------------
+-- Beneficios: los recalcula la base a partir de los pagos
+-- -----------------------------------------------------------------------------
+create or replace function public.refresh_entitlements(p_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  has_pro        boolean;
+  has_destacado  boolean;
+  has_verif      boolean;
+  approved_doc   boolean;
+begin
+  select
+    bool_or(s.plan_id = 'pro'),
+    bool_or(s.plan_id = 'destacado'),
+    bool_or(p.includes_verification)
+  into has_pro, has_destacado, has_verif
+  from public.subscriptions s
+  join public.plans p on p.id = s.plan_id
+  where s.user_id = p_user_id and s.paid_through > now();
+
+  has_pro := coalesce(has_pro, false);
+  has_destacado := coalesce(has_destacado, false);
+  has_verif := coalesce(has_verif, false);
+
+  -- Nivel del perfil (lo usan el inicio "Destacados" y el buscador).
+  update public.profiles
+  set plan_tier = case when has_pro then 'pro' when has_destacado then 'destacado' else 'free' end
+  where id = p_user_id
+    and plan_tier is distinct from (case when has_pro then 'pro' when has_destacado then 'destacado' else 'free' end);
+
+  -- Emprendimientos Pro: los que tienen una suscripción Pro al día.
+  update public.businesses b
+  set plan_tier = 'pro', search_boost = 0.5
+  where b.owner_id = p_user_id
+    and exists (
+      select 1 from public.subscriptions s
+      where s.business_id = b.id and s.plan_id = 'pro' and s.paid_through > now()
+    )
+    and (b.plan_tier <> 'pro' or b.search_boost <> 0.5);
+
+  update public.businesses b
+  set plan_tier = 'free', search_boost = 0
+  where b.owner_id = p_user_id
+    and b.plan_tier <> 'free'
+    and not exists (
+      select 1 from public.subscriptions s
+      where s.business_id = b.id and s.plan_id = 'pro' and s.paid_through > now()
+    );
+
+  -- Tilde paga: con verificación al día y DNI aprobado.
+  select exists (
+    select 1 from public.verification_requests v where v.user_id = p_user_id and v.status = 'approved'
+  ) into approved_doc;
+
+  if has_verif and approved_doc then
+    update public.profiles
+    set verified_at = coalesce(verified_at, now()),
+        verified_source = coalesce(verified_source, 'paid')
+    where id = p_user_id and (verified_at is null or verified_source is null);
+  elsif not has_verif then
+    update public.profiles
+    set verified_at = null, verified_source = null
+    where id = p_user_id and verified_source = 'paid';
+  end if;
+end;
+$$;
+
+revoke execute on function public.refresh_entitlements(uuid) from public, anon, authenticated;
+
+-- ¿El usuario actual tiene un plan con verificación al día?
+create or replace function public.has_verification_plan()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.subscriptions s
+    join public.plans p on p.id = s.plan_id
+    where s.user_id = (select auth.uid()) and s.paid_through > now() and p.includes_verification
+  );
+$$;
+
+revoke execute on function public.has_verification_plan() from public, anon;
+grant  execute on function public.has_verification_plan() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Empezar una suscripción (la llama el usuario; queda "pendiente" hasta que
+-- Mercado Pago confirme). El servidor después crea el preapproval y lo asocia.
+-- -----------------------------------------------------------------------------
+create or replace function public.start_subscription(p_plan_id text, p_business_id uuid, p_payer_email text)
+returns table (id uuid, price numeric, plan_name text)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me    uuid := (select auth.uid());
+  plan  public.plans%rowtype;
+  sub   uuid;
+  email text := lower(btrim(coalesce(p_payer_email, '')));
+begin
+  if me is null or not public.is_active_user() then
+    raise exception 'Ingresá con una cuenta activa para suscribirte' using errcode = '42501';
+  end if;
+
+  select * into plan from public.plans pl where pl.id = p_plan_id and pl.active;
+  if plan.id is null then
+    raise exception 'Ese plan no está disponible' using errcode = '42501';
+  end if;
+
+  if plan.requires_business then
+    if p_business_id is null or not exists (
+      select 1 from public.businesses b
+      where b.id = p_business_id and b.owner_id = me and b.deleted_at is null and b.status in ('active', 'inactive', 'draft')
+    ) then
+      raise exception 'Elegí uno de tus emprendimientos para el plan Pro' using errcode = '42501';
+    end if;
+  else
+    p_business_id := null;
+  end if;
+
+  if email !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'Escribí el email de tu cuenta de Mercado Pago' using errcode = '23514';
+  end if;
+
+  if exists (
+    select 1 from public.subscriptions s
+    where s.user_id = me and s.plan_id = plan.id
+      and s.business_id is not distinct from p_business_id
+      and s.status in ('authorized', 'paused')
+  ) then
+    raise exception 'Ya tenés este plan activo' using errcode = '42501';
+  end if;
+
+  -- Un intento anterior que no se pagó se descarta.
+  update public.subscriptions s
+  set status = 'cancelled', cancelled_at = now()
+  where s.user_id = me and s.plan_id = plan.id
+    and s.business_id is not distinct from p_business_id
+    and s.status = 'pending';
+
+  insert into public.subscriptions (user_id, plan_id, business_id, price, currency, payer_email)
+  values (me, plan.id, p_business_id, plan.price, plan.currency, email)
+  returning subscriptions.id into sub;
+
+  return query select sub, plan.price, plan.name;
+end;
+$$;
+
+revoke execute on function public.start_subscription(text, uuid, text) from public, anon;
+grant  execute on function public.start_subscription(text, uuid, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Funciones del servidor (service_role): datos que vienen de Mercado Pago
+-- -----------------------------------------------------------------------------
+create or replace function public.sub_attach_preapproval(p_subscription_id uuid, p_preapproval_id text, p_init_point text)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.subscriptions
+  set mp_preapproval_id = p_preapproval_id, init_point = p_init_point
+  where id = p_subscription_id and status = 'pending' and mp_preapproval_id is null;
+$$;
+
+-- Estado del preapproval según Mercado Pago.
+create or replace function public.sub_sync(
+  p_subscription_id  uuid,
+  p_preapproval_id   text,
+  p_status           text,
+  p_next_payment_at  timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  sub        public.subscriptions%rowtype;
+  new_status public.subscription_status;
+begin
+  select * into sub from public.subscriptions s where s.id = p_subscription_id;
+  if sub.id is null or (sub.mp_preapproval_id is not null and sub.mp_preapproval_id <> p_preapproval_id) then
+    raise exception 'La suscripción no coincide con Mercado Pago' using errcode = '42501';
+  end if;
+
+  new_status := case p_status
+    when 'authorized' then 'authorized'
+    when 'paused' then 'paused'
+    when 'cancelled' then 'cancelled'
+    else 'pending'
+  end::public.subscription_status;
+
+  -- Una suscripción cancelada no vuelve atrás.
+  if sub.status = 'cancelled' then
+    new_status := 'cancelled';
+  end if;
+
+  update public.subscriptions
+  set status = new_status,
+      mp_preapproval_id = coalesce(mp_preapproval_id, p_preapproval_id),
+      next_payment_at = case when new_status = 'authorized' then p_next_payment_at else null end,
+      started_at = case when new_status = 'authorized' then coalesce(started_at, now()) else started_at end,
+      cancelled_at = case when new_status = 'cancelled' then coalesce(cancelled_at, now()) else cancelled_at end
+  where id = sub.id;
+
+  perform public.refresh_entitlements(sub.user_id);
+end;
+$$;
+
+-- Un cobro de la suscripción (idempotente por mp_payment_id).
+create or replace function public.sub_record_payment(
+  p_preapproval_id           text,
+  p_mp_payment_id            text,
+  p_mp_authorized_payment_id text,
+  p_status                   text,
+  p_amount                   numeric,
+  p_fee                      numeric,
+  p_net                      numeric,
+  p_paid_at                  timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  sub          public.subscriptions%rowtype;
+  prev_status  text;
+  first_paid   boolean;
+begin
+  select * into sub from public.subscriptions s where s.mp_preapproval_id = p_preapproval_id;
+  if sub.id is null then
+    raise exception 'No hay una suscripción con ese preapproval' using errcode = '42501';
+  end if;
+
+  select sp.status into prev_status from public.subscription_payments sp where sp.mp_payment_id = p_mp_payment_id;
+  first_paid := not exists (select 1 from public.subscription_payments sp where sp.subscription_id = sub.id and sp.status = 'approved');
+
+  insert into public.subscription_payments
+    (subscription_id, user_id, plan_id, mp_payment_id, mp_authorized_payment_id, status, amount, fee, net, currency, paid_at)
+  values
+    (sub.id, sub.user_id, sub.plan_id, p_mp_payment_id, p_mp_authorized_payment_id, p_status,
+     coalesce(p_amount, 0), coalesce(p_fee, 0), coalesce(p_net, 0), sub.currency, p_paid_at)
+  on conflict (mp_payment_id) do update
+    set status = excluded.status,
+        amount = excluded.amount,
+        fee = excluded.fee,
+        net = excluded.net,
+        paid_at = coalesce(excluded.paid_at, public.subscription_payments.paid_at),
+        mp_authorized_payment_id = coalesce(excluded.mp_authorized_payment_id, public.subscription_payments.mp_authorized_payment_id);
+
+  -- Solo un pago nuevo acreditado extiende el período (los reintentos del mismo aviso no).
+  if p_status = 'approved' and prev_status is distinct from 'approved' then
+    update public.subscriptions
+    -- paid_through = hasta cuándo está cubierto + 3 días de gracia (reintentos de cobro).
+    set paid_through = greatest(coalesce(paid_through - interval '3 days', coalesce(p_paid_at, now())), coalesce(p_paid_at, now()))
+                       + interval '1 month 3 days'
+    where id = sub.id;
+
+    if first_paid then
+      insert into public.notifications (recipient_id, actor_id, type, subscription_id)
+      values (sub.user_id, null, 'plan_activated', sub.id);
+    end if;
+  elsif p_status = 'rejected' and prev_status is distinct from 'rejected' then
+    insert into public.notifications (recipient_id, actor_id, type, subscription_id)
+    values (sub.user_id, null, 'plan_payment_failed', sub.id);
+  end if;
+
+  perform public.refresh_entitlements(sub.user_id);
+end;
+$$;
+
+-- Limpieza diaria: quita beneficios vencidos.
+create or replace function public.expire_entitlements()
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  uid   uuid;
+  total integer := 0;
+begin
+  for uid in
+    select p.id from public.profiles p where p.plan_tier <> 'free' or p.verified_source = 'paid'
+    union
+    select b.owner_id from public.businesses b where b.plan_tier <> 'free'
+  loop
+    perform public.refresh_entitlements(uid);
+    total := total + 1;
+  end loop;
+  return total;
+end;
+$$;
+
+revoke execute on function public.sub_attach_preapproval(uuid, text, text) from public, anon, authenticated;
+revoke execute on function public.sub_sync(uuid, text, text, timestamptz) from public, anon, authenticated;
+revoke execute on function public.sub_record_payment(text, text, text, text, numeric, numeric, numeric, timestamptz) from public, anon, authenticated;
+revoke execute on function public.expire_entitlements() from public, anon, authenticated;
+grant execute on function public.sub_attach_preapproval(uuid, text, text) to service_role;
+grant execute on function public.sub_sync(uuid, text, text, timestamptz) to service_role;
+grant execute on function public.sub_record_payment(text, text, text, text, numeric, numeric, numeric, timestamptz) to service_role;
+grant execute on function public.expire_entitlements() to service_role;
+
+-- -----------------------------------------------------------------------------
+-- Verificación: el usuario manda DNI + selfie; administración decide
+-- -----------------------------------------------------------------------------
+create or replace function public.submit_verification(p_document_path text, p_selfie_path text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me  uuid := (select auth.uid());
+  req uuid;
+begin
+  if me is null or not public.is_active_user() then
+    raise exception 'Ingresá con una cuenta activa' using errcode = '42501';
+  end if;
+  if not public.has_verification_plan() then
+    raise exception 'Necesitás el plan Verificación o Emprendimiento Pro al día' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.verification_requests v where v.user_id = me and v.status = 'pending') then
+    raise exception 'Ya mandaste tu documentación: la estamos revisando' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.verification_requests v where v.user_id = me and v.status = 'approved') then
+    raise exception 'Tu identidad ya está verificada' using errcode = '42501';
+  end if;
+
+  -- Las imágenes tienen que ser del propio usuario y existir en el bucket privado.
+  if split_part(coalesce(p_document_path, ''), '/', 1) <> me::text
+     or split_part(coalesce(p_selfie_path, ''), '/', 1) <> me::text
+     or p_document_path = p_selfie_path
+     or not exists (select 1 from storage.objects o where o.bucket_id = 'verification' and o.name like p_document_path || '/%')
+     or not exists (select 1 from storage.objects o where o.bucket_id = 'verification' and o.name like p_selfie_path || '/%') then
+    raise exception 'Subí las dos fotos de nuevo' using errcode = '42501';
+  end if;
+
+  insert into public.verification_requests (user_id, document_path, selfie_path)
+  values (me, p_document_path, p_selfie_path)
+  returning id into req;
+  return req;
+end;
+$$;
+
+revoke execute on function public.submit_verification(text, text) from public, anon;
+grant  execute on function public.submit_verification(text, text) to authenticated;
+
+create or replace function public.review_verification(p_request_id uuid, p_approve boolean, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me  uuid := (select auth.uid());
+  req public.verification_requests%rowtype;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+begin
+  if not (select public.has_role('admin')) then
+    raise exception 'Solo la administración revisa verificaciones' using errcode = '42501';
+  end if;
+  select * into req from public.verification_requests v where v.id = p_request_id;
+  if req.id is null or req.status <> 'pending' then
+    raise exception 'Ese pedido ya fue revisado' using errcode = '42501';
+  end if;
+  if req.user_id = me then
+    raise exception 'No podés revisar tu propio pedido' using errcode = '42501';
+  end if;
+  if not p_approve and v_reason is null then
+    raise exception 'Contale a la persona por qué la rechazás' using errcode = '23514';
+  end if;
+
+  update public.verification_requests
+  set status = case when p_approve then 'approved' else 'rejected' end::public.verification_request_status,
+      reject_reason = case when p_approve then null else left(v_reason, 300) end,
+      reviewed_by = me,
+      reviewed_at = now()
+  where id = req.id;
+
+  insert into public.notifications (recipient_id, actor_id, type)
+  values (req.user_id, null, case when p_approve then 'verification_approved' else 'verification_rejected' end::public.notification_type);
+
+  perform public.refresh_entitlements(req.user_id);
+
+  insert into public.moderation_actions (moderator_id, target_type, target_id, action, note)
+  values (me, 'profile', req.user_id, case when p_approve then 'verify' else 'verify_rejected' end, v_reason);
+end;
+$$;
+
+revoke execute on function public.review_verification(uuid, boolean, text) from public, anon;
+grant  execute on function public.review_verification(uuid, boolean, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Ingresos (solo administración)
+-- -----------------------------------------------------------------------------
+create or replace function public.admin_revenue_summary()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  month_start timestamptz := date_trunc('month', now() at time zone 'America/Argentina/Cordoba') at time zone 'America/Argentina/Cordoba';
+  prev_start  timestamptz := (date_trunc('month', now() at time zone 'America/Argentina/Cordoba') - interval '1 month') at time zone 'America/Argentina/Cordoba';
+begin
+  if not (select public.has_role('admin')) then
+    raise exception 'Solo administración' using errcode = '42501';
+  end if;
+
+  return jsonb_build_object(
+    'active_subscribers', (select count(distinct s.user_id) from public.subscriptions s where s.paid_through > now()),
+    'active_subscriptions', (select count(*) from public.subscriptions s where s.paid_through > now()),
+    -- Ingreso mensual recurrente: suscripciones que se siguen cobrando.
+    'mrr', (select coalesce(sum(s.price), 0) from public.subscriptions s where s.status = 'authorized'),
+    'month_gross', (select coalesce(sum(p.amount), 0) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= month_start),
+    'month_fee', (select coalesce(sum(p.fee), 0) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= month_start),
+    'month_net', (select coalesce(sum(p.net), 0) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= month_start),
+    'month_payments', (select count(*) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= month_start),
+    'prev_gross', (select coalesce(sum(p.amount), 0) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= prev_start and p.paid_at < month_start),
+    'prev_net', (select coalesce(sum(p.net), 0) from public.subscription_payments p where p.status = 'approved' and p.paid_at >= prev_start and p.paid_at < month_start),
+    'month_new', (select count(*) from public.subscriptions s where s.started_at >= month_start),
+    'month_cancelled', (select count(*) from public.subscriptions s where s.cancelled_at >= month_start and s.started_at is not null),
+    'month_failed', (select count(*) from public.subscription_payments p where p.status = 'rejected' and p.created_at >= month_start),
+    'pending_verifications', (select count(*) from public.verification_requests v where v.status = 'pending'),
+    'by_plan', (
+      select coalesce(jsonb_agg(jsonb_build_object(
+        'plan_id', pl.id,
+        'name', pl.name,
+        'price', pl.price,
+        'active', (select count(*) from public.subscriptions s where s.plan_id = pl.id and s.paid_through > now()),
+        'mrr', (select coalesce(sum(s.price), 0) from public.subscriptions s where s.plan_id = pl.id and s.status = 'authorized'),
+        'month_gross', (select coalesce(sum(p.amount), 0) from public.subscription_payments p where p.plan_id = pl.id and p.status = 'approved' and p.paid_at >= month_start)
+      ) order by pl.sort), '[]'::jsonb)
+      from public.plans pl
+    ),
+    'monthly', (
+      select coalesce(jsonb_agg(jsonb_build_object(
+        'month', to_char(m.month, 'YYYY-MM'),
+        'gross', coalesce(x.gross, 0),
+        'net', coalesce(x.net, 0),
+        'payments', coalesce(x.payments, 0),
+        'subscribers', coalesce(x.subscribers, 0)
+      ) order by m.month), '[]'::jsonb)
+      from generate_series(
+        date_trunc('month', now() at time zone 'America/Argentina/Cordoba') - interval '11 months',
+        date_trunc('month', now() at time zone 'America/Argentina/Cordoba'),
+        interval '1 month'
+      ) as m(month)
+      left join (
+        select date_trunc('month', p.paid_at at time zone 'America/Argentina/Cordoba') as month,
+               sum(p.amount) as gross, sum(p.net) as net, count(*) as payments, count(distinct p.user_id) as subscribers
+        from public.subscription_payments p
+        where p.status = 'approved'
+        group by 1
+      ) x on x.month = m.month
+    )
+  );
+end;
+$$;
+
+revoke execute on function public.admin_revenue_summary() from public, anon;
+grant  execute on function public.admin_revenue_summary() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Propuestas: límite mensual para cuentas sin plan
+-- -----------------------------------------------------------------------------
+create or replace function public.tg_proposals_free_limit()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if public.is_system_call() then
+    return new;
+  end if;
+  if (select p.plan_tier from public.profiles p where p.id = new.author_id) = 'free'
+     and (
+       select count(*) from public.proposals pr
+       where pr.author_id = new.author_id
+         and pr.created_at >= date_trunc('month', now() at time zone 'America/Argentina/Cordoba') at time zone 'America/Argentina/Cordoba'
+     ) >= public.setting_int('limits.free_proposals_per_month', 10) then
+    raise exception 'Llegaste a las propuestas gratis de este mes. Con el plan Destacado mandás sin límite.'
+      using errcode = 'P0001', hint = 'quota_exceeded';
+  end if;
+  return new;
+end;
+$$;
+
+-- Corre después de "proposals_before_write" (orden alfabético), con el autor ya fijado.
+create trigger proposals_free_limit
+  before insert on public.proposals
+  for each row execute function public.tg_proposals_free_limit();
+
+insert into public.settings (key, value, is_public, description) values
+  ('limits.free_proposals_per_month', '10', false, 'Propuestas por mes para cuentas sin plan')
+on conflict (key) do nothing;
+
+-- -----------------------------------------------------------------------------
+-- Seguridad (RLS)
+-- -----------------------------------------------------------------------------
+alter table public.plans enable row level security;
+alter table public.subscriptions enable row level security;
+alter table public.subscription_payments enable row level security;
+alter table public.verification_requests enable row level security;
+
+create policy "plans: públicos" on public.plans
+  for select to anon, authenticated
+  using (active or (select public.has_role('admin')));
+
+create policy "plans: administración edita" on public.plans
+  for update to authenticated
+  using ((select public.has_role('admin')))
+  with check ((select public.has_role('admin')));
+
+revoke all on public.plans from anon, authenticated;
+grant select on public.plans to anon, authenticated;
+grant update (name, description, features, price, active) on public.plans to authenticated;
+
+create policy "subscriptions: las mías o administración" on public.subscriptions
+  for select to authenticated
+  using (user_id = (select auth.uid()) or (select public.has_role('admin')));
+
+revoke all on public.subscriptions from anon, authenticated;
+grant select on public.subscriptions to authenticated;
+
+create policy "subscription_payments: los míos o administración" on public.subscription_payments
+  for select to authenticated
+  using (user_id = (select auth.uid()) or (select public.has_role('admin')));
+
+revoke all on public.subscription_payments from anon, authenticated;
+grant select on public.subscription_payments to authenticated;
+
+create policy "verification_requests: los míos o administración" on public.verification_requests
+  for select to authenticated
+  using (user_id = (select auth.uid()) or (select public.has_role('admin')));
+
+revoke all on public.verification_requests from anon, authenticated;
+grant select on public.verification_requests to authenticated;
+
+-- Los documentos privados: solo la persona y administración (antes también moderación).
+drop policy if exists "verification: leer lo mío o moderación" on storage.objects;
+create policy "verification: leer lo mío o administración" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'verification'
+    and (
+      (storage.foldername(name))[1] = (select auth.uid())::text
+      or (select public.has_role('admin'))
+    )
+  );
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 187 archivos de la Etapa 12 instalados."
+echo " Listo. 200 archivos de la Etapa 13 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

@@ -1,0 +1,261 @@
+---
+/**
+ * Mi plan: suscripciones (Mercado Pago), verificación con DNI y selfie y
+ * pagos realizados. Los beneficios se activan cuando Mercado Pago confirma
+ * el pago (lo consulta el servidor, nunca el navegador).
+ */
+import { actions, isInputError } from "astro:actions";
+import { PUBLIC_SUPABASE_ANON_KEY } from "astro:env/client";
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import ImageUploader from "../../islands/ImageUploader.tsx";
+import {
+  getMyPayments,
+  getMySubscriptions,
+  getMyVerification,
+  getPlans,
+  coveredUntil,
+  isEntitled,
+  PAYMENT_STATUS,
+  SUBSCRIPTION_STATUS,
+  syncSubscription,
+  type PlanId,
+} from "../../services/billing";
+import { getMyBusinesses } from "../../services/businesses";
+import { createSupabaseAdminClient } from "../../lib/supabase/admin";
+import { isMercadoPagoConfigured } from "../../lib/mercadopago";
+import { formatDate, formatMoney } from "../../lib/format";
+import { getSubmittedForm } from "../../utils/form";
+
+const { supabase, user } = Astro.locals;
+
+// Formularios: suscribirse (va a Mercado Pago), actualizar, cancelar y verificación.
+const subscribed = Astro.getActionResult(actions.billing.subscribe);
+if (subscribed && !subscribed.error) return Astro.redirect(subscribed.data.checkoutUrl, 303);
+const synced = Astro.getActionResult(actions.billing.sync);
+const cancelled = Astro.getActionResult(actions.billing.cancel);
+const verification = Astro.getActionResult(actions.billing.submitVerification);
+if (synced && !synced.error) return Astro.redirect("/panel/plan?ok=actualizado", 303);
+if (cancelled && !cancelled.error) return Astro.redirect("/panel/plan?ok=cancelado", 303);
+if (verification && !verification.error) return Astro.redirect("/panel/plan?ok=verificacion#verificacion", 303);
+const failed = subscribed?.error ?? synced?.error ?? cancelled?.error ?? verification?.error ?? null;
+const fieldErrors = failed && isInputError(failed) ? (failed.fields as Record<string, string[] | undefined>) : {};
+const formError = failed ? (isInputError(failed) ? Object.values(fieldErrors).flat()[0] ?? "Revisá los datos." : failed.message) : null;
+const submitted = subscribed?.error ? await getSubmittedForm(Astro.request) : null;
+
+// Al volver de Mercado Pago (?sub=...): se consulta el estado en el momento.
+const returningId = Astro.url.searchParams.get("sub");
+let returnNotice: string | null = null;
+if (returningId && /^[0-9a-f-]{36}$/.test(returningId)) {
+  const { data: mine } = await supabase.from("subscriptions").select("id, mp_preapproval_id").eq("id", returningId).eq("user_id", user!.id).maybeSingle();
+  if (mine) {
+    try {
+      await syncSubscription(createSupabaseAdminClient(), mine);
+    } catch (error) {
+      console.error("[plan] sync", error);
+    }
+    returnNotice = "¡Gracias! Si el pago se acreditó, tu plan ya está activo. Si no lo ves todavía, tocá “Actualizar” en unos minutos.";
+  }
+}
+
+const [plans, subscriptions, payments, request, businesses, { data: hasVerificationPlan }] = await Promise.all([
+  getPlans(supabase),
+  getMySubscriptions(supabase, user!.id),
+  getMyPayments(supabase, user!.id),
+  getMyVerification(supabase, user!.id),
+  getMyBusinesses(supabase, user!.id),
+  supabase.rpc("has_verification_plan"),
+]);
+const { data: me } = await supabase.from("profiles").select("verified_at, verified_source, plan_tier").eq("id", user!.id).single();
+const ownBusinesses = businesses.filter((b) => b.role === "owner" && b.status !== "suspended");
+const live = subscriptions.filter((s) => s.status !== "cancelled" || isEntitled(s));
+const takenPlans = new Set(live.filter((s) => s.status === "authorized" || s.status === "paused").map((s) => `${s.plan_id}:${s.business_id ?? ""}`));
+const proBusinessesTaken = new Set(live.filter((s) => s.plan_id === "pro" && s.status !== "pending").map((s) => s.business_id));
+const freeBusinesses = ownBusinesses.filter((b) => !proBusinessesTaken.has(b.id));
+const available = plans.filter((p) => (p.requires_business ? freeBusinesses.length > 0 : !takenPlans.has(`${p.id}:`)));
+const paymentsEnabled = isMercadoPagoConfigured();
+const okMessages: Record<string, string> = {
+  actualizado: "Actualizamos el estado con Mercado Pago.",
+  cancelado: "Cancelaste la suscripción. Seguís con los beneficios hasta el final del período pagado.",
+  verificacion: "¡Recibimos tu documentación! La revisamos y te avisamos por notificación.",
+};
+const ok = okMessages[Astro.url.searchParams.get("ok") ?? ""] ?? null;
+const chosen = (Astro.url.searchParams.get("elegir") ?? "") as PlanId | "";
+const emailDefault = String(submitted?.get("payer_email") ?? user!.email ?? "");
+const inputClass =
+  "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<PanelLayout title="Mi plan" description="Planes, verificación y pagos.">
+  {ok && <Alert tone="success" class="mb-4">{ok}</Alert>}
+  {returnNotice && <Alert tone="info" class="mb-4">{returnNotice}</Alert>}
+  {formError && <Alert tone="danger" class="mb-4">{formError}</Alert>}
+
+  <section aria-labelledby="mis-planes">
+    <h2 id="mis-planes" class="text-lg font-semibold">Tus planes</h2>
+    {
+      live.length === 0 ? (
+        <p class="mt-2 rounded-wl-lg border border-dashed border-line bg-surface p-5 text-sm text-ink-muted">
+          Estás usando WorkLink gratis. Elegí un plan para que te encuentren más.
+        </p>
+      ) : (
+        <ul class="mt-3 flex flex-col gap-3">
+          {live.map((s) => {
+            const status = SUBSCRIPTION_STATUS[s.status];
+            const entitled = isEntitled(s);
+            return (
+              <li class="rounded-wl-lg border border-line bg-surface p-4" data-subscription={s.plan_id}>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <p class="font-semibold">
+                    {s.plan?.name ?? s.plan_id}
+                    {s.business && <span class="font-normal text-ink-muted"> · {s.business.name}</span>}
+                  </p>
+                  <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", status.class]}>{status.label}</span>
+                </div>
+                <p class="mt-1 text-sm text-ink-muted">
+                  {formatMoney(s.price)} por mes · Mercado Pago: {s.payer_email}
+                </p>
+                <p class="mt-1 text-sm">
+                  {entitled ? (
+                    <>
+                      ✓ Beneficios activos hasta el <strong>{formatDate(coveredUntil(s.paid_through!), { day: "numeric", month: "long" })}</strong>
+                      {s.status === "authorized" && s.next_payment_at && <span class="text-ink-muted"> · próximo cobro {formatDate(s.next_payment_at, { day: "numeric", month: "long" })}</span>}
+                    </>
+                  ) : s.status === "pending" ? (
+                    "Todavía no recibimos el pago."
+                  ) : (
+                    "Sin beneficios activos: revisá el medio de pago en Mercado Pago."
+                  )}
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  {s.status === "pending" && s.init_point && <Button href={s.init_point} size="sm">Pagar en Mercado Pago</Button>}
+                  {s.mp_preapproval_id && s.status !== "cancelled" && (
+                    <form method="POST" action={actions.billing.sync}>
+                      <input type="hidden" name="subscription_id" value={s.id} />
+                      <Button type="submit" size="sm" variant="secondary">Actualizar</Button>
+                    </form>
+                  )}
+                  {s.status !== "cancelled" && (
+                    <form method="POST" action={actions.billing.cancel} data-confirm="¿Cancelar la suscripción? No se te va a volver a cobrar y seguís con los beneficios hasta el final del período pagado.">
+                      <input type="hidden" name="subscription_id" value={s.id} />
+                      <Button type="submit" size="sm" variant="ghost" class="text-danger">Cancelar</Button>
+                    </form>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+  </section>
+
+  {
+    available.length > 0 && (
+      <section aria-labelledby="elegir-plan" class="mt-10">
+        <h2 id="elegir-plan" class="text-lg font-semibold">{live.length ? "Sumá otro plan" : "Elegí un plan"}</h2>
+        <p class="mt-1 text-sm text-ink-muted">Se cobra todos los meses con Mercado Pago (tarjeta o dinero en cuenta). Cancelás cuando quieras.</p>
+        {!paymentsEnabled && <Alert tone="warning" class="mt-3">Los pagos todavía no están habilitados. Muy pronto vas a poder suscribirte.</Alert>}
+        <div class="mt-4 grid gap-4 md:grid-cols-3">
+          {available.map((plan) => (
+            <article
+              id={`plan-${plan.id}`}
+              class:list={["flex flex-col rounded-wl-lg border bg-surface p-5", chosen === plan.id || plan.id === "pro" ? "border-brand" : "border-line"]}
+              data-plan={plan.id}
+            >
+              {plan.id === "pro" && <p class="mb-2 w-fit rounded-full bg-brand px-2.5 py-0.5 text-xs font-bold text-brand-contrast">El que más conviene</p>}
+              <h3 class="text-lg font-bold">{plan.name}</h3>
+              <p class="mt-1 text-sm text-ink-muted">{plan.description}</p>
+              <p class="mt-3 text-3xl font-bold">{formatMoney(plan.price)}<span class="text-base font-normal text-ink-muted"> /mes</span></p>
+              <ul class="mt-3 flex flex-1 flex-col gap-1.5 text-sm">
+                {plan.features.map((f) => <li class="flex gap-2"><span class="text-success" aria-hidden="true">✓</span>{f}</li>)}
+              </ul>
+              <form method="POST" action={actions.billing.subscribe} class="mt-4 flex flex-col gap-3">
+                <input type="hidden" name="plan_id" value={plan.id} />
+                {plan.requires_business && (
+                  <label class="flex flex-col gap-1 text-sm font-medium">
+                    ¿Para qué emprendimiento?
+                    <select name="business_id" required class={inputClass}>
+                      {freeBusinesses.map((b) => <option value={b.id}>{b.name}</option>)}
+                    </select>
+                  </label>
+                )}
+                <label class="flex flex-col gap-1 text-sm font-medium">
+                  Email de tu cuenta de Mercado Pago
+                  <input type="email" name="payer_email" required value={emailDefault} autocomplete="email" class={inputClass} />
+                </label>
+                <Button type="submit" disabled={!paymentsEnabled}>Suscribirme con Mercado Pago</Button>
+              </form>
+            </article>
+          ))}
+        </div>
+        {plans.some((p) => p.requires_business) && ownBusinesses.length === 0 && (
+          <p class="mt-3 text-sm text-ink-muted">Para el plan Emprendimiento Pro primero <a href="/panel/emprendimientos/nuevo" class="font-semibold text-brand hover:underline">creá la página de tu emprendimiento</a>.</p>
+        )}
+      </section>
+    )
+  }
+
+  <section id="verificacion" aria-labelledby="verificacion-titulo" class="mt-10 scroll-mt-20">
+    <h2 id="verificacion-titulo" class="text-lg font-semibold">Verificación de identidad</h2>
+    {
+      me?.verified_at ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">✓ Tu cuenta está verificada: la tilde azul aparece al lado de tu nombre.</p>
+      ) : !hasVerificationPlan ? (
+        <p class="mt-2 text-sm text-ink-muted">
+          La tilde azul viene con el plan <strong>Verificación</strong> o con <strong>Emprendimiento Pro</strong>. Después de pagar, subís tu DNI y una selfie y nosotros lo revisamos.
+        </p>
+      ) : request?.status === "pending" ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">Recibimos tu documentación el {formatDate(request.created_at, { day: "numeric", month: "long" })}. La estamos revisando: te avisamos por notificación.</p>
+      ) : request?.status === "approved" ? (
+        <p class="mt-2 rounded-wl-lg border border-line bg-surface p-4">Tu identidad ya fue aprobada. La tilde se activa mientras tu plan esté al día.</p>
+      ) : (
+        <div class="mt-3 rounded-wl-lg border border-line bg-surface p-4">
+          {request?.status === "rejected" && (
+            <Alert tone="warning" class="mb-4" title="No pudimos aprobar tu verificación">
+              {request.reject_reason} Podés mandar las fotos de nuevo.
+            </Alert>
+          )}
+          <p class="text-sm">
+            Subí una foto del <strong>frente de tu DNI</strong> y una <strong>selfie sosteniendo el DNI</strong>, con buena luz y que se lea bien.
+            Las fotos son privadas: solo las ve la administración de WorkLink para verificarte.
+          </p>
+          <form method="POST" action={actions.billing.submitVerification} class="mt-4 flex flex-col gap-5">
+            <div class="grid gap-5 sm:grid-cols-2">
+              <ImageUploader client:load name="document_path" purpose="verification" label="Frente del DNI" supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY} />
+              <ImageUploader client:load name="selfie_path" purpose="verification" label="Selfie con tu DNI" supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY} />
+            </div>
+            <div><Button type="submit">Enviar para revisar</Button></div>
+          </form>
+        </div>
+      )
+    }
+  </section>
+
+  {
+    payments.length > 0 && (
+      <section aria-labelledby="pagos" class="mt-10">
+        <h2 id="pagos" class="text-lg font-semibold">Tus pagos</h2>
+        <ul class="mt-3 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface text-sm">
+          {payments.map((p) => (
+            <li class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+              <span>{p.plan?.name ?? p.plan_id} · {formatDate(p.paid_at ?? p.created_at, { dateStyle: "medium" })}</span>
+              <span class="flex items-center gap-3">
+                <span class:list={["text-xs font-semibold", p.status === "approved" ? "text-success" : "text-ink-muted"]}>{PAYMENT_STATUS[p.status] ?? p.status}</span>
+                <strong>{formatMoney(p.amount)}</strong>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )
+  }
+</PanelLayout>
+
+<script>
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-confirm]");
+    if (form && !window.confirm(form.dataset.confirm!)) event.preventDefault();
+  });
+</script>

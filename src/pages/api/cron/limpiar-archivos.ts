@@ -1,6 +1,8 @@
 import type { APIRoute } from "astro";
 import { getSecret } from "astro:env/server";
 import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
+import { isMercadoPagoConfigured } from "../../../lib/mercadopago";
+import { syncSubscription } from "../../../services/billing";
 
 /**
  * Limpieza diaria de archivos sin usar (la ejecuta Vercel Cron, ver vercel.json).
@@ -11,6 +13,9 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
  *
  * Además borra las notificaciones leídas hace más de 90 días y marca como
  * vencidas las necesidades que pasaron sus 30 días sin resolverse.
+ *
+ * Suscripciones: consulta a Mercado Pago las que están vivas (por si se perdió
+ * algún aviso) y quita los beneficios vencidos.
  *
  * Vercel envía "Authorization: Bearer <CRON_SECRET>": sin ese secreto, 401.
  * Procesa en lotes para no exceder el tiempo de una función.
@@ -69,8 +74,31 @@ export const GET: APIRoute = async ({ request }) => {
   const { data: expiredNeeds, error: needsError } = await supabase.rpc("expire_needs");
   if (needsError) console.error("[cron/limpiar-archivos] necesidades", needsError.message);
 
+  let syncedSubscriptions = 0;
+  if (isMercadoPagoConfigured()) {
+    const { data: live } = await supabase
+      .from("subscriptions")
+      .select("id, mp_preapproval_id")
+      .in("status", ["pending", "authorized", "paused"])
+      .not("mp_preapproval_id", "is", null)
+      .order("updated_at")
+      .limit(100);
+    for (const sub of live ?? []) {
+      try {
+        await syncSubscription(supabase, sub);
+        syncedSubscriptions++;
+      } catch (error) {
+        console.error("[cron/limpiar-archivos] suscripción", sub.id, error);
+      }
+    }
+  }
+  const { data: refreshed, error: entitlementsError } = await supabase.rpc("expire_entitlements");
+  if (entitlementsError) console.error("[cron/limpiar-archivos] beneficios", entitlementsError.message);
+
   return Response.json({
     ok: true,
+    syncedSubscriptions,
+    refreshedAccounts: Number(refreshed ?? 0),
     expiredNeeds: Number(expiredNeeds ?? 0),
     media: removedRows.length,
     files: removedFiles,

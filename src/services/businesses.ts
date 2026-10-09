@@ -3,7 +3,7 @@ import type { Business, CatalogItem } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
 const BASE_COLUMNS = `id, owner_id, slug, name, tagline, description, logo_path, cover_path, status, verification,
-  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count, rating_dist,
+  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count, rating_dist, plan_tier,
   created_at, updated_at,
   categories ( id, name, slug, seo_noun ),
   cities ( ${CITY_EMBED} ),

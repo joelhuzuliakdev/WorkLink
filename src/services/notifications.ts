@@ -15,7 +15,14 @@ export type NotificationType =
   | "proposal_accepted"
   | "need_match"
   | "review_received"
-  | "review_reply";
+  | "review_reply"
+  | "plan_activated"
+  | "plan_payment_failed"
+  | "verification_approved"
+  | "verification_rejected";
+
+/** Avisos del sistema: no tienen una persona que los envíe (actor null). */
+export const SYSTEM_NOTIFICATIONS: NotificationType[] = ["plan_activated", "plan_payment_failed", "verification_approved", "verification_rejected"];
 
 export interface NotificationView {
   id: string;
@@ -62,7 +69,7 @@ export async function getNotifications(
   const last = page[page.length - 1];
   return {
     // Si la cuenta de quien la generó fue suspendida, RLS devuelve actor null: se omite.
-    items: page.filter((n) => n.actor),
+    items: page.filter((n) => n.actor || SYSTEM_NOTIFICATIONS.includes(n.type)),
     nextCursor: rows.length > NOTIFICATIONS_PAGE && last ? encodeCursor({ published_at: last.created_at, id: last.id }) : null,
   };
 }

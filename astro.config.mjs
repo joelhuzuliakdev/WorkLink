@@ -43,6 +43,13 @@ export default defineConfig({
       SUPABASE_SERVICE_ROLE_KEY: envField.string({ context: "server", access: "secret", optional: true }),
       // Secreto que Vercel Cron envía para autorizar las tareas programadas.
       CRON_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
+      // Mercado Pago (suscripciones). Access token de producción (APP_USR-...)
+      // o de prueba (TEST-...). Nunca con prefijo PUBLIC_.
+      MP_ACCESS_TOKEN: envField.string({ context: "server", access: "secret", optional: true }),
+      // Clave secreta de los avisos (webhooks) de Mercado Pago, para validar la firma.
+      MP_WEBHOOK_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
+      // Solo para pruebas locales: dirección de la API (por defecto la oficial).
+      MP_API_URL: envField.string({ context: "server", access: "secret", optional: true }),
     },
     validateSecrets: true,
   },

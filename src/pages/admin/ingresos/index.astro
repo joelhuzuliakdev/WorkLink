@@ -1,0 +1,231 @@
+---
+/**
+ * Ingresos: suscriptores, ingreso mensual, cobros del mes, evolución de 12
+ * meses, por plan, lista de suscripciones y de pagos (con exportación CSV).
+ * Precios de los planes editables. Solo administración.
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../../layouts/AdminLayout.astro";
+import { getAdminStats } from "../../../services/admin";
+import { getAdminPayments, getAdminSubscriptions, getPlans, getRevenueSummary, coveredUntil, isEntitled, PAYMENT_STATUS, SUBSCRIPTION_STATUS } from "../../../services/billing";
+import { requireAdmin } from "../../../lib/admin-guard";
+import { displayName } from "../../../services/profiles";
+import { formatDate, formatMoney } from "../../../lib/format";
+
+const denied = await requireAdmin(Astro);
+if (denied) return denied;
+const { supabase } = Astro.locals;
+
+const planSaved = Astro.getActionResult(actions.billing.updatePlan);
+if (planSaved && !planSaved.error) return Astro.redirect("/admin/ingresos?hecho=plan#planes", 303);
+
+const now = new Date();
+const thisMonth = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Cordoba", year: "numeric", month: "2-digit" }).format(now).slice(0, 7);
+const mes = /^\d{4}-\d{2}$/.test(Astro.url.searchParams.get("mes") ?? "") ? Astro.url.searchParams.get("mes")! : thisMonth;
+const subsView = (["live", "all", "cancelled", "pending"] as const).find((v) => v === Astro.url.searchParams.get("subs")) ?? "live";
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+
+const [summary, plans, subs, payments, stats] = await Promise.all([
+  getRevenueSummary(supabase),
+  getPlans(supabase, { includeInactive: true }),
+  getAdminSubscriptions(supabase, { status: subsView, q }),
+  getAdminPayments(supabase, mes),
+  getAdminStats(supabase),
+]);
+
+const money = (n: number) => formatMoney(Math.round(n));
+const monthName = (ym: string, opts: Intl.DateTimeFormatOptions = { month: "short" }) =>
+  new Intl.DateTimeFormat("es-AR", { ...opts, timeZone: "UTC" }).format(new Date(`${ym}-15T12:00:00Z`));
+const change = summary && summary.prev_gross > 0 ? Math.round(((summary.month_gross - summary.prev_gross) / summary.prev_gross) * 100) : null;
+
+// Gráfico de barras (12 meses): ingresos brutos.
+const series = summary?.monthly ?? [];
+const max = Math.max(1, ...series.map((m) => m.gross));
+const W = 720, H = 200, PAD = 28, barW = (W - PAD * 2) / Math.max(series.length, 1);
+const approved = payments.filter((p) => p.status === "approved");
+const totals = approved.reduce((t, p) => ({ gross: t.gross + p.amount, fee: t.fee + p.fee, net: t.net + p.net }), { gross: 0, fee: 0, net: 0 });
+const months = Array.from({ length: 12 }, (_, i) => {
+  const d = new Date(Date.UTC(Number(thisMonth.slice(0, 4)), Number(thisMonth.slice(5, 7)) - 1 - i, 15));
+  return d.toISOString().slice(0, 7);
+});
+const subsLink = (v: string) => `/admin/ingresos?subs=${v}${q ? `&q=${encodeURIComponent(q)}` : ""}#suscripciones`;
+const tab = (active: boolean) => `rounded-full px-3 py-1.5 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+const cell = "px-3 py-2 text-left";
+---
+
+<AdminLayout title="Ingresos" description="Lo que entra por suscripciones. Los montos son los que confirma Mercado Pago." openReports={stats?.reports_open} error={planSaved?.error?.message}>
+  {
+    !summary ? (
+      <p class="text-ink-muted">No pudimos cargar los números.</p>
+    ) : (
+      <>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Ingreso mensual recurrente</p>
+            <p class="mt-1 text-2xl font-bold">{money(summary.mrr)}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">suscripciones que se siguen cobrando</p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Cobrado este mes</p>
+            <p class="mt-1 text-2xl font-bold">{money(summary.month_gross)}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">
+              neto {money(summary.month_net)} · {change === null ? `mes anterior ${money(summary.prev_gross)}` : `${change >= 0 ? "+" : ""}${change}% vs. mes anterior`}
+            </p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Cuentas que pagan</p>
+            <p class="mt-1 text-2xl font-bold">{summary.active_subscribers}</p>
+            <p class="mt-0.5 text-xs text-ink-muted">{summary.active_subscriptions} planes con beneficios activos</p>
+          </div>
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <p class="text-sm text-ink-muted">Este mes</p>
+            <p class="mt-1 text-2xl font-bold">+{summary.month_new} <span class="text-base font-normal text-ink-muted">/ −{summary.month_cancelled}</span></p>
+            <p class="mt-0.5 text-xs text-ink-muted">altas / bajas · {summary.month_failed} cobros rechazados</p>
+          </div>
+        </div>
+
+        <section class="mt-6 rounded-wl-lg border border-line bg-surface p-4" aria-labelledby="evolucion">
+          <h2 id="evolucion" class="font-semibold">Últimos 12 meses</h2>
+          <svg viewBox={`0 0 ${W} ${H + 24}`} class="mt-3 w-full" role="img" aria-label="Ingresos brutos por mes">
+            {series.map((m, i) => {
+              const h = Math.round((m.gross / max) * (H - PAD));
+              const x = PAD + i * barW + barW * 0.15;
+              return (
+                <g>
+                  <title>{`${monthName(m.month, { month: "long", year: "numeric" })}: ${money(m.gross)} (${m.payments} pagos)`}</title>
+                  <rect x={x} y={H - h} width={barW * 0.7} height={Math.max(h, m.gross > 0 ? 2 : 0)} rx="3" class="fill-brand" />
+                  {m.gross > 0 && <text x={x + barW * 0.35} y={H - h - 4} text-anchor="middle" class="fill-ink-muted text-[10px]">{Math.round(m.gross / 1000)}k</text>}
+                  <text x={x + barW * 0.35} y={H + 16} text-anchor="middle" class="fill-ink-muted text-[11px]">{monthName(m.month)}</text>
+                </g>
+              );
+            })}
+            <line x1={PAD} x2={W - PAD} y1={H} y2={H} class="stroke-line" />
+          </svg>
+          <table class="sr-only">
+            <caption>Ingresos por mes</caption>
+            <tr><th>Mes</th><th>Bruto</th><th>Neto</th><th>Pagos</th></tr>
+            {series.map((m) => <tr><td>{m.month}</td><td>{money(m.gross)}</td><td>{money(m.net)}</td><td>{m.payments}</td></tr>)}
+          </table>
+        </section>
+
+        <section id="planes" class="mt-6 scroll-mt-20" aria-labelledby="por-plan">
+          <h2 id="por-plan" class="font-semibold">Por plan</h2>
+          <div class="mt-3 grid gap-3 md:grid-cols-3">
+            {summary.by_plan.map((bp) => {
+              const plan = plans.find((p) => p.id === bp.plan_id);
+              return (
+                <div class="rounded-wl-lg border border-line bg-surface p-4" data-plan-row={bp.plan_id}>
+                  <p class="font-semibold">{bp.name}</p>
+                  <p class="mt-1 text-sm text-ink-muted">{bp.active} activos · {money(bp.mrr)} por mes · {money(bp.month_gross)} cobrado este mes</p>
+                  {plan && (
+                    <form method="POST" action={actions.billing.updatePlan} class="mt-3 flex flex-wrap items-end gap-2">
+                      <input type="hidden" name="plan_id" value={plan.id} />
+                      <label class="flex flex-col gap-1 text-xs text-ink-muted">
+                        Precio por mes
+                        <input name="price" inputmode="numeric" value={String(Math.round(plan.price))} class="h-9 w-28 rounded-wl border border-line bg-surface px-2 text-sm text-ink" />
+                      </label>
+                      <label class="flex items-center gap-1.5 pb-2 text-xs">
+                        <input type="checkbox" name="active" checked={plan.active} class="accent-brand" /> Se puede contratar
+                      </label>
+                      <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold hover:bg-surface-muted">Guardar</button>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p class="mt-2 text-xs text-ink-muted">Un precio nuevo vale para las suscripciones nuevas; quienes ya están suscriptos siguen pagando su precio.</p>
+        </section>
+
+        <section id="suscripciones" class="mt-8 scroll-mt-20" aria-labelledby="subs-titulo">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="subs-titulo" class="font-semibold">Suscripciones</h2>
+            <form method="GET" class="flex gap-2">
+              <input type="hidden" name="subs" value={subsView} />
+              <label for="q" class="sr-only">Buscar</label>
+              <input id="q" name="q" value={q} type="search" placeholder="Nombre, usuario o email" class="h-9 rounded-wl border border-line bg-surface px-3 text-sm" />
+              <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold">Buscar</button>
+            </form>
+          </div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <a href={subsLink("live")} class={tab(subsView === "live")}>Activas</a>
+            <a href={subsLink("pending")} class={tab(subsView === "pending")}>Sin pagar</a>
+            <a href={subsLink("cancelled")} class={tab(subsView === "cancelled")}>Canceladas</a>
+            <a href={subsLink("all")} class={tab(subsView === "all")}>Todas</a>
+          </div>
+          {subs.length === 0 ? (
+            <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">No hay suscripciones en esta lista.</p>
+          ) : (
+            <div class="mt-3 overflow-x-auto rounded-wl-lg border border-line bg-surface">
+              <table class="w-full min-w-[720px] text-sm">
+                <thead class="border-b border-line text-xs text-ink-muted">
+                  <tr><th class={cell}>Cuenta</th><th class={cell}>Plan</th><th class={cell}>Precio</th><th class={cell}>Estado</th><th class={cell}>Desde</th><th class={cell}>Cubierto hasta</th><th class={cell}>Próximo cobro</th></tr>
+                </thead>
+                <tbody class="divide-y divide-line">
+                  {subs.map((s) => (
+                    <tr data-sub-row={s.id}>
+                      <td class={cell}>
+                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : "—"}
+                        <span class="block text-xs text-ink-muted">{s.payer_email}</span>
+                      </td>
+                      <td class={cell}>{s.plan?.name}{s.business && <span class="block text-xs text-ink-muted">{s.business.name}</span>}</td>
+                      <td class={cell}>{money(s.price)}</td>
+                      <td class={cell}><span class:list={["rounded-full px-2 py-0.5 text-xs font-semibold", SUBSCRIPTION_STATUS[s.status].class]}>{SUBSCRIPTION_STATUS[s.status].label}</span>{isEntitled(s) && s.status !== "authorized" && <span class="block text-xs text-ink-muted">con beneficios</span>}</td>
+                      <td class={cell}>{s.started_at ? formatDate(s.started_at, { dateStyle: "medium" }) : "—"}</td>
+                      <td class={cell}>{s.paid_through ? formatDate(coveredUntil(s.paid_through), { dateStyle: "medium" }) : "—"}</td>
+                      <td class={cell}>{s.next_payment_at ? formatDate(s.next_payment_at, { dateStyle: "medium" }) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section id="pagos" class="mt-8 scroll-mt-20" aria-labelledby="pagos-titulo">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="pagos-titulo" class="font-semibold">Pagos de {monthName(mes, { month: "long", year: "numeric" })}</h2>
+            <div class="flex flex-wrap gap-2">
+              <form method="GET" action="/admin/ingresos#pagos" class="flex gap-2">
+                <label for="mes" class="sr-only">Mes</label>
+                <select id="mes" name="mes" class="h-9 rounded-wl border border-line bg-surface px-2 text-sm">
+                  {months.map((m) => <option value={m} selected={m === mes}>{monthName(m, { month: "long", year: "numeric" })}</option>)}
+                </select>
+                <button class="h-9 rounded-wl border border-line px-3 text-sm font-semibold">Ver</button>
+              </form>
+              <a href={`/admin/ingresos/pagos.csv?mes=${mes}`} class="inline-flex h-9 items-center rounded-wl bg-brand px-3 text-sm font-semibold text-brand-contrast" download>Descargar CSV (Excel)</a>
+            </div>
+          </div>
+          <p class="mt-2 text-sm text-ink-muted">
+            Acreditados: <strong>{approved.length}</strong> · bruto <strong>{money(totals.gross)}</strong> · comisión Mercado Pago {money(totals.fee)} · neto <strong>{money(totals.net)}</strong>
+          </p>
+          {payments.length === 0 ? (
+            <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">No hubo pagos en este mes.</p>
+          ) : (
+            <div class="mt-3 overflow-x-auto rounded-wl-lg border border-line bg-surface">
+              <table class="w-full min-w-[720px] text-sm">
+                <thead class="border-b border-line text-xs text-ink-muted">
+                  <tr><th class={cell}>Fecha</th><th class={cell}>Cuenta</th><th class={cell}>Plan</th><th class={cell}>Estado</th><th class={cell}>Bruto</th><th class={cell}>Comisión</th><th class={cell}>Neto</th><th class={cell}>N.º MP</th></tr>
+                </thead>
+                <tbody class="divide-y divide-line">
+                  {payments.map((p) => (
+                    <tr data-payment-row={p.mp_payment_id}>
+                      <td class={cell}>{formatDate(p.paid_at ?? p.created_at, { dateStyle: "short", timeStyle: "short" })}</td>
+                      <td class={cell}>{p.user ? displayName(p.user) : "—"}</td>
+                      <td class={cell}>{p.plan?.name}</td>
+                      <td class={cell}>{PAYMENT_STATUS[p.status] ?? p.status}</td>
+                      <td class={cell}>{money(p.amount)}</td>
+                      <td class={cell}>{money(p.fee)}</td>
+                      <td class={cell}>{money(p.net)}</td>
+                      <td class={`${cell} font-mono text-xs`}>{p.mp_payment_id}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </>
+    )
+  }
+</AdminLayout>

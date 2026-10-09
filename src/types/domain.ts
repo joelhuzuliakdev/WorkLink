@@ -99,6 +99,8 @@ export interface Business {
   rating_count: number;
   /** Cantidad de reseñas por estrella: [1★, 2★, 3★, 4★, 5★]. */
   rating_dist: number[];
+  /** "pro" con el plan Emprendimiento Pro al día. */
+  plan_tier: string;
   created_at: string;
   updated_at: string;
 }
