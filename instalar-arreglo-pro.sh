@@ -1,3 +1,12 @@
+#!/usr/bin/env bash
+# WorkLink · arreglo: la tarjeta del plan Emprendimiento Pro siempre aparece en Mi plan.
+# Uso, en Git Bash, desde la carpeta raíz del proyecto:  bash instalar-arreglo-pro.sh
+set -euo pipefail
+if [ ! -f package.json ] || [ ! -d src/pages/panel ]; then
+  echo "ERROR: ejecutá este script desde la carpeta raíz de WorkLink (donde está package.json)."
+  exit 1
+fi
+cat > 'src/pages/panel/plan.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
  * Mi plan: suscripciones (Mercado Pago), verificación con DNI y selfie y
@@ -273,3 +282,7 @@ const inputClass =
     if (form && !window.confirm(form.dataset.confirm!)) event.preventDefault();
   });
 </script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+echo "  ✓ src/pages/panel/plan.astro"
+echo ""
+echo "Listo. No hace falta npx supabase db push: solo git add / commit / push."
