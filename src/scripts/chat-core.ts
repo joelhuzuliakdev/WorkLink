@@ -118,7 +118,7 @@ export class ChatThread {
       const words = slug(message.post.title || message.post.body);
       link.href = `/p/${words ? `${words}-` : ""}${message.post.id}`;
       link.className = `mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs ${mine ? "border-white/30" : "border-line"}`;
-      link.append("Consulta sobre: ");
+      link.append("📎 Publicación: ");
       const strong = document.createElement("strong");
       strong.textContent = (message.post.title || message.post.body).slice(0, 60);
       link.append(strong);

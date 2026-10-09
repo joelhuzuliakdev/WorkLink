@@ -35,6 +35,7 @@ export const profileSchema = z.object({
   headline: optionalText(80, "Tu rubro"),
   city_id: optionalId,
   avatar_path: optionalMediaPath,
+  cover_path: optionalMediaPath,
   whatsapp: optionalWhatsapp,
   phone: optionalPhone,
   instagram: optionalInstagram,

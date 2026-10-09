@@ -34,6 +34,7 @@ const v = (name: string, saved: unknown) =>
 const submittedCityId = submitted ? Number(submitted.get("city_id")) : null;
 const city = submittedCityId ? await getCity(supabase, submittedCityId) : profile.city;
 const avatarPath = v("avatar_path", profile.avatar_path) || null;
+const coverPath = v("cover_path", profile.cover_path) || null;
 const situation = v("situation", profile.situation);
 ---
 
@@ -52,6 +53,18 @@ const situation = v("situation", profile.situation);
         supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
         hint="Una foto tuya donde se te vea bien la cara."
       />
+      <div id="portada" class="scroll-mt-24">
+        <ImageUploader
+          client:load
+          name="cover_path"
+          purpose="cover"
+          label="Foto de portada"
+          initialPath={coverPath}
+          initialPreview={mediaUrl("cover", coverPath, 800)}
+          supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+          hint="La imagen grande de arriba de tu perfil. Horizontal (se recorta a 3:1): tu trabajo, tu local o algo que te represente."
+        />
+      </div>
       <div class="grid gap-4 sm:grid-cols-2">
         <Field name="first_name" label="Nombre" required maxlength={60} autocomplete="given-name" value={v("first_name", profile.first_name)} error={err("first_name")} />
         <Field name="last_name" label="Apellido" required maxlength={60} autocomplete="family-name" value={v("last_name", profile.last_name)} error={err("last_name")} />

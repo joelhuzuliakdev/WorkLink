@@ -18,3 +18,13 @@ export const sendMessageSchema = z.object({
 export const conversationRefSchema = z.object({
   conversation_id: z.string().regex(UUID),
 });
+
+/** Compartir una publicación por mensaje privado con hasta 10 personas. */
+export const sharePostSchema = z.object({
+  post_id: z.string().regex(UUID),
+  usernames: z
+    .array(z.string().trim().toLowerCase().regex(/^[a-z0-9_.]{3,30}$/))
+    .min(1, { error: "Elegí al menos una persona" })
+    .max(10, { error: "Podés compartir con hasta 10 personas a la vez" }),
+  note: z.preprocess(emptyToUndefined, z.string().trim().max(500, { error: "El mensaje puede tener hasta 500 caracteres" }).optional()),
+});

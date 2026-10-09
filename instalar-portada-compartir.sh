@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · mejoras: registro, Google, ojito, primeros pasos, sonido, legales y perfil
+# WorkLink · portada del perfil y compartir por mensaje (incluye las mejoras anteriores)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-mejoras.sh
+#     bash instalar-portada-compartir.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0027 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega las migraciones 0027 y 0028 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -766,7 +766,7 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/actions/messages.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import { ActionError, defineAction } from "astro:actions";
-import { conversationRefSchema, sendMessageSchema } from "../schemas/message";
+import { conversationRefSchema, sendMessageSchema, sharePostSchema } from "../schemas/message";
 import { dbError, requireUser } from "../lib/auth/guards";
 
 /**
@@ -794,7 +794,55 @@ export const messages = {
     },
   }),
 
-  hide: defineAction({
+  /**
+   * Compartir una publicación con personas de WorkLink: abre (o retoma) la
+   * conversación con cada una y manda un mensaje con la publicación adjunta.
+   * La base controla bloqueos, cuentas suspendidas y límites de mensajes.
+   */
+  share: defineAction({
+    accept: "json",
+    input: sharePostSchema,
+    handler: async ({ post_id, usernames, note }, { locals }) => {
+      const user = requireUser(locals.user);
+      const supabase = locals.supabase;
+      // Solo publicaciones visibles (RLS).
+      const { data: post } = await supabase.from("posts").select("id").eq("id", post_id).eq("status", "published").maybeSingle();
+      if (!post) throw new ActionError({ code: "NOT_FOUND", message: "La publicación ya no está disponible." });
+
+      const unique = [...new Set(usernames)];
+      const { data: people } = await supabase.from("profiles").select("id, username").in("username", unique);
+      const sent: string[] = [];
+      const failed: string[] = [];
+      for (const username of unique) {
+        const person = (people ?? []).find((p) => p.username === username);
+        if (!person || person.id === user.id) {
+          failed.push(username);
+          continue;
+        }
+        const { data: conversationId, error: startError } = await supabase.rpc("start_conversation", { p_other: person.id });
+        if (startError || !conversationId) {
+          failed.push(username);
+          continue;
+        }
+        const { error } = await supabase.from("messages").insert({
+          conversation_id: conversationId,
+          sender_id: user.id,
+          body: note || "Te comparto esta publicación 👇",
+          post_id,
+        });
+        if (error) {
+          if (error.hint === "rate_limited") throw dbError(error, "Mandaste muchos mensajes. Esperá un rato.");
+          failed.push(username);
+        } else {
+          sent.push(username);
+        }
+      }
+      if (!sent.length) throw new ActionError({ code: "FORBIDDEN", message: "No pudimos enviarla. Puede que esas personas no reciban mensajes tuyos." });
+      return { sent, failed };
+    },
+  }),
+
+    hide: defineAction({
     accept: "form",
     input: conversationRefSchema,
     handler: async ({ conversation_id }, { locals }) => {
@@ -1142,7 +1190,13 @@ export const profile = {
         }
       }
 
-      const { data: current } = await supabase.from("profiles").select("avatar_path").eq("id", user.id).single();
+      if (input.cover_path) {
+        if (!isOwnMediaPath(input.cover_path, user.id) || !(await mediaExists(supabase, "cover", input.cover_path))) {
+          throw new ActionError({ code: "BAD_REQUEST", message: "La portada no se subió correctamente. Volvé a elegirla." });
+        }
+      }
+
+      const { data: current } = await supabase.from("profiles").select("avatar_path, cover_path").eq("id", user.id).single();
 
       const { error } = await supabase
         .from("profiles")
@@ -1157,6 +1211,7 @@ export const profile = {
           // La provincia la completa la base a partir de la ciudad.
           province_id: null,
           avatar_path: input.avatar_path ?? null,
+          cover_path: input.cover_path ?? null,
           whatsapp: input.whatsapp ?? null,
           phone: input.phone ?? null,
           instagram: input.instagram ?? null,
@@ -1175,6 +1230,9 @@ export const profile = {
 
       if (current?.avatar_path && current.avatar_path !== input.avatar_path) {
         await removeMedia(supabase, "avatar", current.avatar_path);
+      }
+      if (current?.cover_path && current.cover_path !== input.cover_path) {
+        await removeMedia(supabase, "cover", current.cover_path);
       }
 
       return { saved: true, username: input.username };
@@ -4171,7 +4229,7 @@ const bookmark = "M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-
       <span>Comentar</span>
     </a>
 
-    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle}>
+    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle} data-share-post-id={post.id} data-share-auth={loggedIn ? "1" : undefined}>
       <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L8 8m4-4 4 4M6 12v6.5a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V12" />
       </svg>
@@ -7705,6 +7763,62 @@ export const GET: APIRoute = async ({ url, locals }) => {
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/api/compartir/contactos.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+import { getConversations } from "../../../services/messages";
+import { displayName } from "../../../services/profiles";
+import { mediaUrl } from "../../../lib/media";
+
+/**
+ * Personas para compartir una publicación por mensaje: primero con quienes
+ * hablaste hace poco y a quienes seguís; con ?q= busca también por nombre.
+ * Solo con sesión; la base no devuelve cuentas suspendidas.
+ */
+type Person = { id: string; username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null };
+const COLUMNS = "id, username, first_name, last_name, avatar_path, verified_at";
+
+export const GET: APIRoute = async ({ locals, url }) => {
+  const { supabase, user } = locals;
+  if (!user) return Response.json({ error: "Ingresá para compartir." }, { status: 401 });
+  const q = (url.searchParams.get("q") ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+
+  const people = new Map<string, Person>();
+  if (q.length >= 2) {
+    const { data } = await supabase.rpc("search_profile_ids", { p_query: q, p_city_id: null, p_situation: null, p_limit: 20, p_offset: 0 });
+    const ids = ((data ?? []) as { id: string }[]).map((r) => r.id).filter((id) => id !== user.id);
+    if (ids.length) {
+      const { data: rows } = await supabase.from("profiles").select(COLUMNS).in("id", ids);
+      const byId = new Map(((rows ?? []) as Person[]).map((p) => [p.id, p]));
+      for (const id of ids) if (byId.get(id)) people.set(id, byId.get(id)!);
+    }
+  } else {
+    const [conversations, { data: follows }] = await Promise.all([
+      getConversations(supabase, user.id, 15),
+      supabase.from("profile_follows").select("followed_id").eq("follower_id", user.id).order("created_at", { ascending: false }).limit(40),
+    ]);
+    for (const c of conversations) if (c.other) people.set(c.other.id, { ...c.other, verified_at: c.other.verified_at });
+    const ids = ((follows ?? []) as { followed_id: string }[]).map((f) => f.followed_id).filter((id) => !people.has(id));
+    if (ids.length) {
+      const { data: rows } = await supabase.from("profiles").select(COLUMNS).in("id", ids).eq("status", "active");
+      for (const p of (rows ?? []) as Person[]) people.set(p.id, p);
+    }
+  }
+
+  return Response.json(
+    {
+      people: [...people.values()].slice(0, 30).map((p) => ({
+        username: p.username,
+        name: displayName(p),
+        avatar: mediaUrl("avatar", p.avatar_path, 96),
+        initials: displayName(p).split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase(),
+        verified: Boolean(p.verified_at),
+      })),
+    },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/api/conversaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { getConversations } from "../../services/messages";
@@ -9186,7 +9300,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
                 <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
-                      Consulta sobre: <strong>{postHeadline(m.post, 60)}</strong>
+                      📎 Publicación: <strong>{postHeadline(m.post, 60)}</strong>
                     </a>
                   )}
                   <p class="whitespace-pre-line break-words">{m.body}</p>
@@ -11064,6 +11178,7 @@ const v = (name: string, saved: unknown) =>
 const submittedCityId = submitted ? Number(submitted.get("city_id")) : null;
 const city = submittedCityId ? await getCity(supabase, submittedCityId) : profile.city;
 const avatarPath = v("avatar_path", profile.avatar_path) || null;
+const coverPath = v("cover_path", profile.cover_path) || null;
 const situation = v("situation", profile.situation);
 ---
 
@@ -11082,6 +11197,18 @@ const situation = v("situation", profile.situation);
         supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
         hint="Una foto tuya donde se te vea bien la cara."
       />
+      <div id="portada" class="scroll-mt-24">
+        <ImageUploader
+          client:load
+          name="cover_path"
+          purpose="cover"
+          label="Foto de portada"
+          initialPath={coverPath}
+          initialPreview={mediaUrl("cover", coverPath, 800)}
+          supabaseAnonKey={PUBLIC_SUPABASE_ANON_KEY}
+          hint="La imagen grande de arriba de tu perfil. Horizontal (se recorta a 3:1): tu trabajo, tu local o algo que te represente."
+        />
+      </div>
       <div class="grid gap-4 sm:grid-cols-2">
         <Field name="first_name" label="Nombre" required maxlength={60} autocomplete="given-name" value={v("first_name", profile.first_name)} error={err("first_name")} />
         <Field name="last_name" label="Apellido" required maxlength={60} autocomplete="family-name" value={v("last_name", profile.last_name)} error={err("last_name")} />
@@ -13135,6 +13262,7 @@ import { getViewerProfile } from "../../../lib/viewer";
 import { routes } from "../../../config/site";
 import { newMessagePath } from "../../../services/messages";
 import Alert from "../../../components/ui/Alert.astro";
+import { mediaSrcSet, mediaUrl } from "../../../lib/media";
 import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
 import RatingBadge from "../../../components/reviews/RatingBadge.astro";
 import { canReview, getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
@@ -13170,11 +13298,39 @@ const firstName = profile.first_name ?? name;
 ---
 
 <BaseLayout title={name} description={profile.headline ?? profile.bio ?? `Perfil de ${name} en WorkLink.`} noindex>
-  <div class="h-28 bg-gradient-to-r from-brand via-seek to-offer sm:h-40" aria-hidden="true"></div>
+  <div class="mx-auto max-w-5xl sm:px-4">
+    <div class="relative aspect-[3/1] max-h-80 w-full overflow-hidden bg-gradient-to-r from-brand via-seek to-offer sm:rounded-b-wl-lg">
+      {
+        profile.cover_path && (
+          <img
+            src={mediaUrl("cover", profile.cover_path, 1600)}
+            srcset={mediaSrcSet("cover", profile.cover_path)}
+            sizes="(min-width: 1024px) 992px, 100vw"
+            width="1600"
+            height="533"
+            alt={`Portada de ${name}`}
+            fetchpriority="high"
+            class="h-full w-full object-cover"
+          />
+        )
+      }
+      {
+        isMe && (
+          <a
+            href="/panel/perfil#portada"
+            class="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-wl bg-surface/90 px-3 py-2 text-sm font-semibold text-ink shadow backdrop-blur hover:bg-surface"
+          >
+            <svg viewBox="0 0 24 24" class="h-4 w-4 fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linejoin="round" d="M4 8h3l2-3h6l2 3h3v11H4V8Z" /><circle cx="12" cy="13" r="3.5" /></svg>
+            {profile.cover_path ? "Cambiar portada" : "Agregar portada"}
+          </a>
+        )
+      }
+    </div>
+  </div>
 
   <section class="mx-auto max-w-5xl px-4">
     <div class="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-start sm:gap-5">
-      <Avatar name={name} path={profile.avatar_path} size={128} priority class="border-4 border-bg" />
+      <Avatar name={name} path={profile.avatar_path} size={128} priority class="relative z-10 border-4 border-bg" />
       <div class="min-w-0 flex-1 sm:pt-[4.5rem]">
         <h1 class="flex items-center gap-2 text-2xl font-bold sm:text-3xl">{name}{profile.verified_at && <VerifiedBadge size={24} />}</h1>
         {profile.headline && <p class="mt-0.5 text-lg text-ink">{profile.headline}</p>}
@@ -13881,6 +14037,16 @@ export const sendMessageSchema = z.object({
 export const conversationRefSchema = z.object({
   conversation_id: z.string().regex(UUID),
 });
+
+/** Compartir una publicación por mensaje privado con hasta 10 personas. */
+export const sharePostSchema = z.object({
+  post_id: z.string().regex(UUID),
+  usernames: z
+    .array(z.string().trim().toLowerCase().regex(/^[a-z0-9_.]{3,30}$/))
+    .min(1, { error: "Elegí al menos una persona" })
+    .max(10, { error: "Podés compartir con hasta 10 personas a la vez" }),
+  note: z.preprocess(emptyToUndefined, z.string().trim().max(500, { error: "El mensaje puede tener hasta 500 caracteres" }).optional()),
+});
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/need.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -14089,6 +14255,7 @@ export const profileSchema = z.object({
   headline: optionalText(80, "Tu rubro"),
   city_id: optionalId,
   avatar_path: optionalMediaPath,
+  cover_path: optionalMediaPath,
   whatsapp: optionalWhatsapp,
   phone: optionalPhone,
   instagram: optionalInstagram,
@@ -14301,7 +14468,7 @@ export class ChatThread {
       const words = slug(message.post.title || message.post.body);
       link.href = `/p/${words ? `${words}-` : ""}${message.post.id}`;
       link.className = `mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs ${mine ? "border-white/30" : "border-line"}`;
-      link.append("Consulta sobre: ");
+      link.append("📎 Publicación: ");
       const strong = document.createElement("strong");
       strong.textContent = (message.post.title || message.post.body).slice(0, 60);
       link.append(strong);
@@ -14987,6 +15154,230 @@ if (enabled()) {
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/scripts/share-sheet.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Ventana "Compartir" de una publicación:
+ *  - Enviar por WorkLink: elegís personas (con quienes hablaste, a quienes
+ *    seguís, o buscando por nombre) y les llega por mensaje privado con la
+ *    publicación adjunta.
+ *  - Copiar enlace, WhatsApp y el menú del celular.
+ * Todo el contenido de otras personas se inserta como texto (nunca HTML).
+ */
+import { actions } from "astro:actions";
+
+interface Person {
+  username: string;
+  name: string;
+  avatar: string | null;
+  initials: string;
+  verified: boolean;
+}
+
+interface ShareTarget {
+  url: string;
+  title: string;
+  postId: string;
+}
+
+let dialog: HTMLDialogElement | null = null;
+let current: ShareTarget | null = null;
+const selected = new Map<string, Person>();
+let searchTimer: number | undefined;
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function build(): HTMLDialogElement {
+  const d = el(
+    "dialog",
+    "m-0 mt-auto w-full max-w-none rounded-t-wl-lg border border-line bg-surface p-0 text-ink shadow-2xl backdrop:bg-black/50 sm:m-auto sm:max-w-md sm:rounded-wl-lg",
+  );
+  d.setAttribute("aria-labelledby", "share-title");
+  d.innerHTML = `
+    <div class="flex items-center justify-between border-b border-line px-4 py-3">
+      <h2 id="share-title" class="text-lg font-bold">Compartir</h2>
+      <button type="button" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" data-share-close aria-label="Cerrar">✕</button>
+    </div>
+    <div class="flex max-h-[75vh] flex-col overflow-y-auto">
+      <section class="px-4 pt-4" aria-labelledby="share-wl">
+        <h3 id="share-wl" class="text-sm font-semibold">Enviar por mensaje en WorkLink</h3>
+        <label class="sr-only" for="share-search">Buscar personas</label>
+        <input id="share-search" type="search" autocomplete="off" placeholder="Buscar por nombre o usuario"
+          class="mt-2 h-10 w-full rounded-full border border-line bg-surface-muted px-4 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25" data-share-search />
+        <ul class="mt-2 flex flex-col" data-share-people aria-label="Personas"></ul>
+        <p class="py-3 text-center text-sm text-ink-muted" data-share-empty hidden></p>
+      </section>
+      <section class="sticky bottom-0 border-t border-line bg-surface px-4 py-3" data-share-send-box hidden>
+        <label class="sr-only" for="share-note">Mensaje (opcional)</label>
+        <textarea id="share-note" rows="2" maxlength="500" placeholder="Escribí algo (opcional)"
+          class="w-full resize-none rounded-wl border border-line bg-surface px-3 py-2 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25" data-share-note></textarea>
+        <button type="button" class="mt-2 h-11 w-full rounded-wl bg-brand font-semibold text-brand-contrast hover:bg-brand-hover disabled:opacity-60" data-share-send></button>
+      </section>
+      <p class="mx-4 mt-3 rounded-wl px-3 py-2 text-sm" data-share-status role="status" hidden></p>
+      <section class="px-4 py-4" aria-labelledby="share-other">
+        <h3 id="share-other" class="text-sm font-semibold">Otras formas</h3>
+        <div class="mt-2 grid grid-cols-3 gap-2 text-sm">
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-copy><span aria-hidden="true" class="text-xl">🔗</span><span>Copiar enlace</span></button>
+          <a target="_blank" rel="noopener" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-whatsapp><span aria-hidden="true" class="text-xl">🟢</span><span>WhatsApp</span></a>
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-native><span aria-hidden="true" class="text-xl">⋯</span><span>Más</span></button>
+        </div>
+      </section>
+    </div>`;
+  document.body.append(d);
+
+  d.querySelector("[data-share-close]")!.addEventListener("click", () => d.close());
+  // Tocar el fondo oscuro cierra.
+  d.addEventListener("click", (event) => {
+    if (event.target === d) d.close();
+  });
+  d.querySelector<HTMLInputElement>("[data-share-search]")!.addEventListener("input", (event) => {
+    window.clearTimeout(searchTimer);
+    const q = (event.target as HTMLInputElement).value;
+    searchTimer = window.setTimeout(() => void load(q), 250);
+  });
+  d.querySelector("[data-share-send]")!.addEventListener("click", () => void send());
+  d.querySelector("[data-share-copy]")!.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(current!.url);
+      status("¡Enlace copiado!", "ok");
+    } catch {
+      status("No pudimos copiar el enlace.", "error");
+    }
+  });
+  d.querySelector("[data-share-native]")!.addEventListener("click", async () => {
+    try {
+      await navigator.share({ title: current!.title, url: current!.url });
+    } catch {
+      /* canceló */
+    }
+  });
+  return d;
+}
+
+function status(text: string, tone: "ok" | "error") {
+  const box = dialog!.querySelector<HTMLElement>("[data-share-status]")!;
+  box.textContent = text;
+  box.className = `mx-4 mt-3 rounded-wl px-3 py-2 text-sm ${tone === "ok" ? "bg-success-soft text-success" : "bg-danger-soft text-danger"}`;
+  box.hidden = false;
+}
+
+function avatar(person: Person) {
+  if (person.avatar) {
+    const img = el("img", "h-10 w-10 shrink-0 rounded-full object-cover");
+    img.src = person.avatar;
+    img.alt = "";
+    img.loading = "lazy";
+    return img;
+  }
+  return el("span", "grid h-10 w-10 shrink-0 place-items-center rounded-full bg-seek-soft text-sm font-bold text-seek", person.initials);
+}
+
+function render(people: Person[], emptyText: string) {
+  const list = dialog!.querySelector<HTMLUListElement>("[data-share-people]")!;
+  const empty = dialog!.querySelector<HTMLElement>("[data-share-empty]")!;
+  // Las elegidas quedan arriba aunque no estén en la búsqueda actual.
+  const all = [...selected.values(), ...people.filter((p) => !selected.has(p.username))];
+  list.replaceChildren(
+    ...all.map((person) => {
+      const li = el("li");
+      const button = el("button", "flex w-full items-center gap-3 rounded-wl px-2 py-2 text-left hover:bg-surface-muted");
+      button.type = "button";
+      button.dataset.shareUser = person.username;
+      button.setAttribute("aria-pressed", String(selected.has(person.username)));
+      const text = el("span", "min-w-0 flex-1");
+      const name = el("span", "block truncate font-medium", person.name + (person.verified ? " ✓" : ""));
+      const user = el("span", "block truncate text-xs text-ink-muted", `@${person.username}`);
+      text.append(name, user);
+      const check = el(
+        "span",
+        `grid h-6 w-6 shrink-0 place-items-center rounded-full border text-xs font-bold ${selected.has(person.username) ? "border-brand bg-brand text-brand-contrast" : "border-line"}`,
+        selected.has(person.username) ? "✓" : "",
+      );
+      check.setAttribute("aria-hidden", "true");
+      button.append(avatar(person), text, check);
+      button.addEventListener("click", () => {
+        if (selected.has(person.username)) selected.delete(person.username);
+        else if (selected.size < 10) selected.set(person.username, person);
+        render(people, emptyText);
+        updateSend();
+      });
+      li.append(button);
+      return li;
+    }),
+  );
+  empty.hidden = all.length > 0;
+  empty.textContent = emptyText;
+}
+
+function updateSend() {
+  const box = dialog!.querySelector<HTMLElement>("[data-share-send-box]")!;
+  const button = dialog!.querySelector<HTMLButtonElement>("[data-share-send]")!;
+  box.hidden = selected.size === 0;
+  const names = [...selected.values()].map((p) => p.name.split(" ")[0]);
+  button.textContent = names.length <= 2 ? `Enviar a ${names.join(" y ")}` : `Enviar a ${names[0]} y ${names.length - 1} más`;
+}
+
+async function load(q = "") {
+  try {
+    const res = await fetch(`/api/compartir/contactos?q=${encodeURIComponent(q.trim())}`, { headers: { Accept: "application/json" } });
+    if (res.status === 401) {
+      window.location.href = `/ingresar?next=${encodeURIComponent(location.pathname)}`;
+      return;
+    }
+    const { people } = (await res.json()) as { people: Person[] };
+    render(
+      people,
+      q.trim().length >= 2 ? "No encontramos a nadie con ese nombre." : "Buscá a alguien por su nombre. Acá también aparecen las personas que seguís y con quienes hablaste.",
+    );
+  } catch {
+    render([], "Sin conexión. Probá de nuevo.");
+  }
+}
+
+async function send() {
+  const button = dialog!.querySelector<HTMLButtonElement>("[data-share-send]")!;
+  const note = dialog!.querySelector<HTMLTextAreaElement>("[data-share-note]")!.value;
+  button.disabled = true;
+  try {
+    const { data, error } = await actions.messages.share({ post_id: current!.postId, usernames: [...selected.keys()], note });
+    if (error) {
+      status(error.message || "No pudimos enviarla.", "error");
+      return;
+    }
+    const names = data.sent.map((u) => selected.get(u)?.name.split(" ")[0] ?? u);
+    status(`¡Listo! Se la mandaste a ${names.length <= 2 ? names.join(" y ") : `${names[0]} y ${names.length - 1} más`}.`, "ok");
+    selected.clear();
+    dialog!.querySelector<HTMLTextAreaElement>("[data-share-note]")!.value = "";
+    updateSend();
+    void load(dialog!.querySelector<HTMLInputElement>("[data-share-search]")!.value);
+    window.dispatchEvent(new Event("wl:refresh-badges"));
+  } catch {
+    status("Sin conexión. Probá de nuevo.", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+export function openShareSheet(target: ShareTarget) {
+  dialog ??= build();
+  current = target;
+  selected.clear();
+  dialog.querySelector<HTMLElement>("[data-share-status]")!.hidden = true;
+  dialog.querySelector<HTMLInputElement>("[data-share-search]")!.value = "";
+  dialog.querySelector<HTMLTextAreaElement>("[data-share-note]")!.value = "";
+  dialog.querySelector<HTMLAnchorElement>("[data-share-whatsapp]")!.href = `https://wa.me/?text=${encodeURIComponent(`${target.title} ${target.url}`)}`;
+  dialog.querySelector<HTMLElement>("[data-share-native]")!.hidden = !("share" in navigator);
+  updateSend();
+  render([], "Cargando…");
+  dialog.showModal();
+  void load();
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/scripts/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
  * Botones de me gusta, guardar, seguir y compartir, y el "Ver más" de los
@@ -15000,6 +15391,7 @@ escribir 'src/scripts/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * - Sin sesión, los botones son enlaces a /ingresar (no pasan por acá).
  */
 import { actions } from "astro:actions";
+import { openShareSheet } from "./share-sheet";
 
 type Kind = "like" | "save" | "follow";
 
@@ -15057,12 +15449,17 @@ function toast(message: string) {
   toastTimer = window.setTimeout(() => (el!.hidden = true), 3500);
 }
 
-// Compartir: menú nativo del celular si existe; si no, copia el enlace.
+// Compartir: con sesión, ventana para mandarla por mensaje en WorkLink (y copiar
+// o WhatsApp). Sin sesión: menú nativo del celular si existe; si no, copia el enlace.
 document.addEventListener("click", async (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-share-url]");
   if (!button) return;
   const url = button.dataset.shareUrl!;
   const title = button.dataset.shareTitle ?? document.title;
+  if (button.dataset.shareAuth && button.dataset.sharePostId) {
+    openShareSheet({ url, title, postId: button.dataset.sharePostId });
+    return;
+  }
   try {
     if (navigator.share && matchMedia("(pointer: coarse)").matches) {
       await navigator.share({ title, url });
@@ -17056,7 +17453,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Profile } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
-const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, verified_at, intent,
+const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, cover_path, situation, headline, verified_at, intent,
   instagram, facebook, tiktok, website, followers_count, following_count, rating_sum, rating_count, created_at, cities ( ${CITY_EMBED} )`;
 
 /** Columnas de contacto directo: solo para usuarios logueados (RLS por columnas). */
@@ -17717,6 +18114,7 @@ export interface Profile {
   last_name: string | null;
   bio: string | null;
   avatar_path: string | null;
+  cover_path: string | null;
   situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
   headline: string | null;
   verified_at: string | null;
@@ -21317,13 +21715,32 @@ grant  execute on function public.profile_follow_ids(uuid, text, integer, intege
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002800_profile_cover.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0028 · Foto de portada en el perfil
+-- =============================================================================
+-- Carpeta de la imagen en el bucket público "covers" (`{user_id}/{uuid}`),
+-- igual que la portada de los emprendimientos. La app verifica que la carpeta
+-- sea del usuario y que el archivo exista antes de guardarla.
+-- =============================================================================
+
+alter table public.profiles
+  add column if not exists cover_path text,
+  add constraint profiles_cover_path_format check (cover_path is null or cover_path ~ '^[0-9a-f-]{36}/[0-9a-f-]{36}$');
+
+-- Visible también para visitantes (como la foto de perfil).
+grant select (cover_path) on public.profiles to anon;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 212 archivos de las mejoras instalados."
+echo " Listo. 215 archivos de las mejoras instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

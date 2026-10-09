@@ -18,7 +18,13 @@ export const profile = {
         }
       }
 
-      const { data: current } = await supabase.from("profiles").select("avatar_path").eq("id", user.id).single();
+      if (input.cover_path) {
+        if (!isOwnMediaPath(input.cover_path, user.id) || !(await mediaExists(supabase, "cover", input.cover_path))) {
+          throw new ActionError({ code: "BAD_REQUEST", message: "La portada no se subió correctamente. Volvé a elegirla." });
+        }
+      }
+
+      const { data: current } = await supabase.from("profiles").select("avatar_path, cover_path").eq("id", user.id).single();
 
       const { error } = await supabase
         .from("profiles")
@@ -33,6 +39,7 @@ export const profile = {
           // La provincia la completa la base a partir de la ciudad.
           province_id: null,
           avatar_path: input.avatar_path ?? null,
+          cover_path: input.cover_path ?? null,
           whatsapp: input.whatsapp ?? null,
           phone: input.phone ?? null,
           instagram: input.instagram ?? null,
@@ -51,6 +58,9 @@ export const profile = {
 
       if (current?.avatar_path && current.avatar_path !== input.avatar_path) {
         await removeMedia(supabase, "avatar", current.avatar_path);
+      }
+      if (current?.cover_path && current.cover_path !== input.cover_path) {
+        await removeMedia(supabase, "cover", current.cover_path);
       }
 
       return { saved: true, username: input.username };

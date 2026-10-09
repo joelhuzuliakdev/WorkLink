@@ -78,7 +78,7 @@ const bookmark = "M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-
       <span>Comentar</span>
     </a>
 
-    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle}>
+    <button type="button" class={action} data-share-url={shareUrl} data-share-title={shareTitle} data-share-post-id={post.id} data-share-auth={loggedIn ? "1" : undefined}>
       <svg viewBox="0 0 24 24" class={icon} aria-hidden="true">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m0 0L8 8m4-4 4 4M6 12v6.5a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5V12" />
       </svg>

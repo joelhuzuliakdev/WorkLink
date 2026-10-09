@@ -21,6 +21,7 @@ export interface Profile {
   last_name: string | null;
   bio: string | null;
   avatar_path: string | null;
+  cover_path: string | null;
   situation: "job_seeking" | "entrepreneur" | "freelancer" | "hiring" | null;
   headline: string | null;
   verified_at: string | null;

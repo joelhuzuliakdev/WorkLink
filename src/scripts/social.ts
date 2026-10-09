@@ -10,6 +10,7 @@
  * - Sin sesión, los botones son enlaces a /ingresar (no pasan por acá).
  */
 import { actions } from "astro:actions";
+import { openShareSheet } from "./share-sheet";
 
 type Kind = "like" | "save" | "follow";
 
@@ -67,12 +68,17 @@ function toast(message: string) {
   toastTimer = window.setTimeout(() => (el!.hidden = true), 3500);
 }
 
-// Compartir: menú nativo del celular si existe; si no, copia el enlace.
+// Compartir: con sesión, ventana para mandarla por mensaje en WorkLink (y copiar
+// o WhatsApp). Sin sesión: menú nativo del celular si existe; si no, copia el enlace.
 document.addEventListener("click", async (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-share-url]");
   if (!button) return;
   const url = button.dataset.shareUrl!;
   const title = button.dataset.shareTitle ?? document.title;
+  if (button.dataset.shareAuth && button.dataset.sharePostId) {
+    openShareSheet({ url, title, postId: button.dataset.sharePostId });
+    return;
+  }
   try {
     if (navigator.share && matchMedia("(pointer: coarse)").matches) {
       await navigator.share({ title, url });
