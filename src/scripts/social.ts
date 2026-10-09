@@ -59,7 +59,7 @@ function toast(message: string) {
     el.id = "wl-toast";
     el.setAttribute("role", "status");
     el.className =
-      "fixed inset-x-4 bottom-4 z-50 mx-auto max-w-sm rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-bg shadow-lg";
+      "fixed inset-x-4 bottom-20 z-50 mx-auto max-w-sm md:bottom-4 rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-bg shadow-lg";
     document.body.append(el);
   }
   el.textContent = message;

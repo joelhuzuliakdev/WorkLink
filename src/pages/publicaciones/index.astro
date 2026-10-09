@@ -27,7 +27,7 @@ const nextFragmentHref = nextCursor ? `/publicaciones/mas${query({ desde: nextCu
 const filters = [
   { href: "/publicaciones", label: "Todo", active: !type && !following },
   ...(user ? [{ href: "/publicaciones?ver=siguiendo", label: "Siguiendo", active: following }] : []),
-  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({
+  ...Object.entries(TYPE_SLUGS).filter(([, value]) => !POST_TYPES.find((t) => t.value === value)?.legacy).map(([slug, value]) => ({
     href: `/publicaciones?tipo=${slug}`,
     label: POST_TYPES.find((t) => t.value === value)!.label,
     active: type === value,

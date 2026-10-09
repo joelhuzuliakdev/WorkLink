@@ -47,7 +47,7 @@ function announce(latest: Latest) {
     box.id = "wl-message-toast";
     box.setAttribute("role", "status");
     box.className =
-      "fixed bottom-4 left-4 right-4 z-50 flex items-start gap-3 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
+      "fixed bottom-20 left-4 right-4 z-50 flex items-start gap-3 md:bottom-4 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
     document.body.append(box);
   }
   box.href = `/mensajes/${latest.conversationId}`;

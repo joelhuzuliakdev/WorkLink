@@ -15,6 +15,8 @@ import type { PostView } from "../../services/posts";
 import type { MyBusiness } from "../../services/businesses";
 import type { CityRef } from "../../types/domain";
 import { POST_TYPES } from "../../schemas/post";
+import Avatar from "../ui/Avatar.astro";
+import { getViewerProfile } from "../../lib/viewer";
 
 interface Props {
   action: string;
@@ -51,6 +53,11 @@ const price = v("price", post?.price !== null && post?.price !== undefined ? Str
 const tags = v("tags", post?.tags.join(", "));
 const status = v("status", post?.status === "hidden" ? "hidden" : "published");
 const activeBusinesses = businesses.filter((b) => b.status !== "suspended");
+const viewer = await getViewerProfile(Astro.locals);
+// Tipos para elegir: los vigentes (y el de la publicación si es uno viejo, como "Servicio").
+const types = POST_TYPES.filter((t) => !t.legacy || t.value === type);
+const card =
+  "flex cursor-pointer items-center gap-3 rounded-wl border border-line bg-surface p-3 transition-colors hover:bg-surface-muted has-[:checked]:border-brand has-[:checked]:bg-seek-soft has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40";
 const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
 ---
 
@@ -62,38 +69,71 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       post ? (
         post.business_id && <input type="hidden" name="business_id" value={post.business_id} />
       ) : (
-        <div class="flex flex-col gap-1.5">
-          <label for="business_id" class="text-sm font-medium text-ink">Publicar como</label>
-          <select id="business_id" name="business_id" class={selectClass} data-business-select>
-            <option value="" selected={businessId === ""}>{personName} (mi perfil)</option>
-            {activeBusinesses.map((b) => (
-              <option value={b.id} selected={businessId === b.id}>{b.name} (emprendimiento)</option>
-            ))}
-          </select>
-        </div>
+        activeBusinesses.length > 0 ? (
+          <fieldset class="flex flex-col gap-2" data-business-select>
+            <legend class="mb-1 text-sm font-medium text-ink">¿Con qué cara publicás?</legend>
+            <div class="grid gap-2 sm:grid-cols-2">
+              <label class={card}>
+                <input type="radio" name="business_id" value="" checked={businessId === ""} class="sr-only" />
+                <Avatar name={personName} path={viewer?.avatar_path} size={36} />
+                <span class="min-w-0">
+                  <span class="block truncate font-semibold">{personName}</span>
+                  <span class="block text-xs text-ink-muted">Tu perfil personal</span>
+                </span>
+              </label>
+              {activeBusinesses.map((b) => (
+                <label class={card}>
+                  <input type="radio" name="business_id" value={b.id} checked={businessId === b.id} class="sr-only" />
+                  <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={36} />
+                  <span class="min-w-0">
+                    <span class="block truncate font-semibold">{b.name}</span>
+                    <span class="block text-xs text-ink-muted">Tu emprendimiento</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ) : (
+          <input type="hidden" name="business_id" value="" />
+        )
       )
     }
 
     <fieldset class="flex flex-col gap-2">
       <legend class="mb-1 text-sm font-medium text-ink">¿Qué querés publicar?</legend>
-      <div class="flex flex-wrap gap-2">
+      <div class="grid gap-2 sm:grid-cols-2">
         {
-          POST_TYPES.map((option) => (
+          types.map((option) => (
             <label
-              class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-seek-soft has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-45"
+              class:list={[card, "items-start has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-45"]}
               data-needs-business={option.needsBusiness ? "true" : undefined}
             >
-              <input type="radio" name="type" value={option.value} checked={type === option.value} class="accent-[var(--wl-brand)]" />
-              {option.label}
+              <input type="radio" name="type" value={option.value} checked={type === option.value} class="mt-1 accent-[var(--wl-brand)]" />
+              <span>
+                <span class="block font-semibold">{option.formLabel}</span>
+                {option.hint && <span class="block text-xs text-ink-muted">{option.hint}</span>}
+              </span>
             </label>
           ))
         }
       </div>
-      {err("type") ? <p class="text-sm text-danger" role="alert">{err("type")}</p> : <p class="text-xs text-ink-muted">Producto, Servicio y Promoción se publican desde un emprendimiento.</p>}
+      {err("type") ? (
+        <p class="text-sm text-danger" role="alert">{err("type")}</p>
+      ) : (
+        <p class="text-xs text-ink-muted" data-business-note>
+          {activeBusinesses.length > 0
+            ? "“Vendo un producto” y “Promoción” se publican como emprendimiento."
+            : "“Vendo un producto” y “Promoción” son para emprendimientos: creá la página del tuyo para usarlos."}
+        </p>
+      )}
+      <a href="/necesidades/nueva" class="mt-1 flex items-center justify-between gap-2 rounded-wl bg-seek-soft px-3 py-2 text-sm hover:opacity-90">
+        <span><strong>¿Necesitás contratar a alguien?</strong> No hagas una publicación: publicá una necesidad y recibí presupuestos.</span>
+        <span class="shrink-0 font-semibold text-seek" aria-hidden="true">→</span>
+      </a>
     </fieldset>
 
     <Field name="title" label="Título (opcional)" maxlength={140} placeholder="Ej.: Tortas temáticas para cumpleaños" value={v("title", post?.title)} error={err("title")} />
-    <TextArea name="body" label="Texto" rows={5} maxlength={5000} required placeholder="Contá qué ofrecés o qué estás buscando: detalles, zona, plazos…" value={v("body", post?.body)} error={err("body")} />
+    <TextArea name="body" label="Texto" rows={5} maxlength={5000} required placeholder="Contá los detalles: qué hacés o vendés, en qué zona, horarios, cómo trabajás…" value={v("body", post?.body)} error={err("body")} />
   </section>
 
   <section class="flex flex-col gap-2">
@@ -153,9 +193,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
 <script>
   for (const form of document.querySelectorAll<HTMLFormElement>("[data-post-form]")) {
     // Tipos que requieren emprendimiento: deshabilitados si se publica a título personal.
-    const businessSelect = form.querySelector<HTMLSelectElement>("[data-business-select]");
+    const businessSelect = form.querySelector<HTMLElement>("[data-business-select]");
     const syncTypes = () => {
-      const personal = businessSelect ? businessSelect.value === "" : !form.querySelector('input[name="business_id"]');
+      const chosen = form.querySelector<HTMLInputElement>('input[name="business_id"]:checked, input[type="hidden"][name="business_id"]');
+      const personal = !chosen || chosen.value === "";
       for (const label of form.querySelectorAll<HTMLElement>("[data-needs-business]")) {
         const input = label.querySelector("input");
         if (!input) continue;

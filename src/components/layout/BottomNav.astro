@@ -1,0 +1,89 @@
+---
+/**
+ * Barra de abajo en el celular (como Instagram/Facebook), solo con sesión:
+ * Inicio · Buscar · Publicar · Necesidades · Mensajes.
+ * No se muestra en pantallas que ya tienen su propia barra abajo
+ * (una conversación abierta o los formularios de publicar).
+ */
+interface Props {
+  unreadMessages: number;
+}
+
+const { unreadMessages } = Astro.props;
+const path = Astro.url.pathname;
+const hidden =
+  /^\/mensajes\/[0-9a-f-]{36}/.test(path) ||
+  /^\/panel\/publicaciones\/(nueva|[0-9a-f-]{36})/.test(path) ||
+  /^\/necesidades\/nueva/.test(path) ||
+  /^\/panel\/emprendimientos\/(nuevo|[0-9a-f-]{36})/.test(path);
+
+const items = [
+  { href: "/", label: "Inicio", active: path === "/", d: "M4 11.5 12 4l8 7.5V20h-5.5v-5h-5v5H4z" },
+  { href: "/buscar", label: "Buscar", active: path.startsWith("/buscar"), d: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5" },
+  { href: "/publicar", label: "Publicar", active: path === "/publicar", d: "", main: true },
+  { href: "/necesidades", label: "Necesidades", active: path.startsWith("/necesidades"), d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4" },
+  {
+    href: "/mensajes",
+    label: "Mensajes",
+    active: path.startsWith("/mensajes"),
+    d: "M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z",
+    badge: true,
+  },
+];
+---
+
+{
+  !hidden && (
+    <>
+      <nav
+        aria-label="Principal"
+        class="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        data-bottom-nav
+      >
+        <ul class="mx-auto grid h-16 max-w-md grid-cols-5">
+          {items.map((item) => (
+            <li class="flex">
+              <a
+                href={item.href}
+                aria-current={item.active ? "page" : undefined}
+                class:list={[
+                  "relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium",
+                  item.active ? "text-ink" : "text-ink-muted",
+                ]}
+              >
+                {item.main ? (
+                  <span class="grid h-10 w-10 place-items-center rounded-full bg-brand text-brand-contrast shadow-md" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-[2.5]"><path stroke-linecap="round" d="M12 5v14M5 12h14" /></svg>
+                  </span>
+                ) : (
+                  <svg viewBox="0 0 24 24" class:list={["h-6 w-6 fill-none stroke-current", item.active ? "stroke-[2.4]" : "stroke-[1.8]"]} aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d={item.d} />
+                  </svg>
+                )}
+                <span class:list={[item.main && "sr-only"]}>{item.label}</span>
+                {item.badge && (
+                  <span
+                    data-messages-badge
+                    hidden={unreadMessages === 0}
+                    class="absolute left-1/2 top-1.5 ml-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white"
+                  >
+                    {unreadMessages > 99 ? "99+" : unreadMessages}
+                  </span>
+                )}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </>
+  )
+}
+
+<style is:global>
+  /* Que la barra no tape el final de la página en el celular. */
+  @media (max-width: 767px) {
+    body:has([data-bottom-nav]) {
+      padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+    }
+  }
+</style>

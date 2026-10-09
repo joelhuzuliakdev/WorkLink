@@ -1,11 +1,10 @@
 ---
 import Logo from "../brand/Logo.astro";
 import Button from "../ui/Button.astro";
-import Avatar from "../ui/Avatar.astro";
-import { actions } from "astro:actions";
+import UserMenu from "./UserMenu.astro";
+import BottomNav from "./BottomNav.astro";
 import { routes } from "../../config/site";
 import { getViewerProfile } from "../../lib/viewer";
-import { displayName } from "../../services/profiles";
 import { countUnread } from "../../services/notifications";
 import { countUnreadConversations } from "../../services/messages";
 
@@ -15,7 +14,6 @@ const [unread, unreadMessages] = user
   ? await Promise.all([countUnread(Astro.locals.supabase, user.id), countUnreadConversations(Astro.locals.supabase)])
   : [0, 0];
 const badge = (n: number) => (n > 99 ? "99+" : String(n));
-const logoutAction = `/salir${actions.auth.signOut}`;
 const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
 
@@ -39,7 +37,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </form>
 
     <nav aria-label="Cuenta" class="ml-auto flex items-center gap-1.5 sm:gap-2">
-      <a href="/buscar" class:list={["h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden", user ? "grid" : "hidden min-[420px]:grid"]} aria-label="Buscar">
+      <a href="/buscar" class:list={["h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden", user ? "hidden" : "hidden min-[420px]:grid"]} aria-label="Buscar">
         <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" /></svg>
       </a>
       {
@@ -48,7 +46,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
             <a
               href="/mensajes"
               data-messages-toggle
-              class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
+              class="relative hidden h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:grid"
               aria-label={unreadMessages ? `Mensajes (${unreadMessages} sin leer)` : "Mensajes"}
             >
               <svg viewBox="0 0 24 24" class="h-[22px] w-[22px] fill-none stroke-current stroke-2" aria-hidden="true">
@@ -79,20 +77,11 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
                 {badge(unread)}
               </span>
             </a>
-            {viewer && (
-              <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
-                <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
-                <span class="hidden text-sm font-semibold sm:inline">{viewer.first_name ?? viewer.username}</span>
-              </a>
-            )}
-            <Button href={routes.dashboard} variant="ghost" size="sm">
-              Mi panel
-            </Button>
-            <form method="POST" action={logoutAction} class="hidden sm:block">
-              <Button type="submit" variant="secondary" size="sm">
-                Salir
-              </Button>
-            </form>
+            <a href="/publicar" class="hidden h-10 items-center gap-1.5 rounded-wl bg-brand px-3.5 text-sm font-semibold text-brand-contrast hover:bg-brand-hover md:inline-flex">
+              <svg viewBox="0 0 24 24" class="h-4 w-4 fill-none stroke-current stroke-[2.5]" aria-hidden="true"><path stroke-linecap="round" d="M12 5v14M5 12h14" /></svg>
+              Publicar
+            </a>
+            {viewer && <UserMenu viewer={viewer} />}
           </>
         ) : (
           <>
@@ -125,3 +114,5 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </script>
   )
 }
+
+{user && <BottomNav unreadMessages={unreadMessages} />}

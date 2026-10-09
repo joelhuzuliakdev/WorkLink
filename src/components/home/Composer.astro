@@ -28,17 +28,13 @@ const shortcut = "flex h-10 flex-1 items-center justify-center gap-2 rounded-wl 
   <div class="mt-2 flex gap-1 border-t border-line pt-2">
     <a href={href} class={shortcut}>
       <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-success stroke-2" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path stroke-linejoin="round" d="m4 17 5-4.5 3.5 3 3-2.5 4.5 4" /></svg>
-      Foto o video
+      <span class="whitespace-nowrap">Foto<span class="hidden sm:inline"> o video</span></span>
     </a>
     <a href={`${href}?tipo=offer`} class={shortcut}>
       <span class="text-offer" aria-hidden="true">●</span> Ofrezco
     </a>
-    <a href={`${href}?tipo=seeking`} class={shortcut}>
-      <span class="text-seek" aria-hidden="true">●</span> Busco
+    <a href="/necesidades/nueva" class={shortcut} title="¿Necesitás contratar a alguien? Pedí presupuestos">
+      <span class="text-seek" aria-hidden="true">●</span> <span class="whitespace-nowrap"><span class="hidden sm:inline">Pedir </span><span class="sm:hidden">P</span><span class="hidden sm:inline">p</span>resupuesto</span>
     </a>
   </div>
-  <a href="/necesidades/nueva" class="mt-2 flex items-center justify-between gap-2 rounded-wl bg-seek-soft px-3 py-2 text-sm hover:opacity-90">
-    <span><strong>¿Necesitás contratar a alguien?</strong> Pedí presupuestos a los del rubro en tu zona.</span>
-    <span class="shrink-0 font-semibold text-seek" aria-hidden="true">→</span>
-  </a>
 </section>

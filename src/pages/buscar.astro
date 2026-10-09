@@ -143,7 +143,7 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             <label for="buscar-tipo" class="text-sm font-medium">Tipo de publicación</label>
             <select id="buscar-tipo" name="tipo" class={selectClass}>
               <option value="">Todas</option>
-              {POST_TYPES.map((t) => <option value={t.value} selected={t.value === type}>{t.label}</option>)}
+              {POST_TYPES.filter((t) => !t.legacy).map((t) => <option value={t.value} selected={t.value === type}>{t.label}</option>)}
             </select>
           </div>
         )}

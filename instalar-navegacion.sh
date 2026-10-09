@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · portada del perfil y compartir por mensaje (incluye las mejoras anteriores)
+# WorkLink · navegación nueva (barra de abajo, menú de la cuenta, Publicar) y tipos de publicación más claros
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-portada-compartir.sh
+#     bash instalar-navegacion.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega las migraciones 0027 y 0028 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, (no trae migraciones nuevas). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -2222,19 +2222,15 @@ const shortcut = "flex h-10 flex-1 items-center justify-center gap-2 rounded-wl 
   <div class="mt-2 flex gap-1 border-t border-line pt-2">
     <a href={href} class={shortcut}>
       <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-success stroke-2" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.6" /><path stroke-linejoin="round" d="m4 17 5-4.5 3.5 3 3-2.5 4.5 4" /></svg>
-      Foto o video
+      <span class="whitespace-nowrap">Foto<span class="hidden sm:inline"> o video</span></span>
     </a>
     <a href={`${href}?tipo=offer`} class={shortcut}>
       <span class="text-offer" aria-hidden="true">●</span> Ofrezco
     </a>
-    <a href={`${href}?tipo=seeking`} class={shortcut}>
-      <span class="text-seek" aria-hidden="true">●</span> Busco
+    <a href="/necesidades/nueva" class={shortcut} title="¿Necesitás contratar a alguien? Pedí presupuestos">
+      <span class="text-seek" aria-hidden="true">●</span> <span class="whitespace-nowrap"><span class="hidden sm:inline">Pedir </span><span class="sm:hidden">P</span><span class="hidden sm:inline">p</span>resupuesto</span>
     </a>
   </div>
-  <a href="/necesidades/nueva" class="mt-2 flex items-center justify-between gap-2 rounded-wl bg-seek-soft px-3 py-2 text-sm hover:opacity-90">
-    <span><strong>¿Necesitás contratar a alguien?</strong> Pedí presupuestos a los del rubro en tu zona.</span>
-    <span class="shrink-0 font-semibold text-seek" aria-hidden="true">→</span>
-  </a>
 </section>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -2433,7 +2429,7 @@ const forWho: Record<string, { title: string; points: string[] }> = {
 
 const steps = [
   { title: "Creá tu cuenta", text: "Es gratis. Poné tu foto, tu ciudad y contá tu situación: si buscás empleo, tenés un emprendimiento, ofrecés servicios o buscás contratar." },
-  { title: "Publicá", text: "Como en Facebook: escribí qué ofrecés o qué buscás y sumá hasta 10 fotos o un video corto." },
+  { title: "Publicá o pedí", text: "Mostrá lo que ofrecés con fotos o video, o publicá lo que necesitás y recibí presupuestos de los del rubro en tu ciudad." },
   { title: "Conectá", text: "La gente te sigue, comenta y te escribe. Vos hacés lo mismo con quienes te interesan, sin intermediarios." },
 ];
 
@@ -2516,16 +2512,16 @@ const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!
             <span class="flex flex-wrap items-center gap-2 font-semibold">Lucía M. <span class:list={["rounded-full px-2 py-0.5 text-xs", sceneBadge("hiring").class]}>{sceneBadge("hiring").badge}</span></span>
             <span class="block text-xs text-ink-muted">hace 12 min · Villa Carlos Paz</span>
           </span>
-          <span class="rounded-full bg-seek-soft px-2.5 py-1 text-xs font-semibold text-seek">Busco</span>
+          <span class="rounded-full bg-seek-soft px-2.5 py-1 text-xs font-semibold text-seek">Necesidad</span>
         </header>
-        <p class="mt-3">Busco electricista matriculado para revisar la instalación de un local antes de abrir. ¿Alguien recomienda?</p>
+        <p class="mt-3">Necesito un electricista matriculado para revisar la instalación de un local antes de abrir.</p>
         <div class="mt-3 flex items-center gap-4 border-t border-line pt-2 text-sm text-ink-muted">
-          <span>♥ 8</span><span>3 comentarios</span>
+          <span>Presupuesto: hasta $ 60.000</span><span>3 propuestas</span>
         </div>
         <div class="mt-2 flex gap-2.5">
           <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-success-soft text-xs font-bold text-success">MR</span>
           <p class="rounded-wl-lg bg-surface-muted px-3 py-2 text-sm">
-            <span class="font-semibold">Martín R.</span> ¡Hola Lucía! Soy electricista matriculado y estoy cerca. Te escribo por WhatsApp.
+            <span class="font-semibold">Martín R.</span> · ★ 4,9 · <strong>$ 45.000</strong><br />Soy electricista matriculado, puedo ir el lunes.
           </p>
         </div>
       </article>
@@ -2723,6 +2719,98 @@ const { value = "", autofocus = false, class: className = "" } = Astro.props;
 </form>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/layout/BottomNav.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Barra de abajo en el celular (como Instagram/Facebook), solo con sesión:
+ * Inicio · Buscar · Publicar · Necesidades · Mensajes.
+ * No se muestra en pantallas que ya tienen su propia barra abajo
+ * (una conversación abierta o los formularios de publicar).
+ */
+interface Props {
+  unreadMessages: number;
+}
+
+const { unreadMessages } = Astro.props;
+const path = Astro.url.pathname;
+const hidden =
+  /^\/mensajes\/[0-9a-f-]{36}/.test(path) ||
+  /^\/panel\/publicaciones\/(nueva|[0-9a-f-]{36})/.test(path) ||
+  /^\/necesidades\/nueva/.test(path) ||
+  /^\/panel\/emprendimientos\/(nuevo|[0-9a-f-]{36})/.test(path);
+
+const items = [
+  { href: "/", label: "Inicio", active: path === "/", d: "M4 11.5 12 4l8 7.5V20h-5.5v-5h-5v5H4z" },
+  { href: "/buscar", label: "Buscar", active: path.startsWith("/buscar"), d: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5" },
+  { href: "/publicar", label: "Publicar", active: path === "/publicar", d: "", main: true },
+  { href: "/necesidades", label: "Necesidades", active: path.startsWith("/necesidades"), d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4" },
+  {
+    href: "/mensajes",
+    label: "Mensajes",
+    active: path.startsWith("/mensajes"),
+    d: "M20 12.5c0 4-3.6 7-8 7-1.2 0-2.3-.2-3.3-.6L4 20l1.2-3.6C4.4 15.3 4 14 4 12.5c0-4 3.6-7 8-7s8 3 8 7Z",
+    badge: true,
+  },
+];
+---
+
+{
+  !hidden && (
+    <>
+      <nav
+        aria-label="Principal"
+        class="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        data-bottom-nav
+      >
+        <ul class="mx-auto grid h-16 max-w-md grid-cols-5">
+          {items.map((item) => (
+            <li class="flex">
+              <a
+                href={item.href}
+                aria-current={item.active ? "page" : undefined}
+                class:list={[
+                  "relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium",
+                  item.active ? "text-ink" : "text-ink-muted",
+                ]}
+              >
+                {item.main ? (
+                  <span class="grid h-10 w-10 place-items-center rounded-full bg-brand text-brand-contrast shadow-md" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-[2.5]"><path stroke-linecap="round" d="M12 5v14M5 12h14" /></svg>
+                  </span>
+                ) : (
+                  <svg viewBox="0 0 24 24" class:list={["h-6 w-6 fill-none stroke-current", item.active ? "stroke-[2.4]" : "stroke-[1.8]"]} aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d={item.d} />
+                  </svg>
+                )}
+                <span class:list={[item.main && "sr-only"]}>{item.label}</span>
+                {item.badge && (
+                  <span
+                    data-messages-badge
+                    hidden={unreadMessages === 0}
+                    class="absolute left-1/2 top-1.5 ml-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold leading-none text-white"
+                  >
+                    {unreadMessages > 99 ? "99+" : unreadMessages}
+                  </span>
+                )}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </>
+  )
+}
+
+<style is:global>
+  /* Que la barra no tape el final de la página en el celular. */
+  @media (max-width: 767px) {
+    body:has([data-bottom-nav]) {
+      padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+    }
+  }
+</style>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/layout/Footer.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import Logo from "../brand/Logo.astro";
@@ -2762,11 +2850,10 @@ escribir 'src/components/layout/Header.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import Logo from "../brand/Logo.astro";
 import Button from "../ui/Button.astro";
-import Avatar from "../ui/Avatar.astro";
-import { actions } from "astro:actions";
+import UserMenu from "./UserMenu.astro";
+import BottomNav from "./BottomNav.astro";
 import { routes } from "../../config/site";
 import { getViewerProfile } from "../../lib/viewer";
-import { displayName } from "../../services/profiles";
 import { countUnread } from "../../services/notifications";
 import { countUnreadConversations } from "../../services/messages";
 
@@ -2776,7 +2863,6 @@ const [unread, unreadMessages] = user
   ? await Promise.all([countUnread(Astro.locals.supabase, user.id), countUnreadConversations(Astro.locals.supabase)])
   : [0, 0];
 const badge = (n: number) => (n > 99 ? "99+" : String(n));
-const logoutAction = `/salir${actions.auth.signOut}`;
 const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q") ?? "") : "";
 ---
 
@@ -2800,7 +2886,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </form>
 
     <nav aria-label="Cuenta" class="ml-auto flex items-center gap-1.5 sm:gap-2">
-      <a href="/buscar" class:list={["h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden", user ? "grid" : "hidden min-[420px]:grid"]} aria-label="Buscar">
+      <a href="/buscar" class:list={["h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:hidden", user ? "hidden" : "hidden min-[420px]:grid"]} aria-label="Buscar">
         <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current stroke-2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path stroke-linecap="round" d="m20 20-3.5-3.5" /></svg>
       </a>
       {
@@ -2809,7 +2895,7 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
             <a
               href="/mensajes"
               data-messages-toggle
-              class="relative grid h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink"
+              class="relative hidden h-10 w-10 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink md:grid"
               aria-label={unreadMessages ? `Mensajes (${unreadMessages} sin leer)` : "Mensajes"}
             >
               <svg viewBox="0 0 24 24" class="h-[22px] w-[22px] fill-none stroke-current stroke-2" aria-hidden="true">
@@ -2840,20 +2926,11 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
                 {badge(unread)}
               </span>
             </a>
-            {viewer && (
-              <a href={`/u/${viewer.username}`} class="flex items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-3" aria-label="Mi perfil">
-                <Avatar name={displayName(viewer)} path={viewer.avatar_path} size={32} />
-                <span class="hidden text-sm font-semibold sm:inline">{viewer.first_name ?? viewer.username}</span>
-              </a>
-            )}
-            <Button href={routes.dashboard} variant="ghost" size="sm">
-              Mi panel
-            </Button>
-            <form method="POST" action={logoutAction} class="hidden sm:block">
-              <Button type="submit" variant="secondary" size="sm">
-                Salir
-              </Button>
-            </form>
+            <a href="/publicar" class="hidden h-10 items-center gap-1.5 rounded-wl bg-brand px-3.5 text-sm font-semibold text-brand-contrast hover:bg-brand-hover md:inline-flex">
+              <svg viewBox="0 0 24 24" class="h-4 w-4 fill-none stroke-current stroke-[2.5]" aria-hidden="true"><path stroke-linecap="round" d="M12 5v14M5 12h14" /></svg>
+              Publicar
+            </a>
+            {viewer && <UserMenu viewer={viewer} />}
           </>
         ) : (
           <>
@@ -2886,6 +2963,8 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </script>
   )
 }
+
+{user && <BottomNav unreadMessages={unreadMessages} />}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/layout/LegalPage.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -2924,6 +3003,99 @@ const { title, description, sections } = Astro.props;
   .legal ul { list-style: disc; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.25rem; }
   .legal a { color: var(--wl-brand); text-decoration: underline; }
 </style>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/layout/UserMenu.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Menú de la cuenta (al tocar tu foto): todo lo tuyo en un solo lugar.
+ * Sin JavaScript funciona igual (<details>); el script lo cierra al tocar
+ * fuera o con Escape.
+ */
+import { actions } from "astro:actions";
+import Avatar from "../ui/Avatar.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import type { ViewerProfile } from "../../lib/viewer";
+import { displayName } from "../../services/profiles";
+
+interface Props {
+  viewer: ViewerProfile;
+}
+
+const { viewer } = Astro.props;
+const name = displayName(viewer);
+const logoutAction = `/salir${actions.auth.signOut}`;
+const icon = "h-5 w-5 shrink-0 fill-none stroke-current stroke-[1.8] text-ink-muted";
+const groups: { href: string; label: string; hint?: string; d: string }[][] = [
+  [
+    { href: "/panel/publicaciones", label: "Mis publicaciones", d: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" },
+    { href: "/panel/emprendimientos", label: "Mis emprendimientos", d: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5" },
+    { href: "/panel/necesidades", label: "Necesidades y propuestas", d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4" },
+    { href: "/panel/guardados", label: "Guardados", d: "M6.5 4h11v16.5L12 16.8l-5.5 3.7z" },
+  ],
+  [
+    { href: "/panel/plan", label: "Mi plan", hint: viewer.role ? undefined : undefined, d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z" },
+    { href: "/panel/perfil", label: "Editar perfil y cuenta", d: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0" },
+    ...(viewer.role ? [{ href: "/admin", label: "Administración", d: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" }] : []),
+  ],
+];
+---
+
+<details class="relative" data-user-menu>
+  <summary
+    class="flex cursor-pointer list-none items-center gap-2 rounded-full p-0.5 hover:bg-surface-muted sm:pr-2 [&::-webkit-details-marker]:hidden"
+    aria-label="Tu cuenta"
+  >
+    <Avatar name={name} path={viewer.avatar_path} size={34} />
+    <span class="hidden text-sm font-semibold sm:inline">{viewer.first_name ?? viewer.username}</span>
+    <svg viewBox="0 0 24 24" class="hidden h-4 w-4 fill-none stroke-current stroke-2 text-ink-muted sm:block" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6" /></svg>
+  </summary>
+  <div class="absolute right-0 top-12 z-40 w-72 rounded-wl-lg border border-line bg-surface p-2 shadow-2xl">
+    <a href={`/u/${viewer.username}`} class="flex items-center gap-3 rounded-wl p-2 hover:bg-surface-muted">
+      <Avatar name={name} path={viewer.avatar_path} size={44} />
+      <span class="min-w-0">
+        <span class="flex items-center gap-1 font-semibold"><span class="truncate">{name}</span>{viewer.verified_at && <VerifiedBadge size={14} />}</span>
+        <span class="block text-sm text-ink-muted">Ver mi perfil</span>
+      </span>
+    </a>
+    {
+      groups.map((group) => (
+        <ul class="mt-1 border-t border-line pt-1">
+          {group.map((item) => (
+            <li>
+              <a href={item.href} class="flex items-center gap-3 rounded-wl px-2 py-2 text-sm font-medium hover:bg-surface-muted">
+                <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d={item.d} /></svg>
+                {item.label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      ))
+    }
+    <form method="POST" action={logoutAction} class="mt-1 border-t border-line pt-1">
+      <button type="submit" class="flex w-full items-center gap-3 rounded-wl px-2 py-2 text-left text-sm font-medium hover:bg-surface-muted">
+        <svg viewBox="0 0 24 24" class={icon} aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" /></svg>
+        Cerrar sesión
+      </button>
+    </form>
+  </div>
+</details>
+
+<script>
+  // Cerrar al tocar fuera o con Escape.
+  document.addEventListener("click", (event) => {
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>("details[data-user-menu][open]")) {
+      if (!menu.contains(event.target as Node)) menu.open = false;
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    for (const menu of document.querySelectorAll<HTMLDetailsElement>("details[data-user-menu][open]")) {
+      menu.open = false;
+      menu.querySelector("summary")?.focus();
+    }
+  });
+</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/needs/NeedCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -3164,6 +3336,8 @@ import type { PostView } from "../../services/posts";
 import type { MyBusiness } from "../../services/businesses";
 import type { CityRef } from "../../types/domain";
 import { POST_TYPES } from "../../schemas/post";
+import Avatar from "../ui/Avatar.astro";
+import { getViewerProfile } from "../../lib/viewer";
 
 interface Props {
   action: string;
@@ -3200,6 +3374,11 @@ const price = v("price", post?.price !== null && post?.price !== undefined ? Str
 const tags = v("tags", post?.tags.join(", "));
 const status = v("status", post?.status === "hidden" ? "hidden" : "published");
 const activeBusinesses = businesses.filter((b) => b.status !== "suspended");
+const viewer = await getViewerProfile(Astro.locals);
+// Tipos para elegir: los vigentes (y el de la publicación si es uno viejo, como "Servicio").
+const types = POST_TYPES.filter((t) => !t.legacy || t.value === type);
+const card =
+  "flex cursor-pointer items-center gap-3 rounded-wl border border-line bg-surface p-3 transition-colors hover:bg-surface-muted has-[:checked]:border-brand has-[:checked]:bg-seek-soft has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/40";
 const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
 ---
 
@@ -3211,38 +3390,71 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
       post ? (
         post.business_id && <input type="hidden" name="business_id" value={post.business_id} />
       ) : (
-        <div class="flex flex-col gap-1.5">
-          <label for="business_id" class="text-sm font-medium text-ink">Publicar como</label>
-          <select id="business_id" name="business_id" class={selectClass} data-business-select>
-            <option value="" selected={businessId === ""}>{personName} (mi perfil)</option>
-            {activeBusinesses.map((b) => (
-              <option value={b.id} selected={businessId === b.id}>{b.name} (emprendimiento)</option>
-            ))}
-          </select>
-        </div>
+        activeBusinesses.length > 0 ? (
+          <fieldset class="flex flex-col gap-2" data-business-select>
+            <legend class="mb-1 text-sm font-medium text-ink">¿Con qué cara publicás?</legend>
+            <div class="grid gap-2 sm:grid-cols-2">
+              <label class={card}>
+                <input type="radio" name="business_id" value="" checked={businessId === ""} class="sr-only" />
+                <Avatar name={personName} path={viewer?.avatar_path} size={36} />
+                <span class="min-w-0">
+                  <span class="block truncate font-semibold">{personName}</span>
+                  <span class="block text-xs text-ink-muted">Tu perfil personal</span>
+                </span>
+              </label>
+              {activeBusinesses.map((b) => (
+                <label class={card}>
+                  <input type="radio" name="business_id" value={b.id} checked={businessId === b.id} class="sr-only" />
+                  <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={36} />
+                  <span class="min-w-0">
+                    <span class="block truncate font-semibold">{b.name}</span>
+                    <span class="block text-xs text-ink-muted">Tu emprendimiento</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ) : (
+          <input type="hidden" name="business_id" value="" />
+        )
       )
     }
 
     <fieldset class="flex flex-col gap-2">
       <legend class="mb-1 text-sm font-medium text-ink">¿Qué querés publicar?</legend>
-      <div class="flex flex-wrap gap-2">
+      <div class="grid gap-2 sm:grid-cols-2">
         {
-          POST_TYPES.map((option) => (
+          types.map((option) => (
             <label
-              class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-medium has-[:checked]:border-brand has-[:checked]:bg-seek-soft has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-45"
+              class:list={[card, "items-start has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-45"]}
               data-needs-business={option.needsBusiness ? "true" : undefined}
             >
-              <input type="radio" name="type" value={option.value} checked={type === option.value} class="accent-[var(--wl-brand)]" />
-              {option.label}
+              <input type="radio" name="type" value={option.value} checked={type === option.value} class="mt-1 accent-[var(--wl-brand)]" />
+              <span>
+                <span class="block font-semibold">{option.formLabel}</span>
+                {option.hint && <span class="block text-xs text-ink-muted">{option.hint}</span>}
+              </span>
             </label>
           ))
         }
       </div>
-      {err("type") ? <p class="text-sm text-danger" role="alert">{err("type")}</p> : <p class="text-xs text-ink-muted">Producto, Servicio y Promoción se publican desde un emprendimiento.</p>}
+      {err("type") ? (
+        <p class="text-sm text-danger" role="alert">{err("type")}</p>
+      ) : (
+        <p class="text-xs text-ink-muted" data-business-note>
+          {activeBusinesses.length > 0
+            ? "“Vendo un producto” y “Promoción” se publican como emprendimiento."
+            : "“Vendo un producto” y “Promoción” son para emprendimientos: creá la página del tuyo para usarlos."}
+        </p>
+      )}
+      <a href="/necesidades/nueva" class="mt-1 flex items-center justify-between gap-2 rounded-wl bg-seek-soft px-3 py-2 text-sm hover:opacity-90">
+        <span><strong>¿Necesitás contratar a alguien?</strong> No hagas una publicación: publicá una necesidad y recibí presupuestos.</span>
+        <span class="shrink-0 font-semibold text-seek" aria-hidden="true">→</span>
+      </a>
     </fieldset>
 
     <Field name="title" label="Título (opcional)" maxlength={140} placeholder="Ej.: Tortas temáticas para cumpleaños" value={v("title", post?.title)} error={err("title")} />
-    <TextArea name="body" label="Texto" rows={5} maxlength={5000} required placeholder="Contá qué ofrecés o qué estás buscando: detalles, zona, plazos…" value={v("body", post?.body)} error={err("body")} />
+    <TextArea name="body" label="Texto" rows={5} maxlength={5000} required placeholder="Contá los detalles: qué hacés o vendés, en qué zona, horarios, cómo trabajás…" value={v("body", post?.body)} error={err("body")} />
   </section>
 
   <section class="flex flex-col gap-2">
@@ -3302,9 +3514,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
 <script>
   for (const form of document.querySelectorAll<HTMLFormElement>("[data-post-form]")) {
     // Tipos que requieren emprendimiento: deshabilitados si se publica a título personal.
-    const businessSelect = form.querySelector<HTMLSelectElement>("[data-business-select]");
+    const businessSelect = form.querySelector<HTMLElement>("[data-business-select]");
     const syncTypes = () => {
-      const personal = businessSelect ? businessSelect.value === "" : !form.querySelector('input[name="business_id"]');
+      const chosen = form.querySelector<HTMLInputElement>('input[name="business_id"]:checked, input[type="hidden"][name="business_id"]');
+      const personal = !chosen || chosen.value === "";
       for (const label of form.querySelectorAll<HTMLElement>("[data-needs-business]")) {
         const input = label.querySelector("input");
         if (!input) continue;
@@ -4823,7 +5036,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas", "/denunciar"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas", "/denunciar", "/publicar"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -5834,8 +6047,6 @@ escribir 'src/layouts/PanelLayout.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import BaseLayout from "./BaseLayout.astro";
 import { getViewerProfile } from "../lib/viewer";
 import { showOnboarding } from "../lib/onboarding";
-import { actions } from "astro:actions";
-import Button from "../components/ui/Button.astro";
 
 interface Props {
   title: string;
@@ -5851,16 +6062,15 @@ const path = Astro.url.pathname;
 const viewer = await getViewerProfile(Astro.locals);
 
 const steps = showOnboarding(viewer, Astro.cookies);
-const logoutAction = `/salir${actions.auth.signOut}`;
 
 const links = [
   ...(steps ? [{ href: "/panel", label: "Primeros pasos", active: path === "/panel" }] : []),
-  { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
-  { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
-  { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
-  { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
-  { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
+  { href: "/panel/publicaciones", label: "Publicaciones", active: path.startsWith("/panel/publicaciones") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
+  { href: "/panel/necesidades", label: "Necesidades y propuestas", active: path.startsWith("/panel/necesidades") },
+  { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
+  { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
+  { href: "/panel/perfil", label: "Perfil y cuenta", active: path.startsWith("/panel/perfil") },
   ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
 ];
 ---
@@ -5895,9 +6105,6 @@ const links = [
       <slot name="actions" />
     </div>
     <slot />
-    <form method="POST" action={logoutAction} class="mt-12 border-t border-line pt-6 sm:hidden">
-      <Button type="submit" variant="ghost" size="sm">Cerrar sesión</Button>
-    </form>
   </section>
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -8388,7 +8595,7 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             <label for="buscar-tipo" class="text-sm font-medium">Tipo de publicación</label>
             <select id="buscar-tipo" name="tipo" class={selectClass}>
               <option value="">Todas</option>
-              {POST_TYPES.map((t) => <option value={t.value} selected={t.value === type}>{t.label}</option>)}
+              {POST_TYPES.filter((t) => !t.legacy).map((t) => <option value={t.value} selected={t.value === type}>{t.label}</option>)}
             </select>
           </div>
         )}
@@ -11836,7 +12043,7 @@ const cta = (id: string) => `/panel/plan?elegir=${id}#plan-${id}`;
 const faqs = [
   { q: "¿Tengo que pagar para usar WorkLink?", a: "No. Perfil, emprendimiento, publicaciones, mensajes, reseñas y necesidades son gratis. Los planes son para que te vean más." },
   { q: "¿Cómo pago?", a: "Con Mercado Pago: tarjeta de crédito, débito o dinero en tu cuenta. Se cobra automáticamente todos los meses." },
-  { q: "¿Puedo cancelar?", a: "Sí, cuando quieras desde Mi panel → Mi plan. No se te vuelve a cobrar y mantenés los beneficios hasta el final del mes que pagaste." },
+  { q: "¿Puedo cancelar?", a: "Sí, cuando quieras desde el menú de tu cuenta (tu foto, arriba a la derecha) → Mi plan. No se te vuelve a cobrar y mantenés los beneficios hasta el final del mes que pagaste." },
   { q: "¿Cómo funciona la verificación?", a: "Con el plan Verificación o Emprendimiento Pro subís una foto de tu DNI y una selfie. Las revisa la administración de WorkLink (son privadas) y, si está todo bien, aparece la tilde azul al lado de tu nombre." },
 ];
 ---
@@ -12012,7 +12219,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
     <h2 id="derechos">10. Tus derechos</h2>
     <p>
       Podés pedir en cualquier momento <strong>acceder</strong> a tus datos, <strong>corregirlos</strong>, <strong>actualizarlos</strong> o
-      <strong>suprimirlos</strong>. La mayoría los podés cambiar vos mismo desde Mi panel. Para el resto, contactanos {contact}: respondemos los
+      <strong>suprimirlos</strong>. La mayoría los podés cambiar vos mismo desde “Perfil y cuenta” (en el menú de tu foto). Para el resto, contactanos {contact}: respondemos los
       pedidos de acceso dentro de los 10 días corridos y los de corrección o supresión dentro de los 5 días hábiles, como indica la Ley 25.326.
     </p>
     <p class="rounded-wl border border-line bg-surface p-4 text-sm">
@@ -12064,7 +12271,7 @@ const nextFragmentHref = nextCursor ? `/publicaciones/mas${query({ desde: nextCu
 const filters = [
   { href: "/publicaciones", label: "Todo", active: !type && !following },
   ...(user ? [{ href: "/publicaciones?ver=siguiendo", label: "Siguiendo", active: following }] : []),
-  ...Object.entries(TYPE_SLUGS).map(([slug, value]) => ({
+  ...Object.entries(TYPE_SLUGS).filter(([, value]) => !POST_TYPES.find((t) => t.value === value)?.legacy).map(([slug, value]) => ({
     href: `/publicaciones?tipo=${slug}`,
     label: POST_TYPES.find((t) => t.value === value)!.label,
     active: type === value,
@@ -12161,6 +12368,75 @@ Astro.response.headers.set("X-Robots-Tag", "noindex");
   nextHref={nextCursor ? `/publicaciones${query({ desde: nextCursor })}` : null}
   nextFragmentHref={nextCursor ? `/publicaciones/mas${query({ desde: nextCursor })}` : null}
 />
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/publicar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * "Publicar": una sola puerta para crear cualquier cosa, explicando para qué
+ * sirve cada opción (así nadie confunde publicación con necesidad).
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { getMyBusinesses } from "../services/businesses";
+
+const { supabase, user } = Astro.locals;
+const businesses = await getMyBusinesses(supabase, user!.id);
+const hasBusiness = businesses.some((b) => b.status !== "suspended");
+
+const options = [
+  {
+    href: "/panel/publicaciones/nueva",
+    title: "Publicación",
+    text: "Mostrá lo que ofrecés: tu servicio, un producto, una promoción o que estás buscando trabajo. Aparece en el inicio de quienes te siguen.",
+    example: "Ej.: “Hago tortas para cumpleaños”, “Busco trabajo de cadete”",
+    tone: "bg-offer-soft text-offer",
+    d: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5",
+  },
+  {
+    href: "/necesidades/nueva",
+    title: "Necesidad",
+    text: "¿Necesitás contratar a alguien? Contá qué necesitás y los del rubro en tu ciudad te mandan propuestas con precio. Vos elegís.",
+    example: "Ej.: “Necesito un electricista para el lunes”",
+    tone: "bg-seek-soft text-seek",
+    d: "M9 4h6v3H9zM6 5.5H5V21h14V5.5h-1M9 12h6M9 16h4",
+  },
+  {
+    href: hasBusiness ? "/panel/emprendimientos" : "/panel/emprendimientos/nuevo",
+    title: hasBusiness ? "Mis emprendimientos" : "Página de emprendimiento",
+    text: hasBusiness
+      ? "Editá la página de tu emprendimiento: catálogo, horarios, contacto y fotos."
+      : "Si tenés un negocio, creale su página con logo, catálogo, horarios y contacto. La gente la puede seguir y opinar.",
+    example: "Ej.: “Panadería Don Juan”, “Estudio de diseño”",
+    tone: "bg-success-soft text-success",
+    d: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5",
+  },
+];
+---
+
+<BaseLayout title="Publicar" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <h1 class="text-2xl font-bold sm:text-3xl">¿Qué querés hacer?</h1>
+    <p class="mt-1 text-ink-muted">Elegí la opción que mejor te sirva.</p>
+    <ul class="mt-6 flex flex-col gap-3">
+      {
+        options.map((o) => (
+          <li>
+            <a href={o.href} class="flex gap-4 rounded-wl-lg border border-line bg-surface p-4 transition-colors hover:border-brand sm:p-5">
+              <span class:list={["grid h-12 w-12 shrink-0 place-items-center rounded-full", o.tone]} aria-hidden="true">
+                <svg viewBox="0 0 24 24" class="h-6 w-6 fill-none stroke-current stroke-2"><path stroke-linecap="round" stroke-linejoin="round" d={o.d} /></svg>
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center justify-between gap-2 text-lg font-semibold">{o.title}<span class="text-brand" aria-hidden="true">→</span></span>
+                <span class="mt-1 block text-ink-muted">{o.text}</span>
+                <span class="mt-2 block text-sm italic text-ink-muted">{o.example}</span>
+              </span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+</BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/recuperar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -13190,7 +13466,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
         dentro de los 10 días corridos desde que lo contrataste, sin dar explicaciones. Te devolvemos el importe completo por el mismo medio de pago.
       </li>
       <li>
-        <strong>Cancelación:</strong> podés cancelar un plan cuando quieras desde Mi panel → Mi plan. No se te vuelve a cobrar y conservás los
+        <strong>Cancelación:</strong> podés cancelar un plan cuando quieras desde el menú de tu cuenta (tu foto, arriba a la derecha) → Mi plan. No se te vuelve a cobrar y conservás los
         beneficios hasta el final del período que pagaste. Pasados los 10 días del arrepentimiento, los meses ya cobrados no se reintegran.
       </li>
       <li>Para ejercer el arrepentimiento o hacer cualquier reclamo, contactanos {contact}.</li>
@@ -14113,12 +14389,16 @@ import { z } from "astro/zod";
 import { optionalAmount, optionalId, optionalText } from "./common";
 import { POST_MAX_IMAGES } from "../config/media";
 
+/**
+ * Tipos de publicación. "service" queda solo para publicaciones viejas (ahora
+ * es "Ofrezco"). Para contratar a alguien se usa Necesidades, no una publicación.
+ */
 export const POST_TYPES = [
-  { value: "offer", label: "Ofrezco", needsBusiness: false },
-  { value: "seeking", label: "Busco", needsBusiness: false },
-  { value: "product", label: "Producto", needsBusiness: true },
-  { value: "service", label: "Servicio", needsBusiness: true },
-  { value: "promotion", label: "Promoción", needsBusiness: true },
+  { value: "offer", label: "Ofrezco", formLabel: "Ofrezco un servicio", hint: "Tu oficio, profesión o lo que sabés hacer.", needsBusiness: false, legacy: false },
+  { value: "product", label: "Producto", formLabel: "Vendo un producto", hint: "Algo que vendés desde tu emprendimiento.", needsBusiness: true, legacy: false },
+  { value: "promotion", label: "Promoción", formLabel: "Promoción", hint: "Una oferta o descuento de tu emprendimiento.", needsBusiness: true, legacy: false },
+  { value: "seeking", label: "Busco trabajo", formLabel: "Busco trabajo", hint: "Contá que estás buscando empleo o changas.", needsBusiness: false, legacy: false },
+  { value: "service", label: "Servicio", formLabel: "Servicio", hint: "", needsBusiness: true, legacy: true },
 ] as const;
 
 export type PostType = (typeof POST_TYPES)[number]["value"];
@@ -15066,7 +15346,7 @@ function announce(latest: Latest) {
     box.id = "wl-message-toast";
     box.setAttribute("role", "status");
     box.className =
-      "fixed bottom-4 left-4 right-4 z-50 flex items-start gap-3 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
+      "fixed bottom-20 left-4 right-4 z-50 flex items-start gap-3 md:bottom-4 rounded-wl-lg border border-line bg-surface p-3 text-ink shadow-2xl sm:left-auto sm:w-80";
     document.body.append(box);
   }
   box.href = `/mensajes/${latest.conversationId}`;
@@ -15440,7 +15720,7 @@ function toast(message: string) {
     el.id = "wl-toast";
     el.setAttribute("role", "status");
     el.className =
-      "fixed inset-x-4 bottom-4 z-50 mx-auto max-w-sm rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-bg shadow-lg";
+      "fixed inset-x-4 bottom-20 z-50 mx-auto max-w-sm md:bottom-4 rounded-wl bg-ink px-4 py-3 text-center text-sm font-medium text-bg shadow-lg";
     document.body.append(el);
   }
   el.textContent = message;
@@ -17441,7 +17721,7 @@ export function postHeadline(post: Pick<PostView, "title" | "body">, max = 70): 
 
 export const POST_TYPE_LABELS: Record<PostType, { label: string; class: string }> = {
   offer: { label: "Ofrezco", class: "bg-offer-soft text-offer" },
-  seeking: { label: "Busco", class: "bg-seek-soft text-seek" },
+  seeking: { label: "Busco trabajo", class: "bg-seek-soft text-seek" },
   product: { label: "Producto", class: "bg-success-soft text-success" },
   service: { label: "Servicio", class: "bg-surface-muted text-ink" },
   promotion: { label: "Promoción", class: "bg-warning-soft text-warning" },
@@ -21740,8 +22020,8 @@ echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 215 archivos de las mejoras instalados."
+echo " Listo. 218 archivos de las mejoras instalados."
 echo " Siguientes pasos:"
-echo "   1) npx supabase db push"
+echo "   (no hace falta npx supabase db push)"
 echo "   2) git add . / git commit / git push"
 echo "============================================================"

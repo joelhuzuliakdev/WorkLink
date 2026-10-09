@@ -250,7 +250,7 @@ export function postHeadline(post: Pick<PostView, "title" | "body">, max = 70): 
 
 export const POST_TYPE_LABELS: Record<PostType, { label: string; class: string }> = {
   offer: { label: "Ofrezco", class: "bg-offer-soft text-offer" },
-  seeking: { label: "Busco", class: "bg-seek-soft text-seek" },
+  seeking: { label: "Busco trabajo", class: "bg-seek-soft text-seek" },
   product: { label: "Producto", class: "bg-success-soft text-success" },
   service: { label: "Servicio", class: "bg-surface-muted text-ink" },
   promotion: { label: "Promoción", class: "bg-warning-soft text-warning" },
