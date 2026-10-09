@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 10 (necesidades con propuestas)
+# WorkLink · instalador de la Etapa 11 (reseñas y calificaciones)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa10.sh
+#     bash instalar-etapa11.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega las migraciones 0019 y 0020 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega las migraciones 0021 y 0022 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 10..."
+echo "Instalando archivos de la Etapa 11..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -508,6 +508,7 @@ import { posts } from "./posts";
 import { social } from "./social";
 import { messages } from "./messages";
 import { needs } from "./needs";
+import { reviews } from "./reviews";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -522,6 +523,7 @@ export const server = {
   social,
   messages,
   needs,
+  reviews,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -939,6 +941,99 @@ export const profile = {
       }
 
       return { saved: true, username: input.username };
+    },
+  }),
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/reviews.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { replySchema, reportSchema, reviewRefSchema, reviewSchema } from "../schemas/review";
+import { dbError, requireUser } from "../lib/auth/guards";
+
+/**
+ * Reseñas: escribir/editar, borrar, responder y denunciar. Quién puede hacer
+ * cada cosa lo decide la base; acá se traducen sus mensajes.
+ */
+const fromDb = (error: { code?: string; message?: string; hint?: string | null }, fallback: string) =>
+  error.code === "42501" && error.message && !error.message.startsWith("new row") && !error.message.startsWith("permission")
+    ? new ActionError({ code: "FORBIDDEN", message: error.message })
+    : dbError(error, fallback);
+
+export const reviews = {
+  save: defineAction({
+    accept: "form",
+    input: reviewSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const body = input.body ?? null;
+      if (input.review_id) {
+        const { data, error } = await locals.supabase
+          .from("reviews")
+          .update({ rating: input.rating, body })
+          .eq("id", input.review_id)
+          .select("id");
+        if (error) throw fromDb(error, "No pudimos guardar los cambios.");
+        if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "No podés editar esta reseña." });
+        return { id: input.review_id, created: false };
+      }
+      const { data, error } = await locals.supabase
+        .from("reviews")
+        .insert({
+          business_id: input.subject_type === "business" ? input.subject_id : null,
+          profile_id: input.subject_type === "profile" ? input.subject_id : null,
+          rating: input.rating,
+          body,
+        })
+        .select("id")
+        .single();
+      if (error) {
+        if (error.code === "23505") throw new ActionError({ code: "CONFLICT", message: "Ya escribiste una reseña. Podés editarla." });
+        throw fromDb(error, "No pudimos publicar tu reseña. Probá de nuevo.");
+      }
+      return { id: (data as { id: string }).id, created: true };
+    },
+  }),
+
+  remove: defineAction({
+    accept: "form",
+    input: reviewRefSchema,
+    handler: async ({ review_id }, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase.from("reviews").delete().eq("id", review_id).select("id");
+      if (error) throw fromDb(error, "No pudimos borrar la reseña.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "No podés borrar esta reseña." });
+      return { ok: true };
+    },
+  }),
+
+  reply: defineAction({
+    accept: "form",
+    input: replySchema,
+    handler: async ({ review_id, reply }, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("reply_review", { p_review_id: review_id, p_reply: reply ?? null });
+      if (error) throw fromDb(error, "No pudimos guardar la respuesta.");
+      return { id: review_id, removed: !reply };
+    },
+  }),
+
+  report: defineAction({
+    accept: "form",
+    input: reportSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.from("reports").insert({
+        target_type: input.target_type,
+        target_id: input.target_id,
+        reason: input.reason,
+        details: input.details ?? null,
+      });
+      if (error) {
+        if (error.code === "23505") return { ok: true, already: true };
+        throw fromDb(error, "No pudimos enviar la denuncia.");
+      }
+      return { ok: true, already: false };
     },
   }),
 };
@@ -1592,6 +1687,7 @@ escribir 'src/components/directory/BusinessResultCard.astro' << '__WORKLINK_FIN_
 import Avatar from "../ui/Avatar.astro";
 import type { BusinessResult } from "../../services/search";
 import { followersLabel } from "../../services/social";
+import RatingBadge from "../reviews/RatingBadge.astro";
 
 interface Props {
   business: BusinessResult;
@@ -1613,6 +1709,7 @@ const meta = [hideCategory ? null : b.category?.name, b.city ? `${b.city.name}${
       {b.verification === "verified" && <span class="text-sm text-seek" title="Verificado">✓ Verificado</span>}
     </span>
     {meta && <span class="block truncate text-sm text-ink-muted">{meta}</span>}
+    <RatingBadge sum={b.rating_sum} count={b.rating_count} size={13} class="mt-0.5" />
     {b.tagline && <span class="mt-1 line-clamp-2 block text-sm">{b.tagline}</span>}
     <span class="mt-1 block text-xs text-ink-muted">
       {followersLabel(b.followers_count)}{b.posts_count > 0 && ` · ${b.posts_count} ${b.posts_count === 1 ? "publicación" : "publicaciones"}`}
@@ -2857,6 +2954,373 @@ const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text
 </script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/reviews/RatingBadge.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Calificación compacta: ★★★★☆ 4,3 (12). No muestra nada si no hay reseñas. */
+import Stars from "./Stars.astro";
+import { formatRating, ratingAverage, reviewsLabel } from "../../services/reviews";
+
+interface Props {
+  sum: number;
+  count: number;
+  href?: string;
+  size?: number;
+  /** "full": "4,3 · 12 reseñas"; "short": "4,3 (12)". */
+  variant?: "full" | "short";
+  class?: string;
+}
+
+const { sum, count, href, size = 14, variant = "short", class: className = "" } = Astro.props;
+const avg = ratingAverage(sum, count);
+const Tag = href ? "a" : "span";
+---
+
+{
+  avg !== null && (
+    <Tag href={href} class:list={["inline-flex items-center gap-1.5 text-sm", href && "hover:underline", className]}>
+      <Stars value={avg} size={size} />
+      <span class="font-semibold text-ink">{formatRating(avg)}</span>
+      <span class="text-ink-muted">{variant === "full" ? `· ${reviewsLabel(count)}` : `(${count})`}</span>
+    </Tag>
+  )
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/reviews/ReviewItem.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Una reseña: quién opinó, estrellas, comentario y la respuesta.
+ * - El emprendimiento/persona calificada puede responder (y editar o borrar la respuesta).
+ * - Quien la escribió puede editarla o borrarla.
+ * - Cualquiera con cuenta puede denunciarla.
+ */
+import { actions } from "astro:actions";
+import Avatar from "../ui/Avatar.astro";
+import Button from "../ui/Button.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import Stars from "./Stars.astro";
+import type { ReviewView } from "../../services/reviews";
+import { RATING_WORDS } from "../../services/reviews";
+import { REPORT_REASONS } from "../../schemas/review";
+import { displayName } from "../../services/profiles";
+import { formatDate, formatRelative } from "../../lib/format";
+import { profilePath } from "../../lib/urls";
+
+interface Props {
+  review: ReviewView;
+  subjectName: string;
+  canReply: boolean;
+  viewerId: string | undefined;
+  /** Página a la que vuelven los formularios. */
+  returnTo: string;
+  editHref: string;
+}
+
+const { review: r, subjectName, canReply, viewerId, returnTo, editHref } = Astro.props;
+const name = r.author ? displayName(r.author) : "Usuario";
+const isAuthor = viewerId === r.author_id;
+const canReport = Boolean(viewerId) && !isAuthor;
+const formAction = (action: string) => `${returnTo}${action}`;
+const textarea =
+  "w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+const summary = "cursor-pointer list-none text-sm font-medium text-ink-muted hover:text-ink [&::-webkit-details-marker]:hidden";
+---
+
+<article id={`r-${r.id}`} class="scroll-mt-24 py-4" data-review={r.id}>
+  <header class="flex items-start gap-3">
+    {r.author ? (
+      <a href={profilePath(r.author.username)} class="shrink-0" aria-label={`Perfil de ${name}`}>
+        <Avatar name={name} path={r.author.avatar_path} size={40} />
+      </a>
+    ) : (
+      <Avatar name={name} size={40} />
+    )}
+    <div class="min-w-0 flex-1">
+      <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span class="inline-flex min-w-0 items-center gap-1 font-semibold">
+          {r.author ? <a href={profilePath(r.author.username)} class="truncate hover:underline">{name}</a> : name}
+          {r.author?.verified_at && <VerifiedBadge size={13} />}
+        </span>
+        {r.verified && (
+          <span class="rounded-full bg-success-soft px-2 py-0.5 text-xs font-semibold text-success" title="Aceptó una propuesta por WorkLink">
+            Contrató por WorkLink
+          </span>
+        )}
+      </p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
+        <Stars value={r.rating} size={15} />
+        <span class="font-medium text-ink">{RATING_WORDS[r.rating]}</span>
+        <span>·</span>
+        <time datetime={r.created_at} title={formatDate(r.created_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(r.created_at)}</time>
+        {r.edited_at && <span>(editada)</span>}
+      </p>
+    </div>
+  </header>
+
+  {r.body && <p class="mt-2 whitespace-pre-line break-words sm:pl-[52px]">{r.body}</p>}
+
+  {
+    r.reply && (
+      <div class="mt-3 rounded-wl bg-surface-muted px-3 py-2 sm:ml-[52px]">
+        <p class="text-sm font-semibold">
+          Respuesta de {subjectName}
+          {r.reply_at && <span class="font-normal text-ink-muted"> · {formatRelative(r.reply_at)}</span>}
+        </p>
+        <p class="mt-1 whitespace-pre-line break-words text-sm">{r.reply}</p>
+      </div>
+    )
+  }
+
+  <div class="mt-2 flex flex-wrap items-start gap-x-4 gap-y-2 sm:pl-[52px]">
+    {
+      canReply && (
+        <details class="open:w-full">
+          <summary class={summary}>{r.reply ? "Editar respuesta" : "Responder"}</summary>
+          <form method="POST" action={formAction(actions.reviews.reply)} class="mt-2 flex flex-col gap-2">
+            <input type="hidden" name="review_id" value={r.id} />
+            <label for={`reply-${r.id}`} class="sr-only">Tu respuesta</label>
+            <textarea id={`reply-${r.id}`} name="reply" rows="3" maxlength="1000" required class={textarea} placeholder="Agradecé o aclarale algo a quien opinó. Todos ven tu respuesta.">{r.reply ?? ""}</textarea>
+            <div class="flex gap-2">
+              <Button type="submit" size="sm">{r.reply ? "Guardar respuesta" : "Publicar respuesta"}</Button>
+            </div>
+          </form>
+          {r.reply && (
+            <form method="POST" action={formAction(actions.reviews.reply)} class="mt-2" data-review-confirm="¿Borrar tu respuesta?">
+              <input type="hidden" name="review_id" value={r.id} />
+              <input type="hidden" name="reply" value="" />
+              <Button type="submit" size="sm" variant="ghost" class="text-danger">Borrar respuesta</Button>
+            </form>
+          )}
+        </details>
+      )
+    }
+
+    {
+      isAuthor && (
+        <>
+          <a href={editHref} class="text-sm font-medium text-ink-muted hover:text-ink">Editar</a>
+          <form method="POST" action={formAction(actions.reviews.remove)} data-review-confirm="¿Borrar tu reseña? No se puede deshacer.">
+            <input type="hidden" name="review_id" value={r.id} />
+            <button type="submit" class="text-sm font-medium text-danger hover:underline">Borrar</button>
+          </form>
+        </>
+      )
+    }
+
+    {
+      canReport && (
+        <details class="open:w-full">
+          <summary class={summary}>Denunciar</summary>
+          <form method="POST" action={formAction(actions.reviews.report)} class="mt-2 flex max-w-md flex-col gap-2 rounded-wl border border-line bg-surface p-3">
+            <input type="hidden" name="target_type" value="review" />
+            <input type="hidden" name="target_id" value={r.id} />
+            <fieldset>
+              <legend class="text-sm font-medium">¿Qué problema tiene esta reseña?</legend>
+              <div class="mt-1 flex flex-col gap-1">
+                {Object.entries(REPORT_REASONS).map(([value, label], i) => (
+                  <label class="flex items-center gap-2 text-sm">
+                    <input type="radio" name="reason" value={value} required checked={i === 0} class="accent-brand" />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label for={`details-${r.id}`} class="sr-only">Detalle (opcional)</label>
+            <textarea id={`details-${r.id}`} name="details" rows="2" maxlength="500" class={textarea} placeholder="Contanos más (opcional)"></textarea>
+            <div><Button type="submit" size="sm" variant="secondary">Enviar denuncia</Button></div>
+          </form>
+        </details>
+      )
+    }
+  </div>
+</article>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/reviews/ReviewsSection.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Sección "Reseñas" de un emprendimiento o una persona: promedio, reparto de
+ * estrellas, botón para opinar (si corresponde) y la lista.
+ */
+import Button from "../ui/Button.astro";
+import Alert from "../ui/Alert.astro";
+import Stars from "./Stars.astro";
+import ReviewItem from "./ReviewItem.astro";
+import type { ReviewEligibility, ReviewView } from "../../services/reviews";
+import { canReview, formatRating, ratingAverage, reviewsLabel } from "../../services/reviews";
+import { routes } from "../../config/site";
+
+interface Props {
+  subjectName: string;
+  sum: number;
+  count: number;
+  /** Cantidad por estrella [1★..5★] (solo emprendimientos). */
+  dist?: number[] | null;
+  reviews: ReviewView[];
+  eligibility: ReviewEligibility;
+  mine: ReviewView | null;
+  writeHref: string;
+  canReply: boolean;
+  viewerId: string | undefined;
+  returnTo: string;
+  /** Enlace "Ver todas" (en la página del emprendimiento/perfil). */
+  seeAllHref?: string | null;
+  prevHref?: string | null;
+  nextHref?: string | null;
+  notice?: string | null;
+  error?: string | null;
+  /** "h2" en la página del emprendimiento; "h1" en la página de reseñas. */
+  headingTag?: "h1" | "h2";
+  class?: string;
+}
+
+const {
+  subjectName,
+  sum,
+  count,
+  dist,
+  reviews,
+  eligibility,
+  mine,
+  writeHref,
+  canReply,
+  viewerId,
+  returnTo,
+  seeAllHref,
+  prevHref,
+  nextHref,
+  notice,
+  error,
+  headingTag: Heading = "h2",
+  class: className = "",
+} = Astro.props;
+
+const avg = ratingAverage(sum, count);
+const bars = dist && dist.length === 5 && count > 0 ? [5, 4, 3, 2, 1].map((stars) => ({ stars, n: dist[stars - 1] ?? 0 })) : null;
+const loginHref = `${routes.login}?next=${encodeURIComponent(`${returnTo}#resenas`)}`;
+---
+
+<section id="resenas" class:list={["scroll-mt-20", className]} aria-labelledby="resenas-titulo">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <Heading id="resenas-titulo" class:list={[Heading === "h1" ? "text-2xl font-bold sm:text-3xl" : "text-xl font-semibold"]}>
+      {Heading === "h1" ? `Reseñas de ${subjectName}` : "Reseñas"}
+    </Heading>
+    {
+      mine ? (
+        <Button href={writeHref} variant="secondary" size="sm">Editar tu reseña</Button>
+      ) : canReview(eligibility) ? (
+        <Button href={writeHref} size="sm">Escribir una reseña</Button>
+      ) : eligibility === "login" ? (
+        <Button href={loginHref} variant="secondary" size="sm">Ingresá para opinar</Button>
+      ) : null
+    }
+  </div>
+
+  {notice && <Alert tone="success" class="mt-4">{notice}</Alert>}
+  {error && <Alert tone="danger" class="mt-4">{error}</Alert>}
+  {mine && mine.status !== "published" && (
+    <Alert tone="warning" class="mt-4">Tu reseña está oculta mientras la revisamos porque recibió denuncias.</Alert>
+  )}
+
+  {
+    avg !== null ? (
+      <div class="mt-4 flex flex-wrap items-center gap-x-8 gap-y-4 rounded-wl-lg border border-line bg-surface p-4">
+        <div class="text-center">
+          <p class="text-4xl font-bold leading-none">{formatRating(avg)}</p>
+          <Stars value={avg} size={18} class="mt-2" />
+          <p class="mt-1 text-sm text-ink-muted">{reviewsLabel(count)}</p>
+        </div>
+        {bars && (
+          <ul class="flex min-w-[12rem] flex-1 flex-col gap-1 text-sm" aria-label="Cantidad de reseñas por estrellas">
+            {bars.map(({ stars, n }) => (
+              <li class="flex items-center gap-2">
+                <span class="w-3 text-right text-ink-muted">{stars}</span>
+                <span class="text-star" aria-hidden="true">★</span>
+                <span class="h-2 flex-1 overflow-hidden rounded-full bg-surface-muted">
+                  <span class="block h-full rounded-full bg-star" style={`width:${Math.round((n / count) * 100)}%`} />
+                </span>
+                <span class="w-6 text-right text-ink-muted">{n}<span class="sr-only"> con {stars} {stars === 1 ? "estrella" : "estrellas"}</span></span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    ) : (
+      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-5 text-center text-sm text-ink-muted">
+        {canReview(eligibility) && !mine ? `Todavía no tiene reseñas. ¡Sé la primera persona en opinar sobre ${subjectName}!` : "Todavía no tiene reseñas."}
+      </p>
+    )
+  }
+
+  {
+    eligibility === "none" && !mine && (
+      <p class="mt-3 text-sm text-ink-muted">
+        Para cuidar que las opiniones sean reales, pueden opinar quienes lo contrataron desde <a href="/necesidades" class="font-medium text-brand hover:underline">Necesidades</a> o hablaron con {subjectName} por mensajes en WorkLink.
+      </p>
+    )
+  }
+
+  {
+    reviews.length > 0 && (
+      <div class="mt-2 divide-y divide-line">
+        {reviews.map((review) => (
+          <ReviewItem review={review} subjectName={subjectName} canReply={canReply} viewerId={viewerId} returnTo={returnTo} editHref={writeHref} />
+        ))}
+      </div>
+    )
+  }
+
+  {seeAllHref && count > reviews.length && (
+    <a href={seeAllHref} class="mt-2 inline-block font-semibold text-brand hover:underline">Ver las {reviewsLabel(count)} →</a>
+  )}
+
+  {
+    (prevHref || nextHref) && (
+      <nav class="mt-4 flex justify-between gap-4" aria-label="Páginas de reseñas">
+        {prevHref ? <Button href={prevHref} variant="secondary" size="sm">← Más nuevas</Button> : <span />}
+        {nextHref ? <Button href={nextHref} variant="secondary" size="sm">Más viejas →</Button> : <span />}
+      </nav>
+    )
+  }
+</section>
+
+<script>
+  // Confirmación antes de borrar una reseña o una respuesta.
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-review-confirm]");
+    if (form && !window.confirm(form.dataset.reviewConfirm!)) event.preventDefault();
+  });
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/reviews/Stars.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Estrellas de 0 a 5 (admite medias: 4,5 pinta cuatro y media).
+ * Para lectores de pantalla se lee "4,5 de 5 estrellas".
+ */
+import { formatRating } from "../../services/reviews";
+
+interface Props {
+  value: number;
+  /** Tamaño en px de cada estrella. */
+  size?: number;
+  class?: string;
+}
+
+const { value, size = 16, class: className = "" } = Astro.props;
+const percent = Math.max(0, Math.min(5, value)) * 20;
+const path = "M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8L12 2.8Z";
+const row = (fillClass: string) =>
+  Array.from({ length: 5 }, () => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" class="${fillClass} shrink-0" aria-hidden="true"><path d="${path}" fill="currentColor"/></svg>`).join("");
+---
+
+<span class:list={["relative inline-flex shrink-0 align-middle", className]} role="img" aria-label={`${formatRating(value)} de 5 estrellas`}>
+  <span class="flex text-line" set:html={row("")} />
+  <span class="absolute inset-y-0 left-0 flex overflow-hidden text-star" style={`width:${percent}%`} set:html={row("")} />
+</span>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/social/CommentsSection.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -3623,7 +4087,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -4982,6 +5446,38 @@ export function mediaItemsFromSubmitted(raw: FormDataEntryValue | null): PostMed
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/lib/review-actions.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { AstroGlobal } from "astro";
+import { actions } from "astro:actions";
+
+/**
+ * Formularios de las reseñas (responder, denunciar, borrar) que se envían
+ * desde la página del emprendimiento o del perfil. Si salió bien devuelve la
+ * redirección (PRG: recargar no reenvía); si falló, el mensaje para mostrar.
+ */
+export function handleReviewActions(Astro: AstroGlobal, returnTo: string): { redirect: string | null; error: string | null } {
+  const reply = Astro.getActionResult(actions.reviews.reply);
+  const report = Astro.getActionResult(actions.reviews.report);
+  const remove = Astro.getActionResult(actions.reviews.remove);
+  if (reply && !reply.error) {
+    return { redirect: `${returnTo}?resena=${reply.data.removed ? "respuesta-borrada" : "respondida"}#r-${reply.data.id}`, error: null };
+  }
+  if (report && !report.error) return { redirect: `${returnTo}?resena=denunciada#resenas`, error: null };
+  if (remove && !remove.error) return { redirect: `${returnTo}?resena=borrada#resenas`, error: null };
+  const failed = reply?.error ?? report?.error ?? remove?.error;
+  return { redirect: null, error: failed ? failed.message || "No pudimos guardar el cambio." : null };
+}
+
+export const REVIEW_NOTICES: Record<string, string> = {
+  publicada: "¡Gracias! Publicamos tu reseña.",
+  editada: "Guardamos los cambios de tu reseña.",
+  borrada: "Borraste tu reseña.",
+  respondida: "Publicamos tu respuesta.",
+  "respuesta-borrada": "Borraste tu respuesta.",
+  denunciada: "Gracias por avisarnos. Vamos a revisar la reseña.",
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/lib/seo/business.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { Business, CatalogItem } from "../../types/domain";
 import { WEEK_DAYS } from "../../schemas/business";
@@ -6029,6 +6525,10 @@ import { breadcrumbJsonLd, businessJsonLd, jsonLdScript } from "../../lib/seo/bu
 import { routes } from "../../config/site";
 import { newMessagePath } from "../../services/messages";
 import { directoryPath } from "../../services/directory";
+import ReviewsSection from "../../components/reviews/ReviewsSection.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../lib/review-actions";
 
 const { supabase, user } = Astro.locals;
 const slug = (Astro.params.slug ?? "").toLowerCase();
@@ -6042,12 +6542,20 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }, following, { data: owner }] = await Promise.all([
+// Formularios de reseñas (responder, denunciar, borrar) enviados a esta página.
+const reviewForms = handleReviewActions(Astro, `/e/${business.slug}`);
+if (reviewForms.redirect) return Astro.redirect(reviewForms.redirect, 303);
+
+const reviewSubject = { type: "business", id: business.id } as const;
+const [catalog, { posts: businessPosts }, following, { data: owner }, { reviews }, reviewState] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
   isFollowing(supabase, user?.id, "business", business.id),
   supabase.from("profiles").select("username").eq("id", business.owner_id).eq("status", "active").maybeSingle(),
+  getReviews(supabase, reviewSubject, { limit: 3 }),
+  getViewerReviewState(supabase, user?.id, reviewSubject),
 ]);
+const reviewNotice = REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null;
 // Mensajes privados: le llegan a quien creó el emprendimiento.
 const messageHref = owner && owner.username && user?.id !== business.owner_id ? newMessagePath(owner.username) : null;
 const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
@@ -6152,6 +6660,7 @@ const jsonLd = [
             <span data-followers={business.id}>{followersLabel(business.followers_count)}</span>
             {business.posts_count > 0 && <span> · {business.posts_count} {business.posts_count === 1 ? "publicación" : "publicaciones"}</span>}
           </p>
+          <RatingBadge sum={business.rating_sum} count={business.rating_count} href="#resenas" variant="full" class="mt-1" />
         </div>
         <div class="flex flex-wrap gap-2">
           {!canEdit && isPublic && <FollowButton kind="business" id={business.id} following={following} returnTo={`/e/${business.slug}`} />}
@@ -6195,6 +6704,25 @@ const jsonLd = [
                 {catalog.products.map((item) => <CatalogItemCard item={item} />)}
               </div>
             </section>
+          )}
+
+          {isPublic && (
+            <ReviewsSection
+              subjectName={business.name}
+              sum={business.rating_sum}
+              count={business.rating_count}
+              dist={business.rating_dist}
+              reviews={reviews}
+              eligibility={reviewState.eligibility}
+              mine={reviewState.mine}
+              writeHref={writeReviewPath({ type: "business", slug: business.slug })}
+              canReply={canEdit}
+              viewerId={user?.id}
+              returnTo={`/e/${business.slug}`}
+              seeAllHref={`/e/${business.slug}/resenas`}
+              notice={reviewNotice}
+              error={reviewForms.error}
+            />
           )}
 
           {(businessPosts.length > 0 || canEdit) && (
@@ -6271,6 +6799,73 @@ const jsonLd = [
     </div>
   </article>
   <div class="h-16"></div>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/e/[slug]/resenas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Todas las reseñas de un emprendimiento: /e/[slug]/resenas (paginadas). */
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import { getBusinessBySlug } from "../../../services/businesses";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
+import { businessPath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const slug = (Astro.params.slug ?? "").toLowerCase();
+if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return Astro.rewrite("/404");
+const business = await getBusinessBySlug(supabase, slug, { withContact: false });
+if (!business || business.status !== "active") return Astro.rewrite("/404");
+
+const base = `${businessPath(business.slug)}/resenas`;
+const forms = handleReviewActions(Astro, base);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const subject = { type: "business", id: business.id } as const;
+const [{ reviews, hasMore }, state, { data: membership }] = await Promise.all([
+  getReviews(supabase, subject, { page }),
+  getViewerReviewState(supabase, user?.id, subject),
+  user
+    ? supabase.from("business_members").select("role").eq("business_id", business.id).eq("user_id", user.id).maybeSingle()
+    : Promise.resolve({ data: null }),
+]);
+if (page > 1 && reviews.length === 0) return Astro.redirect(base);
+---
+
+<BaseLayout
+  title={`Reseñas de ${business.name}`}
+  description={`Opiniones de clientes sobre ${business.name}${business.city ? ` en ${business.city.name}` : ""}.`}
+  canonicalPath={page > 1 ? `${base}?pagina=${page}` : base}
+  noindex={business.rating_count === 0}
+>
+  <div class="mx-auto max-w-3xl px-4 py-8">
+    <a href={businessPath(business.slug)} class="inline-flex items-center gap-2 text-sm font-medium text-ink-muted hover:text-ink">
+      <Avatar name={business.name} path={business.logo_path} purpose="logo" shape="rounded" size={24} />
+      ← {business.name}
+    </a>
+    <ReviewsSection
+      class="mt-4"
+      headingTag="h1"
+      subjectName={business.name}
+      sum={business.rating_sum}
+      count={business.rating_count}
+      dist={business.rating_dist}
+      reviews={reviews}
+      eligibility={state.eligibility}
+      mine={state.mine}
+      writeHref={writeReviewPath({ type: "business", slug: business.slug })}
+      canReply={Boolean(membership)}
+      viewerId={user?.id}
+      returnTo={base}
+      prevHref={page > 1 ? (page === 2 ? base : `${base}?pagina=${page - 1}`) : null}
+      nextHref={hasMore ? `${base}?pagina=${page + 1}` : null}
+      notice={REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null}
+      error={forms.error}
+    />
+  </div>
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -6757,6 +7352,8 @@ import Field from "../../components/ui/Field.astro";
 import TextArea from "../../components/ui/TextArea.astro";
 import Alert from "../../components/ui/Alert.astro";
 import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { writeReviewPath } from "../../services/reviews";
 import { budgetLabel, getNeed, getProposals, isOpen, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
 import type { ProposalView } from "../../services/needs";
 import { getMyBusinesses } from "../../services/businesses";
@@ -6955,6 +7552,11 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
                             </span>
                             <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
                           </div>
+                          {p.business ? (
+                            <RatingBadge sum={p.business.rating_sum} count={p.business.rating_count} href={`${businessPath(p.business.slug)}/resenas`} size={13} class="mt-0.5" />
+                          ) : (
+                            p.author && <RatingBadge sum={p.author.rating_sum} count={p.author.rating_count} href={`${profilePath(p.author.username)}/resenas`} size={13} class="mt-0.5" />
+                          )}
                           <p class="mt-1 flex flex-wrap gap-x-4 text-sm">
                             <span><span class="text-ink-muted">Precio:</span> <strong>{p.amount != null ? formatMoney(p.amount) : "A convenir"}</strong></span>
                             {p.availability && <span><span class="text-ink-muted">Disponibilidad:</span> {p.availability}</span>}
@@ -6971,6 +7573,14 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
                             {p.author && (
                               <Button href={newMessagePath(p.author.username)} size="sm" variant="secondary" data-open-chat={p.author.username}>
                                 {p.status === "accepted" ? "Ir al chat" : "Preguntar"}
+                              </Button>
+                            )}
+                            {p.status === "accepted" && (p.business || p.author) && (
+                              <Button
+                                href={p.business ? writeReviewPath({ type: "business", slug: p.business.slug }) : writeReviewPath({ type: "profile", username: p.author!.username })}
+                                size="sm"
+                              >
+                                ★ Calificar
                               </Button>
                             )}
                             {p.status === "pending" && (
@@ -7324,6 +7934,8 @@ import { needPath, postPath, profilePath } from "../lib/urls";
 const { supabase, user } = Astro.locals;
 const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
 const { items, nextCursor } = await getNotifications(supabase, user!.id, cursor);
+const { data: me } = await supabase.from("profiles").select("username").eq("id", user!.id).single();
+const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
 if (items.some((n) => !n.read_at)) await markAllRead(supabase);
 
 function describe(n: NotificationView) {
@@ -7375,6 +7987,28 @@ function describe(n: NotificationView) {
         icon: "!",
         tone: "bg-seek text-white",
       };
+    case "review_received": {
+      const where = n.business ? `/e/${n.business.slug}/resenas` : `/u/${me?.username}/resenas`;
+      return {
+        name,
+        text: `calificó ${n.business ? `a ${n.business.name}` : "tu trabajo"}${n.review ? ` con ${stars(n.review.rating)}` : ""}.`,
+        quote: n.review?.body ?? undefined,
+        href: n.review ? `${where}#r-${n.review.id}` : where,
+        icon: "★",
+        tone: "bg-star text-white",
+      };
+    }
+    case "review_reply": {
+      const where = n.business ? `/e/${n.business.slug}/resenas` : n.actor ? `/u/${n.actor.username}/resenas` : "#";
+      return {
+        name,
+        text: "respondió tu reseña:",
+        quote: n.review?.reply ?? undefined,
+        href: n.review ? `${where}#r-${n.review.id}` : where,
+        icon: "💬",
+        tone: "bg-seek text-white",
+      };
+    }
     default:
       return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }
@@ -7389,7 +8023,7 @@ function describe(n: NotificationView) {
       items.length === 0 ? (
         <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
-          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga o te mande una propuesta, te avisamos acá.</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga, te mande una propuesta o te califique, te avisamos acá.</p>
         </div>
       ) : (
         <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
@@ -9051,6 +9685,211 @@ const intents = [
 </AuthLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/resenas/escribir.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Escribir o editar una reseña:
+ *   /resenas/escribir?emprendimiento=<slug>
+ *   /resenas/escribir?persona=<usuario>
+ * Solo si la base dice que hubo un trato real (contrató o hablaron por
+ * mensajes). Ruta protegida por el middleware.
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import { canReview, getEligibility, getMyReview, RATING_WORDS } from "../../services/reviews";
+import type { ReviewSubject } from "../../services/reviews";
+import { displayName } from "../../services/profiles";
+import { getSubmittedForm } from "../../utils/form";
+import { businessPath, profilePath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const slug = (Astro.url.searchParams.get("emprendimiento") ?? "").toLowerCase();
+const username = (Astro.url.searchParams.get("persona") ?? "").toLowerCase();
+
+let subject: ReviewSubject | null = null;
+let name = "";
+let avatar: string | null = null;
+let isBusiness = false;
+let back = "/";
+
+if (slug && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
+  const { data } = await supabase.from("businesses").select("id, slug, name, logo_path").eq("slug", slug).eq("status", "active").is("deleted_at", null).maybeSingle();
+  if (data) {
+    subject = { type: "business", id: data.id };
+    name = data.name;
+    avatar = data.logo_path;
+    isBusiness = true;
+    back = businessPath(data.slug);
+  }
+} else if (username && /^[a-z0-9_.]{3,30}$/.test(username)) {
+  const { data } = await supabase.from("profiles").select("id, username, first_name, last_name, avatar_path").eq("username", username).eq("status", "active").maybeSingle();
+  if (data) {
+    subject = { type: "profile", id: data.id };
+    name = displayName(data);
+    avatar = data.avatar_path;
+    back = profilePath(data.username);
+  }
+}
+if (!subject) return Astro.rewrite("/404");
+
+const result = Astro.getActionResult(actions.reviews.save);
+if (result && !result.error) {
+  return Astro.redirect(`${back}?resena=${result.data.created ? "publicada" : "editada"}#r-${result.data.id}`, 303);
+}
+
+const [eligibility, mine] = await Promise.all([getEligibility(supabase, subject), getMyReview(supabase, user!.id, subject)]);
+const allowed = Boolean(mine) || canReview(eligibility);
+// El formulario vuelve a esta misma URL (con ?emprendimiento= o ?persona=).
+const subjectQuery = isBusiness ? `emprendimiento=${encodeURIComponent(slug)}` : `persona=${encodeURIComponent(username)}`;
+const saveAction = `/resenas/escribir?${subjectQuery}&${String(actions.reviews.save).replace(/^\?/, "")}`;
+
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const rating = Number(submitted?.get("rating") ?? mine?.rating ?? 0);
+const body = submitted ? String(submitted.get("body") ?? "") : (mine?.body ?? "");
+
+const reasons: Record<string, string> = {
+  self: "No podés calificarte a vos mismo ni a tu propio emprendimiento.",
+  blocked: "No podés calificar a esta cuenta.",
+  unavailable: "Esta cuenta no está disponible.",
+  invalid: "Esta cuenta no está disponible.",
+  login: "Ingresá para opinar.",
+  none: `Para que las opiniones sean reales, solo pueden opinar quienes contrataron a ${name} desde Necesidades o hablaron por mensajes en WorkLink (los dos escribieron).`,
+};
+---
+
+<BaseLayout title={mine ? `Editar tu reseña de ${name}` : `Opinar sobre ${name}`} noindex>
+  <section class="mx-auto max-w-xl px-4 py-8">
+    <a href={back} class="text-sm font-medium text-ink-muted hover:text-ink">← {name}</a>
+
+    <div class="mt-4 flex items-center gap-3">
+      <Avatar name={name} path={avatar} purpose={isBusiness ? "logo" : "avatar"} shape={isBusiness ? "rounded" : "circle"} size={56} />
+      <div class="min-w-0">
+        <h1 class="text-2xl font-bold">{mine ? "Editar tu reseña" : "¿Cómo te fue?"}</h1>
+        <p class="truncate text-ink-muted">{name}</p>
+      </div>
+    </div>
+
+    {
+      !allowed ? (
+        <div class="mt-6 rounded-wl-lg border border-line bg-surface p-6">
+          <p>{reasons[eligibility] ?? reasons.none}</p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <Button href={back} variant="secondary">Volver</Button>
+            {eligibility === "none" && <Button href="/necesidades/nueva">Publicar una necesidad</Button>}
+          </div>
+        </div>
+      ) : (
+        <>
+          {eligibility === "hired" && !mine && (
+            <p class="mt-4 rounded-wl bg-success-soft px-3 py-2 text-sm">Tu reseña va a llevar la marca <strong>“Contrató por WorkLink”</strong> porque aceptaste una propuesta.</p>
+          )}
+          {formError && <Alert tone="danger" class="mt-4">{formError}</Alert>}
+
+          <form method="POST" action={saveAction} class="mt-6 flex flex-col gap-6" novalidate>
+            <input type="hidden" name="subject_type" value={subject.type} />
+            <input type="hidden" name="subject_id" value={subject.id} />
+            {mine && <input type="hidden" name="review_id" value={mine.id} />}
+
+            <fieldset aria-describedby={fieldErrors.rating ? "rating-error" : undefined}>
+              <legend class="text-sm font-medium">Tu calificación</legend>
+              <div class="star-input mt-2" data-star-input>
+                {[5, 4, 3, 2, 1].map((n) => (
+                  <>
+                    <input type="radio" id={`rating-${n}`} name="rating" value={n} checked={rating === n} required class="sr-only" />
+                    <label for={`rating-${n}`} title={RATING_WORDS[n]} class="cursor-pointer p-0.5">
+                      <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true">
+                        <path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8L12 2.8Z" fill="currentColor" />
+                      </svg>
+                      <span class="sr-only">{n === 1 ? "1 estrella" : `${n} estrellas`}: {RATING_WORDS[n]}</span>
+                    </label>
+                  </>
+                ))}
+              </div>
+              <p class="mt-1 h-5 text-sm font-medium" data-star-word aria-live="polite">{rating ? RATING_WORDS[rating] : ""}</p>
+              {fieldErrors.rating && <p id="rating-error" class="text-sm text-danger" role="alert">{fieldErrors.rating[0]}</p>}
+            </fieldset>
+
+            <div class="flex flex-col gap-1.5">
+              <label for="body" class="text-sm font-medium">Tu opinión (opcional)</label>
+              <textarea
+                id="body"
+                name="body"
+                rows="5"
+                maxlength="1000"
+                class="w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+                placeholder="¿Qué tal la atención, la calidad, el precio y los tiempos? Contalo para ayudar a otras personas."
+                aria-invalid={fieldErrors.body ? "true" : undefined}
+              >{body}</textarea>
+              {fieldErrors.body && <p class="text-sm text-danger" role="alert">{fieldErrors.body[0]}</p>}
+              <p class="text-xs text-ink-muted">Tu reseña es pública y lleva tu nombre. No incluyas teléfonos ni datos personales.</p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <Button type="submit" size="lg">{mine ? "Guardar cambios" : "Publicar reseña"}</Button>
+              <Button href={back} variant="ghost" size="lg">Cancelar</Button>
+            </div>
+          </form>
+
+          {mine && (
+            <form method="POST" action={`${back}${actions.reviews.remove}`} class="mt-6 border-t border-line pt-4" data-review-confirm="¿Borrar tu reseña? No se puede deshacer.">
+              <input type="hidden" name="review_id" value={mine.id} />
+              <button type="submit" class="text-sm font-medium text-danger hover:underline">Borrar mi reseña</button>
+            </form>
+          )}
+        </>
+      )
+    }
+  </section>
+</BaseLayout>
+
+<style>
+  /* Estrellas para elegir: el orden visual es 1→5 aunque en el HTML vayan 5→1. */
+  .star-input {
+    display: flex;
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    color: var(--wl-line);
+  }
+  .star-input label {
+    border-radius: 0.5rem;
+    transition: transform 0.1s;
+  }
+  .star-input input:checked ~ label,
+  .star-input label:hover,
+  .star-input label:hover ~ label {
+    color: var(--wl-star);
+  }
+  .star-input:hover input:checked ~ label:not(:hover, :hover ~ label) {
+    color: var(--wl-line);
+  }
+  .star-input input:focus-visible + label {
+    outline: 2px solid var(--wl-brand);
+    outline-offset: 2px;
+  }
+  .star-input label:active {
+    transform: scale(0.92);
+  }
+</style>
+
+<script>
+  import { RATING_WORDS } from "../../services/reviews";
+  const word = document.querySelector<HTMLElement>("[data-star-word]");
+  document.querySelector("[data-star-input]")?.addEventListener("change", (event) => {
+    const input = event.target as HTMLInputElement;
+    if (word) word.textContent = RATING_WORDS[Number(input.value)] ?? "";
+  });
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-review-confirm]");
+    if (form && !window.confirm(form.dataset.reviewConfirm!)) event.preventDefault();
+  });
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/robots.txt.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 
@@ -9582,6 +10421,10 @@ import { getViewerProfile } from "../../../lib/viewer";
 import { routes } from "../../../config/site";
 import { newMessagePath } from "../../../services/messages";
 import Alert from "../../../components/ui/Alert.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import RatingBadge from "../../../components/reviews/RatingBadge.astro";
+import { canReview, getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
 
 const { supabase, user } = Astro.locals;
 const username = (Astro.params.username ?? "").toLowerCase();
@@ -9591,13 +10434,20 @@ const profile = await getPublicProfile(supabase, username, { withContact: Boolea
 if (!profile) return Astro.rewrite("/404");
 
 const isMe = user?.id === profile.id;
+const reviewForms = handleReviewActions(Astro, `/u/${profile.username}`);
+if (reviewForms.redirect) return Astro.redirect(reviewForms.redirect, 303);
+const reviewSubject = { type: "profile", id: profile.id } as const;
 const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-const [businesses, { posts, nextCursor }, following, viewer] = await Promise.all([
+const [businesses, { posts, nextCursor }, following, viewer, { reviews }, reviewState] = await Promise.all([
   getPublicBusinessesByOwner(supabase, profile.id),
   getFeed(supabase, { authorId: profile.id, cursor }),
   isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
   isMe ? getViewerProfile(Astro.locals) : Promise.resolve(null),
+  cursor ? Promise.resolve({ reviews: [], hasMore: false }) : getReviews(supabase, reviewSubject, { limit: 3 }),
+  getViewerReviewState(supabase, user?.id, reviewSubject),
 ]);
+const showReviews = !cursor && (profile.rating_count > 0 || Boolean(reviewState.mine) || canReview(reviewState.eligibility));
+const reviewNotice = REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null;
 const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 const name = displayName(profile);
 const base = `/u/${profile.username}`;
@@ -9618,6 +10468,7 @@ const firstName = profile.first_name ?? name;
           <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
           {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
         </p>
+        <RatingBadge sum={profile.rating_sum} count={profile.rating_count} href="#resenas" variant="full" class="mt-1" />
       </div>
       <div class="flex flex-wrap gap-2 sm:pb-2">
         {
@@ -9692,6 +10543,24 @@ const firstName = profile.first_name ?? name;
       </aside>
 
       <div class="flex min-w-0 flex-col gap-4 pb-16">
+        {showReviews && (
+          <ReviewsSection
+            class="rounded-wl-lg border border-line bg-surface p-4"
+            subjectName={name}
+            sum={profile.rating_sum}
+            count={profile.rating_count}
+            reviews={reviews}
+            eligibility={reviewState.eligibility}
+            mine={reviewState.mine}
+            writeHref={writeReviewPath({ type: "profile", username: profile.username })}
+            canReply={isMe}
+            viewerId={user?.id}
+            returnTo={base}
+            seeAllHref={`${base}/resenas`}
+            notice={reviewNotice}
+            error={reviewForms.error}
+          />
+        )}
         {isMe && viewer && !cursor && <Composer viewer={viewer} />}
         <h2 class="text-lg font-semibold">Publicaciones</h2>
         {
@@ -9746,6 +10615,62 @@ Astro.response.headers.set("X-Robots-Tag", "noindex");
   nextHref={nextCursor ? `${base}?desde=${nextCursor}` : null}
   nextFragmentHref={nextCursor ? `${base}/mas?desde=${nextCursor}` : null}
 />
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/u/[username]/resenas.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Todas las reseñas de una persona: /u/[usuario]/resenas (paginadas). */
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import { displayName, getPublicProfile } from "../../../services/profiles";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
+import { profilePath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.params.username ?? "").toLowerCase();
+if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Astro.rewrite("/404");
+const profile = await getPublicProfile(supabase, username, { withContact: false });
+if (!profile) return Astro.rewrite("/404");
+
+const base = `${profilePath(profile.username)}/resenas`;
+const forms = handleReviewActions(Astro, base);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const subject = { type: "profile", id: profile.id } as const;
+const [{ reviews, hasMore }, state] = await Promise.all([getReviews(supabase, subject, { page }), getViewerReviewState(supabase, user?.id, subject)]);
+if (page > 1 && reviews.length === 0) return Astro.redirect(base);
+const name = displayName(profile);
+---
+
+<BaseLayout title={`Reseñas de ${name}`} noindex>
+  <div class="mx-auto max-w-3xl px-4 py-8">
+    <a href={profilePath(profile.username)} class="inline-flex items-center gap-2 text-sm font-medium text-ink-muted hover:text-ink">
+      <Avatar name={name} path={profile.avatar_path} size={24} />
+      ← {name}
+    </a>
+    <ReviewsSection
+      class="mt-4"
+      headingTag="h1"
+      subjectName={name}
+      sum={profile.rating_sum}
+      count={profile.rating_count}
+      reviews={reviews}
+      eligibility={state.eligibility}
+      mine={state.mine}
+      writeHref={writeReviewPath({ type: "profile", username: profile.username })}
+      canReply={user?.id === profile.id}
+      viewerId={user?.id}
+      returnTo={base}
+      prevHref={page > 1 ? (page === 2 ? base : `${base}?pagina=${page - 1}`) : null}
+      nextHref={hasMore ? `${base}?pagina=${page + 1}` : null}
+      notice={REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null}
+      error={forms.error}
+    />
+  </div>
+</BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/auth.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -10370,6 +11295,51 @@ export const profileSchema = z.object({
 });
 
 export type ProfileInput = z.infer<typeof profileSchema>;
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/schemas/review.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+import { optionalText } from "./common";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const uuid = z.string().regex(UUID);
+const emptyToUndefined = (value: unknown) => (value === "" || value === null ? undefined : value);
+
+export const reviewSchema = z.object({
+  subject_type: z.enum(["business", "profile"]),
+  subject_id: uuid,
+  review_id: z.preprocess(emptyToUndefined, uuid.optional()),
+  rating: z.coerce
+    .number({ error: "Elegí de 1 a 5 estrellas" })
+    .int({ error: "Elegí de 1 a 5 estrellas" })
+    .min(1, { error: "Elegí de 1 a 5 estrellas" })
+    .max(5, { error: "Elegí de 1 a 5 estrellas" }),
+  body: optionalText(1000, "El comentario"),
+});
+
+export const reviewRefSchema = z.object({ review_id: uuid });
+
+export const replySchema = z.object({
+  review_id: uuid,
+  reply: optionalText(1000, "La respuesta"),
+});
+
+export const REPORT_REASONS = {
+  spam: "Spam o publicidad",
+  offensive: "Ofensiva o discriminatoria",
+  fake: "Es falsa (no hubo trato real)",
+  scam: "Estafa o engaño",
+  other: "Otro motivo",
+} as const;
+
+export const reportSchema = z.object({
+  target_type: z.enum(["review"]),
+  target_id: uuid,
+  reason: z.enum(Object.keys(REPORT_REASONS) as [keyof typeof REPORT_REASONS, ...(keyof typeof REPORT_REASONS)[]], {
+    error: "Elegí un motivo",
+  }),
+  details: optionalText(500, "El detalle"),
+});
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/social.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11386,7 +12356,7 @@ import type { Business, CatalogItem } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
 const BASE_COLUMNS = `id, owner_id, slug, name, tagline, description, logo_path, cover_path, status, verification,
-  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count,
+  instagram, facebook, tiktok, website, hours, availability, followers_count, posts_count, rating_sum, rating_count, rating_dist,
   created_at, updated_at,
   categories ( id, name, slug, seo_noun ),
   cities ( ${CITY_EMBED} ),
@@ -12055,8 +13025,17 @@ export interface ProposalView {
   availability: string | null;
   status: ProposalStatus;
   created_at: string;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null; headline: string | null } | null;
-  business: { slug: string; name: string; logo_path: string | null } | null;
+  author: {
+    username: string;
+    first_name: string | null;
+    last_name: string | null;
+    avatar_path: string | null;
+    verified_at: string | null;
+    headline: string | null;
+    rating_sum: number;
+    rating_count: number;
+  } | null;
+  business: { slug: string; name: string; logo_path: string | null; rating_sum: number; rating_count: number } | null;
 }
 
 const NEED_COLUMNS = `id, slug, title, description, author_id, category_id, subcategory_id, city_id, needed_by,
@@ -12067,8 +13046,8 @@ const NEED_COLUMNS = `id, slug, title, description, author_id, category_id, subc
   city:cities ( name, slug, provinces ( name, slug ) )`;
 
 const PROPOSAL_COLUMNS = `id, need_id, author_id, business_id, message, amount, availability, status, created_at,
-  author:profiles!proposals_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at, headline ),
-  business:businesses ( slug, name, logo_path )`;
+  author:profiles!proposals_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at, headline, rating_sum, rating_count ),
+  business:businesses ( slug, name, logo_path, rating_sum, rating_count )`;
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 const toNeed = (row: NeedView): NeedView => ({ ...row, budget_min: num(row.budget_min), budget_max: num(row.budget_max) });
@@ -12185,7 +13164,9 @@ export type NotificationType =
   | "business_follow"
   | "need_proposal"
   | "proposal_accepted"
-  | "need_match";
+  | "need_match"
+  | "review_received"
+  | "review_reply";
 
 export interface NotificationView {
   id: string;
@@ -12197,6 +13178,7 @@ export interface NotificationView {
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
   need: { id: string; slug: string; title: string } | null;
+  review: { id: string; rating: number; body: string | null; reply: string | null; business_id: string | null; profile_id: string | null } | null;
 }
 
 export const NOTIFICATIONS_PAGE = 30;
@@ -12206,7 +13188,8 @@ const COLUMNS = `id, type, created_at, read_at,
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
   business:businesses ( slug, name ),
-  need:needs ( id, slug, title )`;
+  need:needs ( id, slug, title ),
+  review:reviews ( id, rating, body, reply, business_id, profile_id )`;
 
 export async function getNotifications(
   supabase: SupabaseClient,
@@ -12522,7 +13505,7 @@ import type { Profile } from "../types/domain";
 import { CITY_EMBED, toCityRef } from "./locations";
 
 const PUBLIC_COLUMNS = `id, username, first_name, last_name, bio, avatar_path, situation, headline, verified_at, intent,
-  instagram, facebook, tiktok, website, followers_count, following_count, created_at, cities ( ${CITY_EMBED} )`;
+  instagram, facebook, tiktok, website, followers_count, following_count, rating_sum, rating_count, created_at, cities ( ${CITY_EMBED} )`;
 
 /** Columnas de contacto directo: solo para usuarios logueados (RLS por columnas). */
 const CONTACT_COLUMNS = "whatsapp, phone";
@@ -12582,6 +13565,109 @@ export function profileCompleteness(profile: Profile): { percent: number; missin
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/services/reviews.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * Reseñas de emprendimientos y personas. Quién puede opinar, los promedios y
+ * las respuestas los controla la base (RLS + funciones); acá solo se leen.
+ */
+
+export type ReviewSubject = { type: "business"; id: string } | { type: "profile"; id: string };
+
+/** Respuesta de la base sobre si el usuario actual puede opinar. */
+export type ReviewEligibility = "hired" | "contacted" | "login" | "invalid" | "self" | "unavailable" | "blocked" | "none";
+
+export interface ReviewView {
+  id: string;
+  author_id: string;
+  business_id: string | null;
+  profile_id: string | null;
+  rating: number;
+  body: string | null;
+  verified: boolean;
+  reply: string | null;
+  reply_at: string | null;
+  status: "published" | "hidden" | "removed";
+  created_at: string;
+  edited_at: string | null;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
+}
+
+export const REVIEWS_PAGE = 10;
+
+const COLUMNS = `id, author_id, business_id, profile_id, rating, body, verified, reply, reply_at, status, created_at, edited_at,
+  author:profiles!reviews_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at )`;
+
+const column = (subject: ReviewSubject) => (subject.type === "business" ? "business_id" : "profile_id");
+
+/** Reseñas publicadas, de la más nueva a la más vieja. */
+export async function getReviews(
+  supabase: SupabaseClient,
+  subject: ReviewSubject,
+  { page = 1, limit = REVIEWS_PAGE }: { page?: number; limit?: number } = {},
+): Promise<{ reviews: ReviewView[]; hasMore: boolean }> {
+  const from = (page - 1) * limit;
+  const { data, error } = await supabase
+    .from("reviews")
+    .select(COLUMNS)
+    .eq(column(subject), subject.id)
+    .eq("status", "published")
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, from + limit);
+  if (error) throw error;
+  // Si la cuenta de quien opinó fue suspendida, RLS devuelve author null: se omite.
+  const rows = ((data ?? []) as unknown as ReviewView[]).filter((r) => r.author);
+  return { reviews: rows.slice(0, limit), hasMore: (data?.length ?? 0) > limit };
+}
+
+/** La reseña que el usuario ya escribió (para editarla), aunque esté oculta. */
+export async function getMyReview(supabase: SupabaseClient, userId: string, subject: ReviewSubject): Promise<ReviewView | null> {
+  const { data, error } = await supabase.from("reviews").select(COLUMNS).eq("author_id", userId).eq(column(subject), subject.id).maybeSingle();
+  if (error) throw error;
+  return (data as unknown as ReviewView) ?? null;
+}
+
+export async function getEligibility(supabase: SupabaseClient, subject: ReviewSubject): Promise<ReviewEligibility> {
+  const { data, error } = await supabase.rpc("review_eligibility", {
+    p_business_id: subject.type === "business" ? subject.id : null,
+    p_profile_id: subject.type === "profile" ? subject.id : null,
+  });
+  if (error) {
+    console.error("[reseñas]", error.message);
+    return "none";
+  }
+  return data as ReviewEligibility;
+}
+
+/** Lo que ve un usuario en la sección de reseñas: si puede opinar y si ya opinó. */
+export async function getViewerReviewState(supabase: SupabaseClient, userId: string | undefined, subject: ReviewSubject) {
+  if (!userId) return { eligibility: "login" as ReviewEligibility, mine: null };
+  const [eligibility, mine] = await Promise.all([getEligibility(supabase, subject), getMyReview(supabase, userId, subject)]);
+  return { eligibility, mine };
+}
+
+export const canReview = (e: ReviewEligibility) => e === "hired" || e === "contacted";
+
+/** Promedio con un decimal (null si no hay reseñas). */
+export function ratingAverage(sum: number, count: number): number | null {
+  return count > 0 ? Math.round((sum / count) * 10) / 10 : null;
+}
+
+const decimal = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+export const formatRating = (value: number) => decimal.format(value);
+
+export const reviewsLabel = (count: number) => (count === 1 ? "1 reseña" : `${count.toLocaleString("es-AR")} reseñas`);
+
+/** Enlace para escribir (o editar) una reseña. */
+export function writeReviewPath(subject: { type: "business"; slug: string } | { type: "profile"; username: string }): string {
+  return subject.type === "business" ? `/resenas/escribir?emprendimiento=${subject.slug}` : `/resenas/escribir?persona=${subject.username}`;
+}
+
+export const RATING_WORDS = ["", "Muy malo", "Malo", "Regular", "Bueno", "Excelente"] as const;
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/services/search.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPostsByIds, type PostView, type ProfileSituation } from "./posts";
@@ -12624,6 +13710,8 @@ export interface BusinessResult {
   verification: string;
   followers_count: number;
   posts_count: number;
+  rating_sum: number;
+  rating_count: number;
   category: { name: string; slug: string } | null;
   city: { name: string; slug: string; provinces: { name: string; slug: string } | null } | null;
 }
@@ -12675,7 +13763,7 @@ export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, l
   return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };
 }
 
-export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count,
+export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count, rating_sum, rating_count,
   category:categories ( name, slug ), city:cities ( name, slug, provinces ( name, slug ) )`;
 
 export async function searchBusinesses(
@@ -12914,6 +14002,7 @@ escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
   --wl-danger-soft: #fbe9e7;
   --wl-warning: #9a6200;
   --wl-warning-soft: #fdf3dc;
+  --wl-star: #cf7c00;
 
   /* Forma y tipografía */
   --wl-radius: 0.75rem;
@@ -12946,6 +14035,7 @@ escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
     --wl-danger-soft: #34171a;
     --wl-warning: #f3c063;
     --wl-warning-soft: #2f2412;
+    --wl-star: #f5b942;
     color-scheme: dark;
   }
 }
@@ -12970,6 +14060,7 @@ escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
   --wl-danger-soft: #34171a;
   --wl-warning: #f3c063;
   --wl-warning-soft: #2f2412;
+  --wl-star: #f5b942;
   color-scheme: dark;
 }
 
@@ -12995,6 +14086,7 @@ escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
   --color-danger-soft: var(--wl-danger-soft);
   --color-warning: var(--wl-warning);
   --color-warning-soft: var(--wl-warning-soft);
+  --color-star: var(--wl-star);
 
   --radius-wl: var(--wl-radius);
   --radius-wl-lg: var(--wl-radius-lg);
@@ -13069,6 +14161,8 @@ export interface Profile {
   website: string | null;
   followers_count: number;
   following_count: number;
+  rating_sum: number;
+  rating_count: number;
   created_at: string;
 }
 
@@ -13130,6 +14224,8 @@ export interface Business {
   posts_count: number;
   rating_sum: number;
   rating_count: number;
+  /** Cantidad de reseñas por estrella: [1★, 2★, 3★, 4★, 5★]. */
+  rating_dist: number[];
   created_at: string;
   updated_at: string;
 }
@@ -14722,13 +15818,647 @@ on conflict (key) do nothing;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002100_reviews_types.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0021 · Tipos para reseñas y denuncias (Etapa 11)
+-- =============================================================================
+-- Van en una migración aparte porque los valores nuevos de un enum no se
+-- pueden usar en la misma transacción en la que se agregan.
+-- =============================================================================
+
+alter type public.notification_type add value if not exists 'review_received';
+alter type public.notification_type add value if not exists 'review_reply';
+
+-- Qué se puede denunciar (se usa ahora para reseñas y en la Etapa 12 para el resto).
+create type public.report_target as enum ('review', 'post', 'comment', 'profile', 'business', 'need');
+create type public.report_reason as enum ('spam', 'offensive', 'fake', 'scam', 'other');
+create type public.report_status as enum ('open', 'resolved', 'dismissed');
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'supabase/migrations/20261008002200_reviews.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0022 · Reseñas, calificaciones y denuncias (Etapa 11)
+-- =============================================================================
+-- * Se califica a un emprendimiento o a una persona con 1 a 5 estrellas y un
+--   comentario opcional. Una reseña por persona y por emprendimiento/persona
+--   (se puede editar o borrar).
+-- * Solo opina quien tuvo un trato real (para evitar reseñas falsas):
+--     - "Contrató por WorkLink": aceptó una propuesta de ese emprendimiento o
+--       de esa persona (Etapa 10). La reseña se marca como verificada.
+--     - "Habló por WorkLink": tienen una conversación privada en la que los
+--       DOS escribieron.
+--   Nadie se califica a sí mismo ni a su propio emprendimiento, y no se puede
+--   opinar si hay un bloqueo entre las partes.
+-- * El emprendimiento (dueño o editores) o la persona calificada puede
+--   responder una vez (y editar la respuesta).
+-- * Promedio y cantidad se guardan en businesses / profiles y los recalcula
+--   la base: nadie los puede tocar desde la app.
+-- * Denuncias: cualquiera con cuenta puede denunciar una reseña. Con 3
+--   denuncias de personas distintas (sin contar al emprendimiento calificado)
+--   la reseña se oculta hasta que moderación la revise (Etapa 12).
+-- * Avisos: reseña nueva → al emprendimiento/persona; respuesta → a quien
+--   escribió la reseña.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Calificación de personas (los emprendimientos ya tienen sus columnas)
+-- -----------------------------------------------------------------------------
+alter table public.profiles
+  add column if not exists rating_sum   integer not null default 0,
+  add column if not exists rating_count integer not null default 0,
+  add constraint profiles_rating_nonneg check (rating_sum >= 0 and rating_count >= 0);
+
+grant select (rating_sum, rating_count) on public.profiles to anon;
+
+-- Protección del perfil: se suman los campos de calificación.
+create or replace function public.tg_profiles_protect()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if new.id <> old.id or new.created_at <> old.created_at then
+    raise exception 'No se pueden modificar id ni created_at' using errcode = '42501';
+  end if;
+
+  if new.followers_count <> old.followers_count
+     or new.following_count <> old.following_count
+     or new.plan_tier <> old.plan_tier
+     or new.rating_sum <> old.rating_sum
+     or new.rating_count <> old.rating_count then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+
+  if new.verified_at is distinct from old.verified_at and not (select public.has_role('admin')) then
+    raise exception 'Solo la administración puede verificar cuentas' using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status and not (select public.has_role('moderator')) then
+    raise exception 'Solo moderación puede cambiar el estado de una cuenta' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- Reseñas
+-- -----------------------------------------------------------------------------
+create table public.reviews (
+  id             uuid primary key default gen_random_uuid(),
+  author_id      uuid not null references public.profiles (id) on delete cascade,
+  business_id    uuid references public.businesses (id) on delete cascade,
+  profile_id     uuid references public.profiles (id) on delete cascade,
+  proposal_id    uuid references public.proposals (id) on delete set null,
+  rating         smallint not null,
+  body           text,
+  verified       boolean not null default false,
+  reply          text,
+  reply_at       timestamptz,
+  status         public.content_status not null default 'published',
+  reports_count  integer not null default 0,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  edited_at      timestamptz,
+  constraint reviews_one_subject check (num_nonnulls(business_id, profile_id) = 1),
+  constraint reviews_not_self check (profile_id is null or profile_id <> author_id),
+  constraint reviews_rating check (rating between 1 and 5),
+  constraint reviews_body_len check (body is null or char_length(body) between 1 and 1000),
+  constraint reviews_reply_len check (reply is null or char_length(reply) between 1 and 1000),
+  constraint reviews_reports_nonneg check (reports_count >= 0)
+);
+
+create unique index reviews_one_per_business on public.reviews (author_id, business_id) where business_id is not null;
+create unique index reviews_one_per_profile on public.reviews (author_id, profile_id) where profile_id is not null;
+create index reviews_business_idx on public.reviews (business_id, created_at desc) where business_id is not null;
+create index reviews_profile_idx on public.reviews (profile_id, created_at desc) where profile_id is not null;
+create index reviews_author_idx on public.reviews (author_id, created_at desc);
+
+create trigger reviews_set_updated_at
+  before update on public.reviews
+  for each row execute function public.set_updated_at();
+
+alter table public.notifications
+  add column if not exists review_id uuid references public.reviews (id) on delete cascade;
+
+create unique index if not exists notifications_review_once
+  on public.notifications (recipient_id, review_id, type) where review_id is not null;
+
+-- -----------------------------------------------------------------------------
+-- ¿El usuario actual puede calificar a este emprendimiento o persona?
+-- Devuelve: 'hired' (contrató por WorkLink), 'contacted' (hablaron por
+-- mensajes), o el motivo por el que no: 'login', 'invalid', 'self',
+-- 'unavailable', 'blocked', 'none'.
+-- -----------------------------------------------------------------------------
+create or replace function public.review_eligibility(p_business_id uuid, p_profile_id uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  me     uuid := (select auth.uid());
+  target uuid;   -- la persona del otro lado (dueño del emprendimiento o la persona)
+begin
+  if me is null then
+    return 'login';
+  end if;
+  if num_nonnulls(p_business_id, p_profile_id) <> 1 then
+    return 'invalid';
+  end if;
+
+  if p_business_id is not null then
+    select b.owner_id into target
+    from public.businesses b
+    where b.id = p_business_id and b.status = 'active' and b.deleted_at is null;
+    if target is null then
+      return 'unavailable';
+    end if;
+    if exists (select 1 from public.business_members bm where bm.business_id = p_business_id and bm.user_id = me) then
+      return 'self';
+    end if;
+  else
+    select p.id into target from public.profiles p where p.id = p_profile_id and p.status = 'active';
+    if target is null then
+      return 'unavailable';
+    end if;
+    if target = me then
+      return 'self';
+    end if;
+  end if;
+
+  if public.is_blocked_between(me, target) then
+    return 'blocked';
+  end if;
+
+  -- Contrató: aceptó una propuesta de ese emprendimiento o de esa persona.
+  if exists (
+    select 1
+    from public.proposals pr
+    join public.needs n on n.id = pr.need_id
+    where pr.status = 'accepted'
+      and n.author_id = me
+      and (
+        (p_business_id is not null and pr.business_id = p_business_id)
+        or (p_profile_id is not null and pr.author_id = p_profile_id)
+      )
+  ) then
+    return 'hired';
+  end if;
+
+  -- Hablaron: conversación en la que escribieron los dos.
+  if exists (
+    select 1
+    from public.conversations c
+    where c.user_low = least(me, target) and c.user_high = greatest(me, target)
+      and exists (select 1 from public.messages m where m.conversation_id = c.id and m.sender_id = me)
+      and exists (select 1 from public.messages m where m.conversation_id = c.id and m.sender_id = target)
+  ) then
+    return 'contacted';
+  end if;
+
+  return 'none';
+end;
+$$;
+
+revoke execute on function public.review_eligibility(uuid, uuid) from public, anon;
+grant  execute on function public.review_eligibility(uuid, uuid) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- Promedios (los recalcula la base; nunca la app)
+-- -----------------------------------------------------------------------------
+create or replace function public.recompute_rating(p_business_id uuid, p_profile_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform set_config('worklink.counter_update', 'on', true);
+  if p_business_id is not null then
+    update public.businesses b
+    set rating_sum   = coalesce(s.total, 0),
+        rating_count = coalesce(s.cnt, 0),
+        rating_dist  = array[coalesce(s.d1, 0), coalesce(s.d2, 0), coalesce(s.d3, 0), coalesce(s.d4, 0), coalesce(s.d5, 0)]
+    from (
+      select sum(r.rating)::integer as total, count(*)::integer as cnt,
+             (count(*) filter (where r.rating = 1))::integer as d1,
+             (count(*) filter (where r.rating = 2))::integer as d2,
+             (count(*) filter (where r.rating = 3))::integer as d3,
+             (count(*) filter (where r.rating = 4))::integer as d4,
+             (count(*) filter (where r.rating = 5))::integer as d5
+      from public.reviews r
+      where r.business_id = p_business_id and r.status = 'published'
+    ) s
+    where b.id = p_business_id;
+  end if;
+  if p_profile_id is not null then
+    update public.profiles p
+    set rating_sum   = coalesce(s.total, 0),
+        rating_count = coalesce(s.cnt, 0)
+    from (
+      select sum(r.rating)::integer as total, count(*)::integer as cnt
+      from public.reviews r
+      where r.profile_id = p_profile_id and r.status = 'published'
+    ) s
+    where p.id = p_profile_id;
+  end if;
+  perform set_config('worklink.counter_update', 'off', true);
+end;
+$$;
+
+revoke execute on function public.recompute_rating(uuid, uuid) from public, anon, authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Reglas al escribir o editar una reseña
+-- -----------------------------------------------------------------------------
+-- (Sin SECURITY DEFINER: así is_system_call() distingue la app de la base.)
+create or replace function public.tg_reviews_before_write()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  eligibility text;
+begin
+  if new.body is not null then
+    new.body := nullif(btrim(new.body), '');
+  end if;
+
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.author_id     := (select auth.uid());
+    new.status        := 'published';
+    new.reply         := null;
+    new.reply_at      := null;
+    new.reports_count := 0;
+    new.edited_at     := null;
+    new.created_at    := now();
+
+    eligibility := public.review_eligibility(new.business_id, new.profile_id);
+    if eligibility = 'self' then
+      raise exception 'No podés calificarte a vos mismo' using errcode = '42501';
+    elsif eligibility = 'blocked' then
+      raise exception 'No podés calificar a esta persona' using errcode = '42501';
+    elsif eligibility in ('unavailable', 'invalid', 'login') then
+      raise exception 'No se puede calificar a esta cuenta' using errcode = '42501';
+    elsif eligibility = 'none' then
+      raise exception 'Solo pueden opinar quienes contrataron o hablaron por mensajes con esta cuenta en WorkLink'
+        using errcode = '42501';
+    end if;
+
+    new.verified := eligibility = 'hired';
+    if new.verified then
+      select pr.id into new.proposal_id
+      from public.proposals pr
+      join public.needs n on n.id = pr.need_id
+      where pr.status = 'accepted' and n.author_id = new.author_id
+        and ((new.business_id is not null and pr.business_id = new.business_id)
+          or (new.profile_id is not null and pr.author_id = new.profile_id))
+      order by pr.decided_at desc nulls last
+      limit 1;
+    else
+      new.proposal_id := null;
+    end if;
+
+    perform public.enforce_rate_limit(
+      (select count(*) from public.reviews r where r.author_id = new.author_id and r.created_at > now() - interval '24 hours'),
+      'limits.reviews_per_day', 10, 'Alcanzaste el límite de reseñas por día'
+    );
+    return new;
+  end if;
+
+  -- UPDATE: quien la escribió cambia estrellas y comentario; moderación, el estado.
+  if new.author_id <> old.author_id
+     or new.business_id is distinct from old.business_id
+     or new.profile_id is distinct from old.profile_id
+     or new.proposal_id is distinct from old.proposal_id
+     or new.verified <> old.verified
+     or new.reply is distinct from old.reply
+     or new.reply_at is distinct from old.reply_at
+     or new.reports_count <> old.reports_count
+     or new.created_at <> old.created_at then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+
+  if new.status is distinct from old.status and not (select public.has_role('moderator')) then
+    raise exception 'Solo moderación puede ocultar reseñas' using errcode = '42501';
+  end if;
+
+  if new.rating <> old.rating or new.body is distinct from old.body then
+    if old.author_id <> (select auth.uid()) then
+      raise exception 'Solo quien la escribió puede editar la reseña' using errcode = '42501';
+    end if;
+    new.edited_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger reviews_before_write
+  before insert or update on public.reviews
+  for each row execute function public.tg_reviews_before_write();
+
+create or replace function public.tg_reviews_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  recipient uuid;
+begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    perform public.recompute_rating(old.business_id, old.profile_id);
+  end if;
+  if tg_op in ('INSERT', 'UPDATE') then
+    if tg_op = 'INSERT' or new.rating <> old.rating or new.status <> old.status then
+      perform public.recompute_rating(new.business_id, new.profile_id);
+    end if;
+  end if;
+
+  if tg_op = 'INSERT' then
+    recipient := coalesce(
+      new.profile_id,
+      (select b.owner_id from public.businesses b where b.id = new.business_id)
+    );
+    if recipient is not null and recipient <> new.author_id then
+      insert into public.notifications (recipient_id, actor_id, type, business_id, review_id)
+      values (recipient, new.author_id, 'review_received', new.business_id, new.id)
+      on conflict do nothing;
+    end if;
+  end if;
+
+  return null;
+end;
+$$;
+
+create trigger reviews_after_write
+  after insert or update or delete on public.reviews
+  for each row execute function public.tg_reviews_after_write();
+
+-- -----------------------------------------------------------------------------
+-- Responder una reseña (emprendimiento o persona calificada)
+-- -----------------------------------------------------------------------------
+create or replace function public.reply_review(p_review_id uuid, p_reply text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me    uuid := (select auth.uid());
+  rv      public.reviews%rowtype;
+  v_reply text := nullif(btrim(coalesce(p_reply, '')), '');
+begin
+  if me is null then
+    raise exception 'Ingresá para responder' using errcode = '42501';
+  end if;
+
+  select * into rv from public.reviews r where r.id = p_review_id;
+  if rv.id is null or rv.status <> 'published' then
+    raise exception 'La reseña no existe' using errcode = '42501';
+  end if;
+
+  if not (
+    (rv.profile_id is not null and rv.profile_id = me)
+    or (rv.business_id is not null and exists (
+      select 1 from public.business_members bm where bm.business_id = rv.business_id and bm.user_id = me
+    ))
+  ) then
+    raise exception 'Solo el emprendimiento o la persona calificada puede responder' using errcode = '42501';
+  end if;
+
+  if v_reply is not null and char_length(v_reply) > 1000 then
+    raise exception 'La respuesta puede tener hasta 1000 caracteres' using errcode = '23514';
+  end if;
+
+  update public.reviews
+  set reply = v_reply,
+      reply_at = case when v_reply is null then null else now() end
+  where id = rv.id;
+
+  if v_reply is null then
+    delete from public.notifications where review_id = rv.id and type = 'review_reply';
+  elsif rv.author_id <> me and not public.is_blocked_between(rv.author_id, me) then
+    insert into public.notifications (recipient_id, actor_id, type, business_id, review_id)
+    values (rv.author_id, me, 'review_reply', rv.business_id, rv.id)
+    on conflict do nothing;
+  end if;
+end;
+$$;
+
+revoke execute on function public.reply_review(uuid, text) from public, anon;
+grant  execute on function public.reply_review(uuid, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Denuncias (genéricas; la revisión llega con el panel de la Etapa 12)
+-- -----------------------------------------------------------------------------
+create table public.reports (
+  id              uuid primary key default gen_random_uuid(),
+  reporter_id     uuid not null references public.profiles (id) on delete cascade,
+  target_type     public.report_target not null,
+  target_id       uuid not null,
+  reason          public.report_reason not null,
+  details         text,
+  status          public.report_status not null default 'open',
+  created_at      timestamptz not null default now(),
+  resolved_at     timestamptz,
+  resolved_by     uuid references public.profiles (id) on delete set null,
+  resolution_note text,
+  constraint reports_details_len check (details is null or char_length(details) <= 500),
+  constraint reports_note_len check (resolution_note is null or char_length(resolution_note) <= 500),
+  constraint reports_once unique (reporter_id, target_type, target_id)
+);
+
+create index reports_open_idx on public.reports (created_at) where status = 'open';
+create index reports_target_idx on public.reports (target_type, target_id);
+
+create or replace function public.tg_reports_before_write()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  ok boolean;
+begin
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if not (select public.has_role('moderator')) then
+      raise exception 'Solo moderación revisa denuncias' using errcode = '42501';
+    end if;
+    if new.reporter_id <> old.reporter_id or new.target_type <> old.target_type
+       or new.target_id <> old.target_id or new.created_at <> old.created_at then
+      raise exception 'Campo administrado por el sistema' using errcode = '42501';
+    end if;
+    if new.status <> old.status and new.status <> 'open' then
+      new.resolved_at := now();
+      new.resolved_by := (select auth.uid());
+    end if;
+    return new;
+  end if;
+
+  new.reporter_id := (select auth.uid());
+  new.status      := 'open';
+  new.created_at  := now();
+  new.resolved_at := null;
+  new.resolved_by := null;
+  new.resolution_note := null;
+  new.details     := nullif(btrim(coalesce(new.details, '')), '');
+
+  ok := case new.target_type
+    when 'review'   then exists (select 1 from public.reviews r where r.id = new.target_id and r.status = 'published' and r.author_id <> new.reporter_id)
+    when 'post'     then exists (select 1 from public.posts p where p.id = new.target_id and p.deleted_at is null and p.author_id <> new.reporter_id)
+    when 'comment'  then exists (select 1 from public.post_comments c where c.id = new.target_id and c.author_id <> new.reporter_id)
+    when 'profile'  then exists (select 1 from public.profiles p where p.id = new.target_id and p.id <> new.reporter_id)
+    when 'business' then exists (select 1 from public.businesses b where b.id = new.target_id and b.deleted_at is null and b.owner_id <> new.reporter_id)
+    when 'need'     then exists (select 1 from public.needs n where n.id = new.target_id and n.deleted_at is null and n.author_id <> new.reporter_id)
+    else false
+  end;
+  if not ok then
+    raise exception 'No se puede denunciar este contenido' using errcode = '42501';
+  end if;
+
+  perform public.enforce_rate_limit(
+    (select count(*) from public.reports r where r.reporter_id = new.reporter_id and r.created_at > now() - interval '24 hours'),
+    'limits.reports_per_day', 20, 'Alcanzaste el límite de denuncias por día'
+  );
+  return new;
+end;
+$$;
+
+create trigger reports_before_write
+  before insert or update on public.reports
+  for each row execute function public.tg_reports_before_write();
+
+-- Reseña denunciada por varias personas: se oculta hasta que moderación la vea.
+-- No cuentan las denuncias del propio emprendimiento/persona calificada (para
+-- que no puedan ocultar las reseñas negativas).
+create or replace function public.tg_reports_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  rv     public.reviews%rowtype;
+  total  integer;
+begin
+  if new.target_type <> 'review' then
+    return null;
+  end if;
+  select * into rv from public.reviews r where r.id = new.target_id;
+  if rv.id is null then
+    return null;
+  end if;
+
+  select count(*)::integer into total
+  from public.reports rp
+  where rp.target_type = 'review' and rp.target_id = rv.id and rp.status = 'open'
+    and rp.reporter_id is distinct from rv.profile_id
+    and not exists (
+      select 1 from public.business_members bm
+      where rv.business_id is not null and bm.business_id = rv.business_id and bm.user_id = rp.reporter_id
+    );
+
+  update public.reviews
+  set reports_count = total,
+      status = case
+        when status = 'published' and total >= public.setting_int('reviews.auto_hide_reports', 3) then 'hidden'::public.content_status
+        else status
+      end
+  where id = rv.id;
+  return null;
+end;
+$$;
+
+create trigger reports_after_insert
+  after insert on public.reports
+  for each row execute function public.tg_reports_after_insert();
+
+-- -----------------------------------------------------------------------------
+-- Seguridad (RLS)
+-- -----------------------------------------------------------------------------
+alter table public.reviews enable row level security;
+alter table public.reports enable row level security;
+
+create policy "reviews: públicas las publicadas" on public.reviews
+  for select to anon, authenticated
+  using (
+    status = 'published'
+    or author_id = (select auth.uid())
+    or (select public.has_role('moderator'))
+  );
+
+create policy "reviews: usuarios activos escriben" on public.reviews
+  for insert to authenticated
+  with check (author_id = (select auth.uid()) and (select public.is_active_user()));
+
+create policy "reviews: el autor edita" on public.reviews
+  for update to authenticated
+  using (author_id = (select auth.uid()))
+  with check (author_id = (select auth.uid()));
+
+create policy "reviews: moderación edita" on public.reviews
+  for update to authenticated
+  using ((select public.has_role('moderator')))
+  with check ((select public.has_role('moderator')));
+
+create policy "reviews: el autor o moderación borra" on public.reviews
+  for delete to authenticated
+  using (author_id = (select auth.uid()) or (select public.has_role('moderator')));
+
+revoke all on public.reviews from anon, authenticated;
+grant select on public.reviews to anon, authenticated;
+grant insert (business_id, profile_id, rating, body) on public.reviews to authenticated;
+grant update (rating, body, status) on public.reviews to authenticated;
+grant delete on public.reviews to authenticated;
+
+create policy "reports: cada uno ve las suyas, moderación todas" on public.reports
+  for select to authenticated
+  using (reporter_id = (select auth.uid()) or (select public.has_role('moderator')));
+
+create policy "reports: usuarios activos denuncian" on public.reports
+  for insert to authenticated
+  with check (reporter_id = (select auth.uid()) and (select public.is_active_user()));
+
+create policy "reports: moderación revisa" on public.reports
+  for update to authenticated
+  using ((select public.has_role('moderator')))
+  with check ((select public.has_role('moderator')));
+
+revoke all on public.reports from anon, authenticated;
+grant select on public.reports to authenticated;
+grant insert (target_type, target_id, reason, details) on public.reports to authenticated;
+grant update (status, resolution_note) on public.reports to authenticated;
+
+insert into public.settings (key, value, description) values
+  ('limits.reviews_per_day', '10', 'Reseñas por persona cada 24 h'),
+  ('limits.reports_per_day', '20', 'Denuncias por persona cada 24 h'),
+  ('reviews.auto_hide_reports', '3', 'Denuncias de personas distintas para ocultar una reseña hasta revisarla')
+on conflict (key) do nothing;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 160 archivos de la Etapa 10 instalados."
+echo " Listo. 173 archivos de la Etapa 11 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

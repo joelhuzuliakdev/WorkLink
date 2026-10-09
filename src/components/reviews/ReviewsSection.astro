@@ -1,0 +1,154 @@
+---
+/**
+ * Sección "Reseñas" de un emprendimiento o una persona: promedio, reparto de
+ * estrellas, botón para opinar (si corresponde) y la lista.
+ */
+import Button from "../ui/Button.astro";
+import Alert from "../ui/Alert.astro";
+import Stars from "./Stars.astro";
+import ReviewItem from "./ReviewItem.astro";
+import type { ReviewEligibility, ReviewView } from "../../services/reviews";
+import { canReview, formatRating, ratingAverage, reviewsLabel } from "../../services/reviews";
+import { routes } from "../../config/site";
+
+interface Props {
+  subjectName: string;
+  sum: number;
+  count: number;
+  /** Cantidad por estrella [1★..5★] (solo emprendimientos). */
+  dist?: number[] | null;
+  reviews: ReviewView[];
+  eligibility: ReviewEligibility;
+  mine: ReviewView | null;
+  writeHref: string;
+  canReply: boolean;
+  viewerId: string | undefined;
+  returnTo: string;
+  /** Enlace "Ver todas" (en la página del emprendimiento/perfil). */
+  seeAllHref?: string | null;
+  prevHref?: string | null;
+  nextHref?: string | null;
+  notice?: string | null;
+  error?: string | null;
+  /** "h2" en la página del emprendimiento; "h1" en la página de reseñas. */
+  headingTag?: "h1" | "h2";
+  class?: string;
+}
+
+const {
+  subjectName,
+  sum,
+  count,
+  dist,
+  reviews,
+  eligibility,
+  mine,
+  writeHref,
+  canReply,
+  viewerId,
+  returnTo,
+  seeAllHref,
+  prevHref,
+  nextHref,
+  notice,
+  error,
+  headingTag: Heading = "h2",
+  class: className = "",
+} = Astro.props;
+
+const avg = ratingAverage(sum, count);
+const bars = dist && dist.length === 5 && count > 0 ? [5, 4, 3, 2, 1].map((stars) => ({ stars, n: dist[stars - 1] ?? 0 })) : null;
+const loginHref = `${routes.login}?next=${encodeURIComponent(`${returnTo}#resenas`)}`;
+---
+
+<section id="resenas" class:list={["scroll-mt-20", className]} aria-labelledby="resenas-titulo">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <Heading id="resenas-titulo" class:list={[Heading === "h1" ? "text-2xl font-bold sm:text-3xl" : "text-xl font-semibold"]}>
+      {Heading === "h1" ? `Reseñas de ${subjectName}` : "Reseñas"}
+    </Heading>
+    {
+      mine ? (
+        <Button href={writeHref} variant="secondary" size="sm">Editar tu reseña</Button>
+      ) : canReview(eligibility) ? (
+        <Button href={writeHref} size="sm">Escribir una reseña</Button>
+      ) : eligibility === "login" ? (
+        <Button href={loginHref} variant="secondary" size="sm">Ingresá para opinar</Button>
+      ) : null
+    }
+  </div>
+
+  {notice && <Alert tone="success" class="mt-4">{notice}</Alert>}
+  {error && <Alert tone="danger" class="mt-4">{error}</Alert>}
+  {mine && mine.status !== "published" && (
+    <Alert tone="warning" class="mt-4">Tu reseña está oculta mientras la revisamos porque recibió denuncias.</Alert>
+  )}
+
+  {
+    avg !== null ? (
+      <div class="mt-4 flex flex-wrap items-center gap-x-8 gap-y-4 rounded-wl-lg border border-line bg-surface p-4">
+        <div class="text-center">
+          <p class="text-4xl font-bold leading-none">{formatRating(avg)}</p>
+          <Stars value={avg} size={18} class="mt-2" />
+          <p class="mt-1 text-sm text-ink-muted">{reviewsLabel(count)}</p>
+        </div>
+        {bars && (
+          <ul class="flex min-w-[12rem] flex-1 flex-col gap-1 text-sm" aria-label="Cantidad de reseñas por estrellas">
+            {bars.map(({ stars, n }) => (
+              <li class="flex items-center gap-2">
+                <span class="w-3 text-right text-ink-muted">{stars}</span>
+                <span class="text-star" aria-hidden="true">★</span>
+                <span class="h-2 flex-1 overflow-hidden rounded-full bg-surface-muted">
+                  <span class="block h-full rounded-full bg-star" style={`width:${Math.round((n / count) * 100)}%`} />
+                </span>
+                <span class="w-6 text-right text-ink-muted">{n}<span class="sr-only"> con {stars} {stars === 1 ? "estrella" : "estrellas"}</span></span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    ) : (
+      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-5 text-center text-sm text-ink-muted">
+        {canReview(eligibility) && !mine ? `Todavía no tiene reseñas. ¡Sé la primera persona en opinar sobre ${subjectName}!` : "Todavía no tiene reseñas."}
+      </p>
+    )
+  }
+
+  {
+    eligibility === "none" && !mine && (
+      <p class="mt-3 text-sm text-ink-muted">
+        Para cuidar que las opiniones sean reales, pueden opinar quienes lo contrataron desde <a href="/necesidades" class="font-medium text-brand hover:underline">Necesidades</a> o hablaron con {subjectName} por mensajes en WorkLink.
+      </p>
+    )
+  }
+
+  {
+    reviews.length > 0 && (
+      <div class="mt-2 divide-y divide-line">
+        {reviews.map((review) => (
+          <ReviewItem review={review} subjectName={subjectName} canReply={canReply} viewerId={viewerId} returnTo={returnTo} editHref={writeHref} />
+        ))}
+      </div>
+    )
+  }
+
+  {seeAllHref && count > reviews.length && (
+    <a href={seeAllHref} class="mt-2 inline-block font-semibold text-brand hover:underline">Ver las {reviewsLabel(count)} →</a>
+  )}
+
+  {
+    (prevHref || nextHref) && (
+      <nav class="mt-4 flex justify-between gap-4" aria-label="Páginas de reseñas">
+        {prevHref ? <Button href={prevHref} variant="secondary" size="sm">← Más nuevas</Button> : <span />}
+        {nextHref ? <Button href={nextHref} variant="secondary" size="sm">Más viejas →</Button> : <span />}
+      </nav>
+    )
+  }
+</section>
+
+<script>
+  // Confirmación antes de borrar una reseña o una respuesta.
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-review-confirm]");
+    if (form && !window.confirm(form.dataset.reviewConfirm!)) event.preventDefault();
+  });
+</script>

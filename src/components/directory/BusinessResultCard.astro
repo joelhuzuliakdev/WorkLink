@@ -3,6 +3,7 @@
 import Avatar from "../ui/Avatar.astro";
 import type { BusinessResult } from "../../services/search";
 import { followersLabel } from "../../services/social";
+import RatingBadge from "../reviews/RatingBadge.astro";
 
 interface Props {
   business: BusinessResult;
@@ -24,6 +25,7 @@ const meta = [hideCategory ? null : b.category?.name, b.city ? `${b.city.name}${
       {b.verification === "verified" && <span class="text-sm text-seek" title="Verificado">✓ Verificado</span>}
     </span>
     {meta && <span class="block truncate text-sm text-ink-muted">{meta}</span>}
+    <RatingBadge sum={b.rating_sum} count={b.rating_count} size={13} class="mt-0.5" />
     {b.tagline && <span class="mt-1 line-clamp-2 block text-sm">{b.tagline}</span>}
     <span class="mt-1 block text-xs text-ink-muted">
       {followersLabel(b.followers_count)}{b.posts_count > 0 && ` · ${b.posts_count} ${b.posts_count === 1 ? "publicación" : "publicaciones"}`}

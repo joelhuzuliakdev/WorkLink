@@ -21,6 +21,10 @@ import { breadcrumbJsonLd, businessJsonLd, jsonLdScript } from "../../lib/seo/bu
 import { routes } from "../../config/site";
 import { newMessagePath } from "../../services/messages";
 import { directoryPath } from "../../services/directory";
+import ReviewsSection from "../../components/reviews/ReviewsSection.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../lib/review-actions";
 
 const { supabase, user } = Astro.locals;
 const slug = (Astro.params.slug ?? "").toLowerCase();
@@ -34,12 +38,20 @@ const { data: membership } = user
   : { data: null };
 const canEdit = Boolean(membership);
 
-const [catalog, { posts: businessPosts }, following, { data: owner }] = await Promise.all([
+// Formularios de reseñas (responder, denunciar, borrar) enviados a esta página.
+const reviewForms = handleReviewActions(Astro, `/e/${business.slug}`);
+if (reviewForms.redirect) return Astro.redirect(reviewForms.redirect, 303);
+
+const reviewSubject = { type: "business", id: business.id } as const;
+const [catalog, { posts: businessPosts }, following, { data: owner }, { reviews }, reviewState] = await Promise.all([
   getCatalog(supabase, business.id, { onlyPublic: true }),
   getFeed(supabase, { businessId: business.id, limit: 6 }),
   isFollowing(supabase, user?.id, "business", business.id),
   supabase.from("profiles").select("username").eq("id", business.owner_id).eq("status", "active").maybeSingle(),
+  getReviews(supabase, reviewSubject, { limit: 3 }),
+  getViewerReviewState(supabase, user?.id, reviewSubject),
 ]);
+const reviewNotice = REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null;
 // Mensajes privados: le llegan a quien creó el emprendimiento.
 const messageHref = owner && owner.username && user?.id !== business.owner_id ? newMessagePath(owner.username) : null;
 const reactions = await getViewerReactions(supabase, user?.id, businessPosts.map((p) => p.id));
@@ -144,6 +156,7 @@ const jsonLd = [
             <span data-followers={business.id}>{followersLabel(business.followers_count)}</span>
             {business.posts_count > 0 && <span> · {business.posts_count} {business.posts_count === 1 ? "publicación" : "publicaciones"}</span>}
           </p>
+          <RatingBadge sum={business.rating_sum} count={business.rating_count} href="#resenas" variant="full" class="mt-1" />
         </div>
         <div class="flex flex-wrap gap-2">
           {!canEdit && isPublic && <FollowButton kind="business" id={business.id} following={following} returnTo={`/e/${business.slug}`} />}
@@ -187,6 +200,25 @@ const jsonLd = [
                 {catalog.products.map((item) => <CatalogItemCard item={item} />)}
               </div>
             </section>
+          )}
+
+          {isPublic && (
+            <ReviewsSection
+              subjectName={business.name}
+              sum={business.rating_sum}
+              count={business.rating_count}
+              dist={business.rating_dist}
+              reviews={reviews}
+              eligibility={reviewState.eligibility}
+              mine={reviewState.mine}
+              writeHref={writeReviewPath({ type: "business", slug: business.slug })}
+              canReply={canEdit}
+              viewerId={user?.id}
+              returnTo={`/e/${business.slug}`}
+              seeAllHref={`/e/${business.slug}/resenas`}
+              notice={reviewNotice}
+              error={reviewForms.error}
+            />
           )}
 
           {(businessPosts.length > 0 || canEdit) && (

@@ -16,6 +16,8 @@ import Field from "../../components/ui/Field.astro";
 import TextArea from "../../components/ui/TextArea.astro";
 import Alert from "../../components/ui/Alert.astro";
 import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { writeReviewPath } from "../../services/reviews";
 import { budgetLabel, getNeed, getProposals, isOpen, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
 import type { ProposalView } from "../../services/needs";
 import { getMyBusinesses } from "../../services/businesses";
@@ -214,6 +216,11 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
                             </span>
                             <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
                           </div>
+                          {p.business ? (
+                            <RatingBadge sum={p.business.rating_sum} count={p.business.rating_count} href={`${businessPath(p.business.slug)}/resenas`} size={13} class="mt-0.5" />
+                          ) : (
+                            p.author && <RatingBadge sum={p.author.rating_sum} count={p.author.rating_count} href={`${profilePath(p.author.username)}/resenas`} size={13} class="mt-0.5" />
+                          )}
                           <p class="mt-1 flex flex-wrap gap-x-4 text-sm">
                             <span><span class="text-ink-muted">Precio:</span> <strong>{p.amount != null ? formatMoney(p.amount) : "A convenir"}</strong></span>
                             {p.availability && <span><span class="text-ink-muted">Disponibilidad:</span> {p.availability}</span>}
@@ -230,6 +237,14 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
                             {p.author && (
                               <Button href={newMessagePath(p.author.username)} size="sm" variant="secondary" data-open-chat={p.author.username}>
                                 {p.status === "accepted" ? "Ir al chat" : "Preguntar"}
+                              </Button>
+                            )}
+                            {p.status === "accepted" && (p.business || p.author) && (
+                              <Button
+                                href={p.business ? writeReviewPath({ type: "business", slug: p.business.slug }) : writeReviewPath({ type: "profile", username: p.author!.username })}
+                                size="sm"
+                              >
+                                ★ Calificar
                               </Button>
                             )}
                             {p.status === "pending" && (

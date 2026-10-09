@@ -1,0 +1,64 @@
+---
+/** Todas las reseñas de un emprendimiento: /e/[slug]/resenas (paginadas). */
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import { getBusinessBySlug } from "../../../services/businesses";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
+import { businessPath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const slug = (Astro.params.slug ?? "").toLowerCase();
+if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return Astro.rewrite("/404");
+const business = await getBusinessBySlug(supabase, slug, { withContact: false });
+if (!business || business.status !== "active") return Astro.rewrite("/404");
+
+const base = `${businessPath(business.slug)}/resenas`;
+const forms = handleReviewActions(Astro, base);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const subject = { type: "business", id: business.id } as const;
+const [{ reviews, hasMore }, state, { data: membership }] = await Promise.all([
+  getReviews(supabase, subject, { page }),
+  getViewerReviewState(supabase, user?.id, subject),
+  user
+    ? supabase.from("business_members").select("role").eq("business_id", business.id).eq("user_id", user.id).maybeSingle()
+    : Promise.resolve({ data: null }),
+]);
+if (page > 1 && reviews.length === 0) return Astro.redirect(base);
+---
+
+<BaseLayout
+  title={`Reseñas de ${business.name}`}
+  description={`Opiniones de clientes sobre ${business.name}${business.city ? ` en ${business.city.name}` : ""}.`}
+  canonicalPath={page > 1 ? `${base}?pagina=${page}` : base}
+  noindex={business.rating_count === 0}
+>
+  <div class="mx-auto max-w-3xl px-4 py-8">
+    <a href={businessPath(business.slug)} class="inline-flex items-center gap-2 text-sm font-medium text-ink-muted hover:text-ink">
+      <Avatar name={business.name} path={business.logo_path} purpose="logo" shape="rounded" size={24} />
+      ← {business.name}
+    </a>
+    <ReviewsSection
+      class="mt-4"
+      headingTag="h1"
+      subjectName={business.name}
+      sum={business.rating_sum}
+      count={business.rating_count}
+      dist={business.rating_dist}
+      reviews={reviews}
+      eligibility={state.eligibility}
+      mine={state.mine}
+      writeHref={writeReviewPath({ type: "business", slug: business.slug })}
+      canReply={Boolean(membership)}
+      viewerId={user?.id}
+      returnTo={base}
+      prevHref={page > 1 ? (page === 2 ? base : `${base}?pagina=${page - 1}`) : null}
+      nextHref={hasMore ? `${base}?pagina=${page + 1}` : null}
+      notice={REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null}
+      error={forms.error}
+    />
+  </div>
+</BaseLayout>

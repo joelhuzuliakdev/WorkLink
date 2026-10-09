@@ -1,0 +1,147 @@
+---
+/**
+ * Una reseña: quién opinó, estrellas, comentario y la respuesta.
+ * - El emprendimiento/persona calificada puede responder (y editar o borrar la respuesta).
+ * - Quien la escribió puede editarla o borrarla.
+ * - Cualquiera con cuenta puede denunciarla.
+ */
+import { actions } from "astro:actions";
+import Avatar from "../ui/Avatar.astro";
+import Button from "../ui/Button.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import Stars from "./Stars.astro";
+import type { ReviewView } from "../../services/reviews";
+import { RATING_WORDS } from "../../services/reviews";
+import { REPORT_REASONS } from "../../schemas/review";
+import { displayName } from "../../services/profiles";
+import { formatDate, formatRelative } from "../../lib/format";
+import { profilePath } from "../../lib/urls";
+
+interface Props {
+  review: ReviewView;
+  subjectName: string;
+  canReply: boolean;
+  viewerId: string | undefined;
+  /** Página a la que vuelven los formularios. */
+  returnTo: string;
+  editHref: string;
+}
+
+const { review: r, subjectName, canReply, viewerId, returnTo, editHref } = Astro.props;
+const name = r.author ? displayName(r.author) : "Usuario";
+const isAuthor = viewerId === r.author_id;
+const canReport = Boolean(viewerId) && !isAuthor;
+const formAction = (action: string) => `${returnTo}${action}`;
+const textarea =
+  "w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+const summary = "cursor-pointer list-none text-sm font-medium text-ink-muted hover:text-ink [&::-webkit-details-marker]:hidden";
+---
+
+<article id={`r-${r.id}`} class="scroll-mt-24 py-4" data-review={r.id}>
+  <header class="flex items-start gap-3">
+    {r.author ? (
+      <a href={profilePath(r.author.username)} class="shrink-0" aria-label={`Perfil de ${name}`}>
+        <Avatar name={name} path={r.author.avatar_path} size={40} />
+      </a>
+    ) : (
+      <Avatar name={name} size={40} />
+    )}
+    <div class="min-w-0 flex-1">
+      <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span class="inline-flex min-w-0 items-center gap-1 font-semibold">
+          {r.author ? <a href={profilePath(r.author.username)} class="truncate hover:underline">{name}</a> : name}
+          {r.author?.verified_at && <VerifiedBadge size={13} />}
+        </span>
+        {r.verified && (
+          <span class="rounded-full bg-success-soft px-2 py-0.5 text-xs font-semibold text-success" title="Aceptó una propuesta por WorkLink">
+            Contrató por WorkLink
+          </span>
+        )}
+      </p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-ink-muted">
+        <Stars value={r.rating} size={15} />
+        <span class="font-medium text-ink">{RATING_WORDS[r.rating]}</span>
+        <span>·</span>
+        <time datetime={r.created_at} title={formatDate(r.created_at, { dateStyle: "long", timeStyle: "short" })}>{formatRelative(r.created_at)}</time>
+        {r.edited_at && <span>(editada)</span>}
+      </p>
+    </div>
+  </header>
+
+  {r.body && <p class="mt-2 whitespace-pre-line break-words sm:pl-[52px]">{r.body}</p>}
+
+  {
+    r.reply && (
+      <div class="mt-3 rounded-wl bg-surface-muted px-3 py-2 sm:ml-[52px]">
+        <p class="text-sm font-semibold">
+          Respuesta de {subjectName}
+          {r.reply_at && <span class="font-normal text-ink-muted"> · {formatRelative(r.reply_at)}</span>}
+        </p>
+        <p class="mt-1 whitespace-pre-line break-words text-sm">{r.reply}</p>
+      </div>
+    )
+  }
+
+  <div class="mt-2 flex flex-wrap items-start gap-x-4 gap-y-2 sm:pl-[52px]">
+    {
+      canReply && (
+        <details class="open:w-full">
+          <summary class={summary}>{r.reply ? "Editar respuesta" : "Responder"}</summary>
+          <form method="POST" action={formAction(actions.reviews.reply)} class="mt-2 flex flex-col gap-2">
+            <input type="hidden" name="review_id" value={r.id} />
+            <label for={`reply-${r.id}`} class="sr-only">Tu respuesta</label>
+            <textarea id={`reply-${r.id}`} name="reply" rows="3" maxlength="1000" required class={textarea} placeholder="Agradecé o aclarale algo a quien opinó. Todos ven tu respuesta.">{r.reply ?? ""}</textarea>
+            <div class="flex gap-2">
+              <Button type="submit" size="sm">{r.reply ? "Guardar respuesta" : "Publicar respuesta"}</Button>
+            </div>
+          </form>
+          {r.reply && (
+            <form method="POST" action={formAction(actions.reviews.reply)} class="mt-2" data-review-confirm="¿Borrar tu respuesta?">
+              <input type="hidden" name="review_id" value={r.id} />
+              <input type="hidden" name="reply" value="" />
+              <Button type="submit" size="sm" variant="ghost" class="text-danger">Borrar respuesta</Button>
+            </form>
+          )}
+        </details>
+      )
+    }
+
+    {
+      isAuthor && (
+        <>
+          <a href={editHref} class="text-sm font-medium text-ink-muted hover:text-ink">Editar</a>
+          <form method="POST" action={formAction(actions.reviews.remove)} data-review-confirm="¿Borrar tu reseña? No se puede deshacer.">
+            <input type="hidden" name="review_id" value={r.id} />
+            <button type="submit" class="text-sm font-medium text-danger hover:underline">Borrar</button>
+          </form>
+        </>
+      )
+    }
+
+    {
+      canReport && (
+        <details class="open:w-full">
+          <summary class={summary}>Denunciar</summary>
+          <form method="POST" action={formAction(actions.reviews.report)} class="mt-2 flex max-w-md flex-col gap-2 rounded-wl border border-line bg-surface p-3">
+            <input type="hidden" name="target_type" value="review" />
+            <input type="hidden" name="target_id" value={r.id} />
+            <fieldset>
+              <legend class="text-sm font-medium">¿Qué problema tiene esta reseña?</legend>
+              <div class="mt-1 flex flex-col gap-1">
+                {Object.entries(REPORT_REASONS).map(([value, label], i) => (
+                  <label class="flex items-center gap-2 text-sm">
+                    <input type="radio" name="reason" value={value} required checked={i === 0} class="accent-brand" />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label for={`details-${r.id}`} class="sr-only">Detalle (opcional)</label>
+            <textarea id={`details-${r.id}`} name="details" rows="2" maxlength="500" class={textarea} placeholder="Contanos más (opcional)"></textarea>
+            <div><Button type="submit" size="sm" variant="secondary">Enviar denuncia</Button></div>
+          </form>
+        </details>
+      )
+    }
+  </div>
+</article>

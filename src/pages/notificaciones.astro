@@ -17,6 +17,8 @@ import { needPath, postPath, profilePath } from "../lib/urls";
 const { supabase, user } = Astro.locals;
 const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
 const { items, nextCursor } = await getNotifications(supabase, user!.id, cursor);
+const { data: me } = await supabase.from("profiles").select("username").eq("id", user!.id).single();
+const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
 if (items.some((n) => !n.read_at)) await markAllRead(supabase);
 
 function describe(n: NotificationView) {
@@ -68,6 +70,28 @@ function describe(n: NotificationView) {
         icon: "!",
         tone: "bg-seek text-white",
       };
+    case "review_received": {
+      const where = n.business ? `/e/${n.business.slug}/resenas` : `/u/${me?.username}/resenas`;
+      return {
+        name,
+        text: `calificó ${n.business ? `a ${n.business.name}` : "tu trabajo"}${n.review ? ` con ${stars(n.review.rating)}` : ""}.`,
+        quote: n.review?.body ?? undefined,
+        href: n.review ? `${where}#r-${n.review.id}` : where,
+        icon: "★",
+        tone: "bg-star text-white",
+      };
+    }
+    case "review_reply": {
+      const where = n.business ? `/e/${n.business.slug}/resenas` : n.actor ? `/u/${n.actor.username}/resenas` : "#";
+      return {
+        name,
+        text: "respondió tu reseña:",
+        quote: n.review?.reply ?? undefined,
+        href: n.review ? `${where}#r-${n.review.id}` : where,
+        icon: "💬",
+        tone: "bg-seek text-white",
+      };
+    }
     default:
       return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }
@@ -82,7 +106,7 @@ function describe(n: NotificationView) {
       items.length === 0 ? (
         <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
-          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga o te mande una propuesta, te avisamos acá.</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga, te mande una propuesta o te califique, te avisamos acá.</p>
         </div>
       ) : (
         <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">

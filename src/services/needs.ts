@@ -40,8 +40,17 @@ export interface ProposalView {
   availability: string | null;
   status: ProposalStatus;
   created_at: string;
-  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null; headline: string | null } | null;
-  business: { slug: string; name: string; logo_path: string | null } | null;
+  author: {
+    username: string;
+    first_name: string | null;
+    last_name: string | null;
+    avatar_path: string | null;
+    verified_at: string | null;
+    headline: string | null;
+    rating_sum: number;
+    rating_count: number;
+  } | null;
+  business: { slug: string; name: string; logo_path: string | null; rating_sum: number; rating_count: number } | null;
 }
 
 const NEED_COLUMNS = `id, slug, title, description, author_id, category_id, subcategory_id, city_id, needed_by,
@@ -52,8 +61,8 @@ const NEED_COLUMNS = `id, slug, title, description, author_id, category_id, subc
   city:cities ( name, slug, provinces ( name, slug ) )`;
 
 const PROPOSAL_COLUMNS = `id, need_id, author_id, business_id, message, amount, availability, status, created_at,
-  author:profiles!proposals_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at, headline ),
-  business:businesses ( slug, name, logo_path )`;
+  author:profiles!proposals_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at, headline, rating_sum, rating_count ),
+  business:businesses ( slug, name, logo_path, rating_sum, rating_count )`;
 
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 const toNeed = (row: NeedView): NeedView => ({ ...row, budget_min: num(row.budget_min), budget_max: num(row.budget_max) });

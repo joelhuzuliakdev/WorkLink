@@ -13,7 +13,9 @@ export type NotificationType =
   | "business_follow"
   | "need_proposal"
   | "proposal_accepted"
-  | "need_match";
+  | "need_match"
+  | "review_received"
+  | "review_reply";
 
 export interface NotificationView {
   id: string;
@@ -25,6 +27,7 @@ export interface NotificationView {
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
   need: { id: string; slug: string; title: string } | null;
+  review: { id: string; rating: number; body: string | null; reply: string | null; business_id: string | null; profile_id: string | null } | null;
 }
 
 export const NOTIFICATIONS_PAGE = 30;
@@ -34,7 +37,8 @@ const COLUMNS = `id, type, created_at, read_at,
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
   business:businesses ( slug, name ),
-  need:needs ( id, slug, title )`;
+  need:needs ( id, slug, title ),
+  review:reviews ( id, rating, body, reply, business_id, profile_id )`;
 
 export async function getNotifications(
   supabase: SupabaseClient,

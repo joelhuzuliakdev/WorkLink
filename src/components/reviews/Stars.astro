@@ -1,0 +1,25 @@
+---
+/**
+ * Estrellas de 0 a 5 (admite medias: 4,5 pinta cuatro y media).
+ * Para lectores de pantalla se lee "4,5 de 5 estrellas".
+ */
+import { formatRating } from "../../services/reviews";
+
+interface Props {
+  value: number;
+  /** Tamaño en px de cada estrella. */
+  size?: number;
+  class?: string;
+}
+
+const { value, size = 16, class: className = "" } = Astro.props;
+const percent = Math.max(0, Math.min(5, value)) * 20;
+const path = "M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8L12 2.8Z";
+const row = (fillClass: string) =>
+  Array.from({ length: 5 }, () => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" class="${fillClass} shrink-0" aria-hidden="true"><path d="${path}" fill="currentColor"/></svg>`).join("");
+---
+
+<span class:list={["relative inline-flex shrink-0 align-middle", className]} role="img" aria-label={`${formatRating(value)} de 5 estrellas`}>
+  <span class="flex text-line" set:html={row("")} />
+  <span class="absolute inset-y-0 left-0 flex overflow-hidden text-star" style={`width:${percent}%`} set:html={row("")} />
+</span>

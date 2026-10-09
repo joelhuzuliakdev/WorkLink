@@ -1,0 +1,29 @@
+---
+/** Calificación compacta: ★★★★☆ 4,3 (12). No muestra nada si no hay reseñas. */
+import Stars from "./Stars.astro";
+import { formatRating, ratingAverage, reviewsLabel } from "../../services/reviews";
+
+interface Props {
+  sum: number;
+  count: number;
+  href?: string;
+  size?: number;
+  /** "full": "4,3 · 12 reseñas"; "short": "4,3 (12)". */
+  variant?: "full" | "short";
+  class?: string;
+}
+
+const { sum, count, href, size = 14, variant = "short", class: className = "" } = Astro.props;
+const avg = ratingAverage(sum, count);
+const Tag = href ? "a" : "span";
+---
+
+{
+  avg !== null && (
+    <Tag href={href} class:list={["inline-flex items-center gap-1.5 text-sm", href && "hover:underline", className]}>
+      <Stars value={avg} size={size} />
+      <span class="font-semibold text-ink">{formatRating(avg)}</span>
+      <span class="text-ink-muted">{variant === "full" ? `· ${reviewsLabel(count)}` : `(${count})`}</span>
+    </Tag>
+  )
+}

@@ -1,0 +1,202 @@
+---
+/**
+ * Escribir o editar una reseña:
+ *   /resenas/escribir?emprendimiento=<slug>
+ *   /resenas/escribir?persona=<usuario>
+ * Solo si la base dice que hubo un trato real (contrató o hablaron por
+ * mensajes). Ruta protegida por el middleware.
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import { canReview, getEligibility, getMyReview, RATING_WORDS } from "../../services/reviews";
+import type { ReviewSubject } from "../../services/reviews";
+import { displayName } from "../../services/profiles";
+import { getSubmittedForm } from "../../utils/form";
+import { businessPath, profilePath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const slug = (Astro.url.searchParams.get("emprendimiento") ?? "").toLowerCase();
+const username = (Astro.url.searchParams.get("persona") ?? "").toLowerCase();
+
+let subject: ReviewSubject | null = null;
+let name = "";
+let avatar: string | null = null;
+let isBusiness = false;
+let back = "/";
+
+if (slug && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
+  const { data } = await supabase.from("businesses").select("id, slug, name, logo_path").eq("slug", slug).eq("status", "active").is("deleted_at", null).maybeSingle();
+  if (data) {
+    subject = { type: "business", id: data.id };
+    name = data.name;
+    avatar = data.logo_path;
+    isBusiness = true;
+    back = businessPath(data.slug);
+  }
+} else if (username && /^[a-z0-9_.]{3,30}$/.test(username)) {
+  const { data } = await supabase.from("profiles").select("id, username, first_name, last_name, avatar_path").eq("username", username).eq("status", "active").maybeSingle();
+  if (data) {
+    subject = { type: "profile", id: data.id };
+    name = displayName(data);
+    avatar = data.avatar_path;
+    back = profilePath(data.username);
+  }
+}
+if (!subject) return Astro.rewrite("/404");
+
+const result = Astro.getActionResult(actions.reviews.save);
+if (result && !result.error) {
+  return Astro.redirect(`${back}?resena=${result.data.created ? "publicada" : "editada"}#r-${result.data.id}`, 303);
+}
+
+const [eligibility, mine] = await Promise.all([getEligibility(supabase, subject), getMyReview(supabase, user!.id, subject)]);
+const allowed = Boolean(mine) || canReview(eligibility);
+// El formulario vuelve a esta misma URL (con ?emprendimiento= o ?persona=).
+const subjectQuery = isBusiness ? `emprendimiento=${encodeURIComponent(slug)}` : `persona=${encodeURIComponent(username)}`;
+const saveAction = `/resenas/escribir?${subjectQuery}&${String(actions.reviews.save).replace(/^\?/, "")}`;
+
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const rating = Number(submitted?.get("rating") ?? mine?.rating ?? 0);
+const body = submitted ? String(submitted.get("body") ?? "") : (mine?.body ?? "");
+
+const reasons: Record<string, string> = {
+  self: "No podés calificarte a vos mismo ni a tu propio emprendimiento.",
+  blocked: "No podés calificar a esta cuenta.",
+  unavailable: "Esta cuenta no está disponible.",
+  invalid: "Esta cuenta no está disponible.",
+  login: "Ingresá para opinar.",
+  none: `Para que las opiniones sean reales, solo pueden opinar quienes contrataron a ${name} desde Necesidades o hablaron por mensajes en WorkLink (los dos escribieron).`,
+};
+---
+
+<BaseLayout title={mine ? `Editar tu reseña de ${name}` : `Opinar sobre ${name}`} noindex>
+  <section class="mx-auto max-w-xl px-4 py-8">
+    <a href={back} class="text-sm font-medium text-ink-muted hover:text-ink">← {name}</a>
+
+    <div class="mt-4 flex items-center gap-3">
+      <Avatar name={name} path={avatar} purpose={isBusiness ? "logo" : "avatar"} shape={isBusiness ? "rounded" : "circle"} size={56} />
+      <div class="min-w-0">
+        <h1 class="text-2xl font-bold">{mine ? "Editar tu reseña" : "¿Cómo te fue?"}</h1>
+        <p class="truncate text-ink-muted">{name}</p>
+      </div>
+    </div>
+
+    {
+      !allowed ? (
+        <div class="mt-6 rounded-wl-lg border border-line bg-surface p-6">
+          <p>{reasons[eligibility] ?? reasons.none}</p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <Button href={back} variant="secondary">Volver</Button>
+            {eligibility === "none" && <Button href="/necesidades/nueva">Publicar una necesidad</Button>}
+          </div>
+        </div>
+      ) : (
+        <>
+          {eligibility === "hired" && !mine && (
+            <p class="mt-4 rounded-wl bg-success-soft px-3 py-2 text-sm">Tu reseña va a llevar la marca <strong>“Contrató por WorkLink”</strong> porque aceptaste una propuesta.</p>
+          )}
+          {formError && <Alert tone="danger" class="mt-4">{formError}</Alert>}
+
+          <form method="POST" action={saveAction} class="mt-6 flex flex-col gap-6" novalidate>
+            <input type="hidden" name="subject_type" value={subject.type} />
+            <input type="hidden" name="subject_id" value={subject.id} />
+            {mine && <input type="hidden" name="review_id" value={mine.id} />}
+
+            <fieldset aria-describedby={fieldErrors.rating ? "rating-error" : undefined}>
+              <legend class="text-sm font-medium">Tu calificación</legend>
+              <div class="star-input mt-2" data-star-input>
+                {[5, 4, 3, 2, 1].map((n) => (
+                  <>
+                    <input type="radio" id={`rating-${n}`} name="rating" value={n} checked={rating === n} required class="sr-only" />
+                    <label for={`rating-${n}`} title={RATING_WORDS[n]} class="cursor-pointer p-0.5">
+                      <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true">
+                        <path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8L12 2.8Z" fill="currentColor" />
+                      </svg>
+                      <span class="sr-only">{n === 1 ? "1 estrella" : `${n} estrellas`}: {RATING_WORDS[n]}</span>
+                    </label>
+                  </>
+                ))}
+              </div>
+              <p class="mt-1 h-5 text-sm font-medium" data-star-word aria-live="polite">{rating ? RATING_WORDS[rating] : ""}</p>
+              {fieldErrors.rating && <p id="rating-error" class="text-sm text-danger" role="alert">{fieldErrors.rating[0]}</p>}
+            </fieldset>
+
+            <div class="flex flex-col gap-1.5">
+              <label for="body" class="text-sm font-medium">Tu opinión (opcional)</label>
+              <textarea
+                id="body"
+                name="body"
+                rows="5"
+                maxlength="1000"
+                class="w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+                placeholder="¿Qué tal la atención, la calidad, el precio y los tiempos? Contalo para ayudar a otras personas."
+                aria-invalid={fieldErrors.body ? "true" : undefined}
+              >{body}</textarea>
+              {fieldErrors.body && <p class="text-sm text-danger" role="alert">{fieldErrors.body[0]}</p>}
+              <p class="text-xs text-ink-muted">Tu reseña es pública y lleva tu nombre. No incluyas teléfonos ni datos personales.</p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <Button type="submit" size="lg">{mine ? "Guardar cambios" : "Publicar reseña"}</Button>
+              <Button href={back} variant="ghost" size="lg">Cancelar</Button>
+            </div>
+          </form>
+
+          {mine && (
+            <form method="POST" action={`${back}${actions.reviews.remove}`} class="mt-6 border-t border-line pt-4" data-review-confirm="¿Borrar tu reseña? No se puede deshacer.">
+              <input type="hidden" name="review_id" value={mine.id} />
+              <button type="submit" class="text-sm font-medium text-danger hover:underline">Borrar mi reseña</button>
+            </form>
+          )}
+        </>
+      )
+    }
+  </section>
+</BaseLayout>
+
+<style>
+  /* Estrellas para elegir: el orden visual es 1→5 aunque en el HTML vayan 5→1. */
+  .star-input {
+    display: flex;
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    color: var(--wl-line);
+  }
+  .star-input label {
+    border-radius: 0.5rem;
+    transition: transform 0.1s;
+  }
+  .star-input input:checked ~ label,
+  .star-input label:hover,
+  .star-input label:hover ~ label {
+    color: var(--wl-star);
+  }
+  .star-input:hover input:checked ~ label:not(:hover, :hover ~ label) {
+    color: var(--wl-line);
+  }
+  .star-input input:focus-visible + label {
+    outline: 2px solid var(--wl-brand);
+    outline-offset: 2px;
+  }
+  .star-input label:active {
+    transform: scale(0.92);
+  }
+</style>
+
+<script>
+  import { RATING_WORDS } from "../../services/reviews";
+  const word = document.querySelector<HTMLElement>("[data-star-word]");
+  document.querySelector("[data-star-input]")?.addEventListener("change", (event) => {
+    const input = event.target as HTMLInputElement;
+    if (word) word.textContent = RATING_WORDS[Number(input.value)] ?? "";
+  });
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-review-confirm]");
+    if (form && !window.confirm(form.dataset.reviewConfirm!)) event.preventDefault();
+  });
+</script>

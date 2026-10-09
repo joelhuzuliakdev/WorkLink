@@ -34,6 +34,8 @@ export interface Profile {
   website: string | null;
   followers_count: number;
   following_count: number;
+  rating_sum: number;
+  rating_count: number;
   created_at: string;
 }
 
@@ -95,6 +97,8 @@ export interface Business {
   posts_count: number;
   rating_sum: number;
   rating_count: number;
+  /** Cantidad de reseñas por estrella: [1★, 2★, 3★, 4★, 5★]. */
+  rating_dist: number[];
   created_at: string;
   updated_at: string;
 }

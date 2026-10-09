@@ -40,6 +40,7 @@
   --wl-danger-soft: #fbe9e7;
   --wl-warning: #9a6200;
   --wl-warning-soft: #fdf3dc;
+  --wl-star: #cf7c00;
 
   /* Forma y tipografía */
   --wl-radius: 0.75rem;
@@ -72,6 +73,7 @@
     --wl-danger-soft: #34171a;
     --wl-warning: #f3c063;
     --wl-warning-soft: #2f2412;
+    --wl-star: #f5b942;
     color-scheme: dark;
   }
 }
@@ -96,6 +98,7 @@
   --wl-danger-soft: #34171a;
   --wl-warning: #f3c063;
   --wl-warning-soft: #2f2412;
+  --wl-star: #f5b942;
   color-scheme: dark;
 }
 
@@ -121,6 +124,7 @@
   --color-danger-soft: var(--wl-danger-soft);
   --color-warning: var(--wl-warning);
   --color-warning-soft: var(--wl-warning-soft);
+  --color-star: var(--wl-star);
 
   --radius-wl: var(--wl-radius);
   --radius-wl-lg: var(--wl-radius-lg);

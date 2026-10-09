@@ -39,6 +39,8 @@ export interface BusinessResult {
   verification: string;
   followers_count: number;
   posts_count: number;
+  rating_sum: number;
+  rating_count: number;
   category: { name: string; slug: string } | null;
   city: { name: string; slug: string; provinces: { name: string; slug: string } | null } | null;
 }
@@ -90,7 +92,7 @@ export async function searchPeople(supabase: SupabaseClient, f: SearchFilters, l
   return { items: ordered(page, (rows ?? []) as unknown as PersonResult[]), hasMore: list.length > limit };
 }
 
-export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count,
+export const BUSINESS_RESULT_COLUMNS = `id, slug, name, tagline, logo_path, cover_path, verification, followers_count, posts_count, rating_sum, rating_count,
   category:categories ( name, slug ), city:cities ( name, slug, provinces ( name, slug ) )`;
 
 export async function searchBusinesses(

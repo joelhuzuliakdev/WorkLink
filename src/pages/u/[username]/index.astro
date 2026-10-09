@@ -23,6 +23,10 @@ import { getViewerProfile } from "../../../lib/viewer";
 import { routes } from "../../../config/site";
 import { newMessagePath } from "../../../services/messages";
 import Alert from "../../../components/ui/Alert.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import RatingBadge from "../../../components/reviews/RatingBadge.astro";
+import { canReview, getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
 
 const { supabase, user } = Astro.locals;
 const username = (Astro.params.username ?? "").toLowerCase();
@@ -32,13 +36,20 @@ const profile = await getPublicProfile(supabase, username, { withContact: Boolea
 if (!profile) return Astro.rewrite("/404");
 
 const isMe = user?.id === profile.id;
+const reviewForms = handleReviewActions(Astro, `/u/${profile.username}`);
+if (reviewForms.redirect) return Astro.redirect(reviewForms.redirect, 303);
+const reviewSubject = { type: "profile", id: profile.id } as const;
 const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-const [businesses, { posts, nextCursor }, following, viewer] = await Promise.all([
+const [businesses, { posts, nextCursor }, following, viewer, { reviews }, reviewState] = await Promise.all([
   getPublicBusinessesByOwner(supabase, profile.id),
   getFeed(supabase, { authorId: profile.id, cursor }),
   isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
   isMe ? getViewerProfile(Astro.locals) : Promise.resolve(null),
+  cursor ? Promise.resolve({ reviews: [], hasMore: false }) : getReviews(supabase, reviewSubject, { limit: 3 }),
+  getViewerReviewState(supabase, user?.id, reviewSubject),
 ]);
+const showReviews = !cursor && (profile.rating_count > 0 || Boolean(reviewState.mine) || canReview(reviewState.eligibility));
+const reviewNotice = REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null;
 const reactions = await getViewerReactions(supabase, user?.id, posts.map((p) => p.id));
 const name = displayName(profile);
 const base = `/u/${profile.username}`;
@@ -59,6 +70,7 @@ const firstName = profile.first_name ?? name;
           <span data-followers={profile.id}>{followersLabel(profile.followers_count)}</span>
           {" · "}{profile.following_count.toLocaleString("es-AR")} seguidos
         </p>
+        <RatingBadge sum={profile.rating_sum} count={profile.rating_count} href="#resenas" variant="full" class="mt-1" />
       </div>
       <div class="flex flex-wrap gap-2 sm:pb-2">
         {
@@ -133,6 +145,24 @@ const firstName = profile.first_name ?? name;
       </aside>
 
       <div class="flex min-w-0 flex-col gap-4 pb-16">
+        {showReviews && (
+          <ReviewsSection
+            class="rounded-wl-lg border border-line bg-surface p-4"
+            subjectName={name}
+            sum={profile.rating_sum}
+            count={profile.rating_count}
+            reviews={reviews}
+            eligibility={reviewState.eligibility}
+            mine={reviewState.mine}
+            writeHref={writeReviewPath({ type: "profile", username: profile.username })}
+            canReply={isMe}
+            viewerId={user?.id}
+            returnTo={base}
+            seeAllHref={`${base}/resenas`}
+            notice={reviewNotice}
+            error={reviewForms.error}
+          />
+        )}
         {isMe && viewer && !cursor && <Composer viewer={viewer} />}
         <h2 class="text-lg font-semibold">Publicaciones</h2>
         {

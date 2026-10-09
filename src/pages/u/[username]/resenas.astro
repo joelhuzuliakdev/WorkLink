@@ -1,0 +1,53 @@
+---
+/** Todas las reseñas de una persona: /u/[usuario]/resenas (paginadas). */
+import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Avatar from "../../../components/ui/Avatar.astro";
+import ReviewsSection from "../../../components/reviews/ReviewsSection.astro";
+import { displayName, getPublicProfile } from "../../../services/profiles";
+import { getReviews, getViewerReviewState, writeReviewPath } from "../../../services/reviews";
+import { handleReviewActions, REVIEW_NOTICES } from "../../../lib/review-actions";
+import { profilePath } from "../../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const username = (Astro.params.username ?? "").toLowerCase();
+if (!/^[a-z0-9_.]{3,30}$/.test(username)) return Astro.rewrite("/404");
+const profile = await getPublicProfile(supabase, username, { withContact: false });
+if (!profile) return Astro.rewrite("/404");
+
+const base = `${profilePath(profile.username)}/resenas`;
+const forms = handleReviewActions(Astro, base);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const page = Math.max(1, Math.min(500, Number.parseInt(Astro.url.searchParams.get("pagina") ?? "1", 10) || 1));
+const subject = { type: "profile", id: profile.id } as const;
+const [{ reviews, hasMore }, state] = await Promise.all([getReviews(supabase, subject, { page }), getViewerReviewState(supabase, user?.id, subject)]);
+if (page > 1 && reviews.length === 0) return Astro.redirect(base);
+const name = displayName(profile);
+---
+
+<BaseLayout title={`Reseñas de ${name}`} noindex>
+  <div class="mx-auto max-w-3xl px-4 py-8">
+    <a href={profilePath(profile.username)} class="inline-flex items-center gap-2 text-sm font-medium text-ink-muted hover:text-ink">
+      <Avatar name={name} path={profile.avatar_path} size={24} />
+      ← {name}
+    </a>
+    <ReviewsSection
+      class="mt-4"
+      headingTag="h1"
+      subjectName={name}
+      sum={profile.rating_sum}
+      count={profile.rating_count}
+      reviews={reviews}
+      eligibility={state.eligibility}
+      mine={state.mine}
+      writeHref={writeReviewPath({ type: "profile", username: profile.username })}
+      canReply={user?.id === profile.id}
+      viewerId={user?.id}
+      returnTo={base}
+      prevHref={page > 1 ? (page === 2 ? base : `${base}?pagina=${page - 1}`) : null}
+      nextHref={hasMore ? `${base}?pagina=${page + 1}` : null}
+      notice={REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null}
+      error={forms.error}
+    />
+  </div>
+</BaseLayout>
