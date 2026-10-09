@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPostsByIds, type PostView, type ProfileSituation } from "./posts";
 import type { PostType } from "../schemas/post";
+import { getNeedsByIds, type NeedView } from "./needs";
 
 /**
  * Buscador y directorio: personas, emprendimientos y publicaciones con
@@ -133,4 +134,19 @@ export async function searchPosts(supabase: SupabaseClient, f: SearchFilters, li
   if (error) throw error;
   const list = ids(data);
   return { items: await getPostsByIds(supabase, list.slice(0, limit)), hasMore: list.length > limit };
+}
+
+/** Necesidades abiertas (texto en título y detalle, rubro y ciudad). */
+export async function searchNeeds(supabase: SupabaseClient, f: SearchFilters, limit = SEARCH_PAGE, offset = 0): Promise<Paged<NeedView>> {
+  const { data, error } = await supabase.rpc("search_need_ids", {
+    p_query: f.q || null,
+    p_category_id: f.categoryId,
+    p_city_id: f.cityId,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+  if (error) throw error;
+  const list = ids(data);
+  const page = list.slice(0, limit);
+  return { items: await getNeedsByIds(supabase, page), hasMore: list.length > limit };
 }

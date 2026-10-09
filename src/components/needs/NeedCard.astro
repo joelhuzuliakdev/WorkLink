@@ -11,9 +11,20 @@ import { needPath } from "../../lib/urls";
 interface Props {
   need: NeedView;
   showStatus?: boolean;
+  /** Usuario que mira: si es quien la publicó, el enlace lleva a sus propuestas. */
+  viewerId?: string;
 }
 
-const { need, showStatus = false } = Astro.props;
+const { need, showStatus = false, viewerId } = Astro.props;
+const mine = Boolean(viewerId) && viewerId === need.author_id;
+const count = need.proposals_count;
+const cta = mine
+  ? count === 0
+    ? "Tu necesidad · sin propuestas"
+    : `Ver tus ${count === 1 ? "1 propuesta" : `${count} propuestas`}`
+  : count === 0
+    ? "Sé el primero en proponer"
+    : `${count} ${count === 1 ? "propuesta" : "propuestas"}`;
 const name = need.author ? displayName(need.author) : "Usuario";
 const budget = budgetLabel(need.budget_min, need.budget_max, formatMoney);
 const status = NEED_STATUS_LABELS[need.status];
@@ -35,15 +46,13 @@ const status = NEED_STATUS_LABELS[need.status];
     {need.city && <li>📍 {need.city.name}</li>}
     {need.needed_by && <li>📅 Para el {formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" })}</li>}
   </ul>
-  <div class="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3 text-sm">
+  <div class="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-line pt-3 text-sm">
     <span class="flex min-w-0 items-center gap-2 text-ink-muted">
       <Avatar name={name} path={need.author?.avatar_path} size={24} />
       <span class="truncate">{name}</span>
       {need.author?.verified_at && <VerifiedBadge size={13} />}
       <span class="shrink-0">· {formatRelative(need.created_at)}</span>
     </span>
-    <a href={needPath(need)} class="shrink-0 font-semibold text-brand hover:underline">
-      {need.proposals_count === 0 ? "Sé el primero en proponer" : `${need.proposals_count} ${need.proposals_count === 1 ? "propuesta" : "propuestas"}`}
-    </a>
+    <a href={mine ? `${needPath(need)}#propuestas` : needPath(need)} class="font-semibold text-brand hover:underline">{cta}</a>
   </div>
 </article>

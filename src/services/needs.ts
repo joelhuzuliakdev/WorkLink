@@ -93,6 +93,25 @@ export async function getOpenNeeds(
   return { needs: rows.slice(0, NEEDS_PAGE), hasMore: rows.length > NEEDS_PAGE };
 }
 
+/** Necesidades por id, en el mismo orden (para inicio y buscador). */
+export async function getNeedsByIds(supabase: SupabaseClient, ids: string[]): Promise<NeedView[]> {
+  if (!ids.length) return [];
+  const { data, error } = await supabase.from("needs").select(NEED_COLUMNS).in("id", ids).is("deleted_at", null);
+  if (error) throw error;
+  const byId = new Map(((data ?? []) as unknown as NeedView[]).filter((n) => n.author).map((n) => [n.id, toNeed(n)]));
+  return ids.map((id) => byId.get(id)).filter((n): n is NeedView => Boolean(n));
+}
+
+/** Necesidades abiertas para el inicio: primero su ciudad, gente que sigue y su rubro. */
+export async function getHomeNeeds(supabase: SupabaseClient, limit = 3): Promise<NeedView[]> {
+  const { data, error } = await supabase.rpc("home_need_ids", { p_limit: limit });
+  if (error) {
+    console.error("[necesidades]", error.message);
+    return [];
+  }
+  return getNeedsByIds(supabase, ((data ?? []) as { id: string }[]).map((r) => r.id));
+}
+
 export async function getNeed(supabase: SupabaseClient, id: string): Promise<NeedView | null> {
   const { data, error } = await supabase.from("needs").select(NEED_COLUMNS).eq("id", id).is("deleted_at", null).maybeSingle();
   if (error) throw error;

@@ -1,10 +1,10 @@
 ---
 /**
- * Buscador: personas, emprendimientos y publicaciones, con filtros por rubro,
+ * Buscador: personas, emprendimientos, publicaciones y necesidades, con filtros por rubro,
  * ciudad, situación (personas) y tipo (publicaciones). Sin texto funciona
  * como directorio ("Tecnología en Villa María").
  *
- *   ?q=texto  &ver=todo|personas|emprendimientos|publicaciones
+ *   ?q=texto  &ver=todo|personas|emprendimientos|publicaciones|necesidades
  *   &rubro=slug  &ciudad=id  &situacion=job_seeking...  &tipo=offer...  &pagina=2
  *
  * Los resultados no se indexan (contenido variable); las páginas indexables
@@ -14,8 +14,10 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import PostCard from "../components/posts/PostCard.astro";
 import BusinessResultCard from "../components/directory/BusinessResultCard.astro";
 import PersonResultRow from "../components/directory/PersonResultRow.astro";
+import NeedCard from "../components/needs/NeedCard.astro";
+import type { NeedView } from "../services/needs";
 import CityPicker from "../islands/CityPicker.tsx";
-import { hasCriteria, normalizeQuery, searchBusinesses, searchPeople, searchPosts, SEARCH_MIN, SEARCH_PAGE, type BusinessResult, type Paged, type PersonResult, type SearchFilters } from "../services/search";
+import { hasCriteria, normalizeQuery, searchBusinesses, searchPeople, searchPosts, searchNeeds, SEARCH_MIN, SEARCH_PAGE, type BusinessResult, type Paged, type PersonResult, type SearchFilters } from "../services/search";
 import { getViewerReactions } from "../services/social";
 import { getCategoryTree } from "../services/categories";
 import { getCity } from "../services/locations";
@@ -31,6 +33,7 @@ const TABS = [
   { value: "personas", label: "Personas" },
   { value: "emprendimientos", label: "Emprendimientos" },
   { value: "publicaciones", label: "Publicaciones" },
+  { value: "necesidades", label: "Necesidades" },
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
 
@@ -60,13 +63,14 @@ const none = <T,>(): Promise<Paged<T>> => Promise.resolve({ items: [], hasMore: 
 const show = (which: Tab) => ready && (tab === "todo" || tab === which);
 const size = (preview: number) => (tab === "todo" ? preview : SEARCH_PAGE);
 const from = tab === "todo" ? 0 : offset;
-const [people, businesses, posts] = await Promise.all([
+const [people, businesses, posts, needs] = await Promise.all([
   show("personas") ? searchPeople(supabase, filters, size(5), from) : none<PersonResult>(),
   show("emprendimientos") ? searchBusinesses(supabase, filters, size(6), from) : none<BusinessResult>(),
   show("publicaciones") ? searchPosts(supabase, filters, size(10), from) : none<PostView>(),
+  show("necesidades") ? searchNeeds(supabase, filters, size(3), from) : none<NeedView>(),
 ]);
 const reactions = await getViewerReactions(supabase, user?.id, posts.items.map((p) => p.id));
-const total = people.items.length + businesses.items.length + posts.items.length;
+const total = people.items.length + businesses.items.length + posts.items.length + needs.items.length;
 
 // Enlaces que conservan los filtros actuales.
 function link(changes: Record<string, string | null>) {
@@ -227,6 +231,18 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             </section>
           )}
 
+          {needs.items.length > 0 && (
+            <section aria-labelledby="r-necesidades">
+              <div class="mb-3 flex items-baseline justify-between gap-4">
+                <h2 id="r-necesidades" class="text-lg font-semibold">Necesidades</h2>
+                {tab === "todo" && needs.hasMore && <a href={link({ ver: "necesidades" })} class="text-sm font-semibold text-brand hover:underline">Ver todas</a>}
+              </div>
+              <div class="flex flex-col gap-3">
+                {needs.items.map((need) => <NeedCard need={need} viewerId={user?.id} />)}
+              </div>
+            </section>
+          )}
+
           {posts.items.length > 0 && (
             <section aria-labelledby="r-publicaciones">
               <div class="mb-3 flex items-baseline justify-between gap-4">
@@ -241,10 +257,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             </section>
           )}
 
-          {tab !== "todo" && (page > 1 || people.hasMore || businesses.hasMore || posts.hasMore) && (
+          {tab !== "todo" && (page > 1 || people.hasMore || businesses.hasMore || posts.hasMore || needs.hasMore) && (
             <nav class="flex justify-between gap-4" aria-label="Páginas">
               {page > 1 ? <a href={link({ pagina: page - 1 > 1 ? String(page - 1) : null })} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
-              {(people.hasMore || businesses.hasMore || posts.hasMore) && (
+              {(people.hasMore || businesses.hasMore || posts.hasMore || needs.hasMore) && (
                 <a href={link({ pagina: String(page + 1) })} class="font-semibold text-brand hover:underline">Más resultados →</a>
               )}
             </nav>

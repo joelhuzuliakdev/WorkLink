@@ -16,6 +16,8 @@ import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
 import { decodeCursor } from "../../services/posts";
 import { getViewerReactions } from "../../services/social";
 import { displayName } from "../../services/profiles";
+import NeedCard from "../needs/NeedCard.astro";
+import { getHomeNeeds } from "../../services/needs";
 
 interface Props {
   viewer: ViewerProfile;
@@ -32,7 +34,11 @@ const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
   mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
   cursor,
 });
-const reactions = await getViewerReactions(supabase, viewer.id, posts.map((p) => p.id));
+const [reactions, needs] = await Promise.all([
+  getViewerReactions(supabase, viewer.id, posts.map((p) => p.id)),
+  // Necesidades abiertas (solo en la primera página del inicio).
+  cursor ? Promise.resolve([]) : getHomeNeeds(supabase, 3),
+]);
 const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
 
 const headings = {
@@ -63,11 +69,26 @@ const links = [
 ];
 ---
 
-<div class="mx-auto grid max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+<div class="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
     <SearchBox />
     {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
     <Composer viewer={viewer} />
+
+    {
+      needs.length > 0 && (
+        <section aria-labelledby="inicio-necesidades" class="flex flex-col gap-3 pt-2">
+          <div class="flex items-baseline justify-between gap-3">
+            <div>
+              <h2 id="inicio-necesidades" class="text-lg font-bold">Necesidades</h2>
+              <p class="text-sm text-ink-muted">Personas que buscan a alguien. Si es lo tuyo, mandales tu propuesta.</p>
+            </div>
+            <a href="/necesidades" class="shrink-0 text-sm font-semibold text-brand hover:underline">Ver todas</a>
+          </div>
+          {needs.map((need) => <NeedCard need={need} viewerId={viewer.id} />)}
+        </section>
+      )
+    }
 
     <div class="pt-2">
       <h1 class="text-xl font-bold">{heading.title}</h1>

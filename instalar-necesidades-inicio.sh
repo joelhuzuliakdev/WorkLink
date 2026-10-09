@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · instalador de la Etapa 11 (reseñas y calificaciones)
+# WorkLink · arreglo: necesidades en el inicio y en el buscador
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-etapa11.sh
+#     bash instalar-necesidades-inicio.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega las migraciones 0021 y 0022 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0023 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de la Etapa 11..."
+echo "Instalando archivos del arreglo..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -1815,6 +1815,8 @@ import { getHomeFeed, HOME_MODES, type HomeMode } from "../../services/home";
 import { decodeCursor } from "../../services/posts";
 import { getViewerReactions } from "../../services/social";
 import { displayName } from "../../services/profiles";
+import NeedCard from "../needs/NeedCard.astro";
+import { getHomeNeeds } from "../../services/needs";
 
 interface Props {
   viewer: ViewerProfile;
@@ -1831,7 +1833,11 @@ const { mode, posts, nextCursor } = await getHomeFeed(supabase, {
   mode: cursor && modeParam && HOME_MODES.includes(modeParam) ? modeParam : null,
   cursor,
 });
-const reactions = await getViewerReactions(supabase, viewer.id, posts.map((p) => p.id));
+const [reactions, needs] = await Promise.all([
+  getViewerReactions(supabase, viewer.id, posts.map((p) => p.id)),
+  // Necesidades abiertas (solo en la primera página del inicio).
+  cursor ? Promise.resolve([]) : getHomeNeeds(supabase, 3),
+]);
 const more = (cursor: string) => `modo=${mode}&desde=${cursor}`;
 
 const headings = {
@@ -1862,11 +1868,26 @@ const links = [
 ];
 ---
 
-<div class="mx-auto grid max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+<div class="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_300px]">
   <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
     <SearchBox />
     {published && <Alert tone="success">¡Listo! Tu publicación ya está en WorkLink.</Alert>}
     <Composer viewer={viewer} />
+
+    {
+      needs.length > 0 && (
+        <section aria-labelledby="inicio-necesidades" class="flex flex-col gap-3 pt-2">
+          <div class="flex items-baseline justify-between gap-3">
+            <div>
+              <h2 id="inicio-necesidades" class="text-lg font-bold">Necesidades</h2>
+              <p class="text-sm text-ink-muted">Personas que buscan a alguien. Si es lo tuyo, mandales tu propuesta.</p>
+            </div>
+            <a href="/necesidades" class="shrink-0 text-sm font-semibold text-brand hover:underline">Ver todas</a>
+          </div>
+          {needs.map((need) => <NeedCard need={need} viewerId={viewer.id} />)}
+        </section>
+      )
+    }
 
     <div class="pt-2">
       <h1 class="text-xl font-bold">{heading.title}</h1>
@@ -2430,9 +2451,20 @@ import { needPath } from "../../lib/urls";
 interface Props {
   need: NeedView;
   showStatus?: boolean;
+  /** Usuario que mira: si es quien la publicó, el enlace lleva a sus propuestas. */
+  viewerId?: string;
 }
 
-const { need, showStatus = false } = Astro.props;
+const { need, showStatus = false, viewerId } = Astro.props;
+const mine = Boolean(viewerId) && viewerId === need.author_id;
+const count = need.proposals_count;
+const cta = mine
+  ? count === 0
+    ? "Tu necesidad · sin propuestas"
+    : `Ver tus ${count === 1 ? "1 propuesta" : `${count} propuestas`}`
+  : count === 0
+    ? "Sé el primero en proponer"
+    : `${count} ${count === 1 ? "propuesta" : "propuestas"}`;
 const name = need.author ? displayName(need.author) : "Usuario";
 const budget = budgetLabel(need.budget_min, need.budget_max, formatMoney);
 const status = NEED_STATUS_LABELS[need.status];
@@ -2454,16 +2486,14 @@ const status = NEED_STATUS_LABELS[need.status];
     {need.city && <li>📍 {need.city.name}</li>}
     {need.needed_by && <li>📅 Para el {formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" })}</li>}
   </ul>
-  <div class="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3 text-sm">
+  <div class="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-line pt-3 text-sm">
     <span class="flex min-w-0 items-center gap-2 text-ink-muted">
       <Avatar name={name} path={need.author?.avatar_path} size={24} />
       <span class="truncate">{name}</span>
       {need.author?.verified_at && <VerifiedBadge size={13} />}
       <span class="shrink-0">· {formatRelative(need.created_at)}</span>
     </span>
-    <a href={needPath(need)} class="shrink-0 font-semibold text-brand hover:underline">
-      {need.proposals_count === 0 ? "Sé el primero en proponer" : `${need.proposals_count} ${need.proposals_count === 1 ? "propuesta" : "propuestas"}`}
-    </a>
+    <a href={mine ? `${needPath(need)}#propuestas` : needPath(need)} class="font-semibold text-brand hover:underline">{cta}</a>
   </div>
 </article>
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -6194,11 +6224,11 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/buscar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Buscador: personas, emprendimientos y publicaciones, con filtros por rubro,
+ * Buscador: personas, emprendimientos, publicaciones y necesidades, con filtros por rubro,
  * ciudad, situación (personas) y tipo (publicaciones). Sin texto funciona
  * como directorio ("Tecnología en Villa María").
  *
- *   ?q=texto  &ver=todo|personas|emprendimientos|publicaciones
+ *   ?q=texto  &ver=todo|personas|emprendimientos|publicaciones|necesidades
  *   &rubro=slug  &ciudad=id  &situacion=job_seeking...  &tipo=offer...  &pagina=2
  *
  * Los resultados no se indexan (contenido variable); las páginas indexables
@@ -6208,8 +6238,10 @@ import BaseLayout from "../layouts/BaseLayout.astro";
 import PostCard from "../components/posts/PostCard.astro";
 import BusinessResultCard from "../components/directory/BusinessResultCard.astro";
 import PersonResultRow from "../components/directory/PersonResultRow.astro";
+import NeedCard from "../components/needs/NeedCard.astro";
+import type { NeedView } from "../services/needs";
 import CityPicker from "../islands/CityPicker.tsx";
-import { hasCriteria, normalizeQuery, searchBusinesses, searchPeople, searchPosts, SEARCH_MIN, SEARCH_PAGE, type BusinessResult, type Paged, type PersonResult, type SearchFilters } from "../services/search";
+import { hasCriteria, normalizeQuery, searchBusinesses, searchPeople, searchPosts, searchNeeds, SEARCH_MIN, SEARCH_PAGE, type BusinessResult, type Paged, type PersonResult, type SearchFilters } from "../services/search";
 import { getViewerReactions } from "../services/social";
 import { getCategoryTree } from "../services/categories";
 import { getCity } from "../services/locations";
@@ -6225,6 +6257,7 @@ const TABS = [
   { value: "personas", label: "Personas" },
   { value: "emprendimientos", label: "Emprendimientos" },
   { value: "publicaciones", label: "Publicaciones" },
+  { value: "necesidades", label: "Necesidades" },
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
 
@@ -6254,13 +6287,14 @@ const none = <T,>(): Promise<Paged<T>> => Promise.resolve({ items: [], hasMore: 
 const show = (which: Tab) => ready && (tab === "todo" || tab === which);
 const size = (preview: number) => (tab === "todo" ? preview : SEARCH_PAGE);
 const from = tab === "todo" ? 0 : offset;
-const [people, businesses, posts] = await Promise.all([
+const [people, businesses, posts, needs] = await Promise.all([
   show("personas") ? searchPeople(supabase, filters, size(5), from) : none<PersonResult>(),
   show("emprendimientos") ? searchBusinesses(supabase, filters, size(6), from) : none<BusinessResult>(),
   show("publicaciones") ? searchPosts(supabase, filters, size(10), from) : none<PostView>(),
+  show("necesidades") ? searchNeeds(supabase, filters, size(3), from) : none<NeedView>(),
 ]);
 const reactions = await getViewerReactions(supabase, user?.id, posts.items.map((p) => p.id));
-const total = people.items.length + businesses.items.length + posts.items.length;
+const total = people.items.length + businesses.items.length + posts.items.length + needs.items.length;
 
 // Enlaces que conservan los filtros actuales.
 function link(changes: Record<string, string | null>) {
@@ -6421,6 +6455,18 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             </section>
           )}
 
+          {needs.items.length > 0 && (
+            <section aria-labelledby="r-necesidades">
+              <div class="mb-3 flex items-baseline justify-between gap-4">
+                <h2 id="r-necesidades" class="text-lg font-semibold">Necesidades</h2>
+                {tab === "todo" && needs.hasMore && <a href={link({ ver: "necesidades" })} class="text-sm font-semibold text-brand hover:underline">Ver todas</a>}
+              </div>
+              <div class="flex flex-col gap-3">
+                {needs.items.map((need) => <NeedCard need={need} viewerId={user?.id} />)}
+              </div>
+            </section>
+          )}
+
           {posts.items.length > 0 && (
             <section aria-labelledby="r-publicaciones">
               <div class="mb-3 flex items-baseline justify-between gap-4">
@@ -6435,10 +6481,10 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
             </section>
           )}
 
-          {tab !== "todo" && (page > 1 || people.hasMore || businesses.hasMore || posts.hasMore) && (
+          {tab !== "todo" && (page > 1 || people.hasMore || businesses.hasMore || posts.hasMore || needs.hasMore) && (
             <nav class="flex justify-between gap-4" aria-label="Páginas">
               {page > 1 ? <a href={link({ pagina: page - 1 > 1 ? String(page - 1) : null })} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
-              {(people.hasMore || businesses.hasMore || posts.hasMore) && (
+              {(people.hasMore || businesses.hasMore || posts.hasMore || needs.hasMore) && (
                 <a href={link({ pagina: String(page + 1) })} class="font-semibold text-brand hover:underline">Más resultados →</a>
               )}
             </nav>
@@ -7777,7 +7823,7 @@ const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 t
         </div>
       ) : (
         <div class="mt-6 flex flex-col gap-4">
-          {needs.map((need) => <NeedCard need={need} />)}
+          {needs.map((need) => <NeedCard need={need} viewerId={Astro.locals.user?.id} />)}
         </div>
       )
     }
@@ -13078,6 +13124,25 @@ export async function getOpenNeeds(
   return { needs: rows.slice(0, NEEDS_PAGE), hasMore: rows.length > NEEDS_PAGE };
 }
 
+/** Necesidades por id, en el mismo orden (para inicio y buscador). */
+export async function getNeedsByIds(supabase: SupabaseClient, ids: string[]): Promise<NeedView[]> {
+  if (!ids.length) return [];
+  const { data, error } = await supabase.from("needs").select(NEED_COLUMNS).in("id", ids).is("deleted_at", null);
+  if (error) throw error;
+  const byId = new Map(((data ?? []) as unknown as NeedView[]).filter((n) => n.author).map((n) => [n.id, toNeed(n)]));
+  return ids.map((id) => byId.get(id)).filter((n): n is NeedView => Boolean(n));
+}
+
+/** Necesidades abiertas para el inicio: primero su ciudad, gente que sigue y su rubro. */
+export async function getHomeNeeds(supabase: SupabaseClient, limit = 3): Promise<NeedView[]> {
+  const { data, error } = await supabase.rpc("home_need_ids", { p_limit: limit });
+  if (error) {
+    console.error("[necesidades]", error.message);
+    return [];
+  }
+  return getNeedsByIds(supabase, ((data ?? []) as { id: string }[]).map((r) => r.id));
+}
+
 export async function getNeed(supabase: SupabaseClient, id: string): Promise<NeedView | null> {
   const { data, error } = await supabase.from("needs").select(NEED_COLUMNS).eq("id", id).is("deleted_at", null).maybeSingle();
   if (error) throw error;
@@ -13672,6 +13737,7 @@ escribir 'src/services/search.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getPostsByIds, type PostView, type ProfileSituation } from "./posts";
 import type { PostType } from "../schemas/post";
+import { getNeedsByIds, type NeedView } from "./needs";
 
 /**
  * Buscador y directorio: personas, emprendimientos y publicaciones con
@@ -13804,6 +13870,21 @@ export async function searchPosts(supabase: SupabaseClient, f: SearchFilters, li
   if (error) throw error;
   const list = ids(data);
   return { items: await getPostsByIds(supabase, list.slice(0, limit)), hasMore: list.length > limit };
+}
+
+/** Necesidades abiertas (texto en título y detalle, rubro y ciudad). */
+export async function searchNeeds(supabase: SupabaseClient, f: SearchFilters, limit = SEARCH_PAGE, offset = 0): Promise<Paged<NeedView>> {
+  const { data, error } = await supabase.rpc("search_need_ids", {
+    p_query: f.q || null,
+    p_category_id: f.categoryId,
+    p_city_id: f.cityId,
+    p_limit: limit + 1,
+    p_offset: offset,
+  });
+  if (error) throw error;
+  const list = ids(data);
+  const page = list.slice(0, limit);
+  return { items: await getNeedsByIds(supabase, page), hasMore: list.length > limit };
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -16452,13 +16533,98 @@ on conflict (key) do nothing;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002300_needs_discovery.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0023 · Que las necesidades se vean (inicio y buscador)
+-- =============================================================================
+-- * home_need_ids: necesidades abiertas para el inicio de cada usuario.
+--   Primero las de su ciudad, las de personas que sigue y las del rubro de
+--   sus emprendimientos; después el resto, de la más nueva a la más vieja.
+-- * search_need_ids: buscador (texto en título y detalle, rubro y ciudad).
+-- Las dos devuelven solo ids (la app trae los datos con RLS).
+-- =============================================================================
+
+create or replace function public.home_need_ids(p_limit integer default 3)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  with me as (
+    select p.id, p.city_id, c.province_id
+    from public.profiles p
+    left join public.cities c on c.id = p.city_id
+    where p.id = (select auth.uid())
+  )
+  select n.id
+  from public.needs n
+  cross join me
+  where n.status in ('open', 'in_review')
+    and n.deleted_at is null
+    and n.expires_at > now()
+  order by
+    -- Cuánto le interesa: su ciudad, gente que sigue, rubro de sus emprendimientos, su provincia.
+    (case when n.city_id = me.city_id then 4 else 0 end)
+    + (case when exists (
+        select 1 from public.profile_follows f where f.follower_id = me.id and f.followed_id = n.author_id
+      ) then 3 else 0 end)
+    + (case when exists (
+        select 1
+        from public.business_members bm
+        join public.businesses b on b.id = bm.business_id
+        where bm.user_id = me.id and b.category_id = n.category_id and b.deleted_at is null
+      ) then 3 else 0 end)
+    + (case when n.province_id = me.province_id then 1 else 0 end) desc,
+    n.created_at desc,
+    n.id desc
+  limit least(greatest(coalesce(p_limit, 3), 1), 20);
+$$;
+
+create or replace function public.search_need_ids(
+  p_query       text    default null,
+  p_category_id integer default null,
+  p_city_id     integer default null,
+  p_limit       integer default 20,
+  p_offset      integer default 0
+)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select n.id
+  from public.needs n
+  where n.status in ('open', 'in_review')
+    and n.deleted_at is null
+    and n.expires_at > now()
+    and (p_category_id is null or n.category_id = p_category_id)
+    and (p_city_id is null or n.city_id = p_city_id)
+    and (
+      public.search_text(p_query) is null
+      or (n.title || ' ' || n.description) ilike public.like_contains(p_query)
+    )
+  order by n.created_at desc, n.id desc
+  limit least(greatest(coalesce(p_limit, 20), 1), 50)
+  offset least(greatest(coalesce(p_offset, 0), 0), 1000);
+$$;
+
+revoke execute on function public.home_need_ids(integer) from public, anon;
+grant  execute on function public.home_need_ids(integer) to authenticated, service_role;
+revoke execute on function public.search_need_ids(text, integer, integer, integer, integer) from public;
+grant  execute on function public.search_need_ids(text, integer, integer, integer, integer) to anon, authenticated, service_role;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 173 archivos de la Etapa 11 instalados."
+echo " Listo. 174 archivos del arreglo instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"
