@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · avisos de mensajes legibles y "N mensajes nuevos" (incluye todo lo anterior)
+# WorkLink · instalador de la Etapa 10 (necesidades con propuestas)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-avisos.sh
+#     bash instalar-etapa10.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0018 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega las migraciones 0019 y 0020 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos de los avisos..."
+echo "Instalando archivos de la Etapa 10..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -507,6 +507,7 @@ import { catalog } from "./catalog";
 import { posts } from "./posts";
 import { social } from "./social";
 import { messages } from "./messages";
+import { needs } from "./needs";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -520,6 +521,7 @@ export const server = {
   posts,
   social,
   messages,
+  needs,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -560,6 +562,144 @@ export const messages = {
       requireUser(locals.user);
       const { error } = await locals.supabase.rpc("hide_conversation", { p_conversation_id: conversation_id });
       if (error) throw dbError(error, "No pudimos ocultar la conversación.");
+      return { ok: true };
+    },
+  }),
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/needs.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { needRefSchema, needSchema, proposalRefSchema, proposalSchema, proposalUpdateSchema } from "../schemas/need";
+import { dbError, requireUser } from "../lib/auth/guards";
+
+/**
+ * Necesidades y propuestas. Los permisos y reglas (quién puede proponer,
+ * aceptar, límites, estados) los controla la base; acá se traducen errores.
+ */
+const forbidden = (error: { code?: string; message?: string }, fallback: string) =>
+  error.code === "42501" && error.message && !error.message.startsWith("new row") && !error.message.startsWith("permission")
+    ? new ActionError({ code: "FORBIDDEN", message: error.message })
+    : dbError(error, fallback);
+
+export const needs = {
+  create: defineAction({
+    accept: "form",
+    input: needSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase
+        .from("needs")
+        .insert({
+          title: input.title,
+          description: input.description,
+          category_id: input.category_id,
+          subcategory_id: input.subcategory_id ?? null,
+          city_id: input.city_id,
+          province_id: null, // la completa la base a partir de la ciudad
+          needed_by: input.needed_by ?? null,
+          budget_min: input.budget_min ?? null,
+          budget_max: input.budget_max ?? null,
+          slug: "necesidad", // la base lo arma a partir del título
+        })
+        .select("id, slug")
+        .single();
+      if (error) throw forbidden(error, "No pudimos publicar tu necesidad. Probá de nuevo.");
+      return data as { id: string; slug: string };
+    },
+  }),
+
+  close: defineAction({
+    accept: "form",
+    input: needRefSchema,
+    handler: async ({ need_id }, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase.from("needs").update({ status: "closed" }).eq("id", need_id).select("id");
+      if (error) throw forbidden(error, "No pudimos cerrar la necesidad.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "No podés cerrar esta necesidad." });
+      return { ok: true };
+    },
+  }),
+
+  renew: defineAction({
+    accept: "form",
+    input: needRefSchema,
+    handler: async ({ need_id }, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase.from("needs").update({ status: "open" }).eq("id", need_id).eq("status", "expired").select("id");
+      if (error) throw forbidden(error, "No pudimos renovar la necesidad.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "Esta necesidad no se puede renovar." });
+      return { ok: true };
+    },
+  }),
+
+  propose: defineAction({
+    accept: "form",
+    input: proposalSchema,
+    handler: async (input, { locals }) => {
+      const user = requireUser(locals.user);
+      const { error } = await locals.supabase.from("proposals").insert({
+        need_id: input.need_id,
+        author_id: user.id,
+        business_id: input.business_id ?? null,
+        message: input.message,
+        amount: input.amount ?? null,
+        availability: input.availability ?? null,
+      });
+      if (error) {
+        if (error.code === "23505") throw new ActionError({ code: "CONFLICT", message: "Ya mandaste una propuesta para esta necesidad." });
+        throw forbidden(error, "No pudimos enviar tu propuesta. Probá de nuevo.");
+      }
+      return { ok: true };
+    },
+  }),
+
+  updateProposal: defineAction({
+    accept: "form",
+    input: proposalUpdateSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase
+        .from("proposals")
+        .update({ message: input.message, amount: input.amount ?? null, availability: input.availability ?? null })
+        .eq("id", input.proposal_id)
+        .select("id");
+      if (error) throw forbidden(error, "No pudimos guardar los cambios.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "No podés editar esta propuesta." });
+      return { ok: true };
+    },
+  }),
+
+  withdraw: defineAction({
+    accept: "form",
+    input: proposalRefSchema,
+    handler: async ({ proposal_id }, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase.from("proposals").update({ status: "withdrawn" }).eq("id", proposal_id).select("id");
+      if (error) throw forbidden(error, "No pudimos retirar la propuesta.");
+      if (!data?.length) throw new ActionError({ code: "FORBIDDEN", message: "No podés retirar esta propuesta." });
+      return { ok: true };
+    },
+  }),
+
+  accept: defineAction({
+    accept: "form",
+    input: proposalRefSchema,
+    handler: async ({ proposal_id }, { locals }) => {
+      requireUser(locals.user);
+      const { data, error } = await locals.supabase.rpc("accept_proposal", { p_proposal_id: proposal_id });
+      if (error) throw forbidden(error, "No pudimos aceptar la propuesta.");
+      return { conversationId: data as string };
+    },
+  }),
+
+  decline: defineAction({
+    accept: "form",
+    input: proposalRefSchema,
+    handler: async ({ proposal_id }, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("decline_proposal", { p_proposal_id: proposal_id });
+      if (error) throw forbidden(error, "No pudimos rechazar la propuesta.");
       return { ok: true };
     },
   }),
@@ -1552,6 +1692,10 @@ const shortcut = "flex h-10 flex-1 items-center justify-center gap-2 rounded-wl 
       <span class="text-seek" aria-hidden="true">●</span> Busco
     </a>
   </div>
+  <a href="/necesidades/nueva" class="mt-2 flex items-center justify-between gap-2 rounded-wl bg-seek-soft px-3 py-2 text-sm hover:opacity-90">
+    <span><strong>¿Necesitás contratar a alguien?</strong> Pedí presupuestos a los del rubro en tu zona.</span>
+    <span class="shrink-0 font-semibold text-seek" aria-hidden="true">→</span>
+  </a>
 </section>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -1612,6 +1756,8 @@ const links = [
   { href: `/u/${viewer.username}`, label: "Mi perfil" },
   { href: "/mensajes", label: "Mensajes" },
   { href: "/panel/publicaciones", label: "Mis publicaciones" },
+  { href: "/necesidades", label: "Necesidades" },
+  { href: "/panel/necesidades", label: "Mis necesidades y propuestas" },
   { href: "/panel/guardados", label: "Guardados" },
   { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
   { href: "/publicaciones", label: "Todas las publicaciones" },
@@ -1720,7 +1866,7 @@ const forWho: Record<string, { title: string; points: string[] }> = {
   },
   hiring: {
     title: "Si necesitás contratar",
-    points: ["Publicá lo que buscás y recibí respuestas en los comentarios.", "Mirá el perfil, los trabajos y quién sigue a cada persona antes de decidir."],
+    points: ["Publicá lo que necesitás y recibí propuestas con precio de los emprendimientos de tu zona.", "Mirá el perfil, los trabajos y quién sigue a cada persona antes de decidir."],
   },
 };
 
@@ -1734,8 +1880,10 @@ const features = [
   { title: "Inicio a tu medida", text: "Ves lo que publican las personas y emprendimientos que seguís.", icon: "M4 6h16M4 12h16M4 18h10" },
   { title: "Publicaciones con fotos y video", text: "Hasta 10 fotos o un video de 60 segundos, con precio si querés.", icon: "M4 5h16v14H4zM8 10.5a1.5 1.5 0 1 0 0-.01M4 17l5-4.5 3.5 3 3-2.5L20 17" },
   { title: "Páginas de emprendimiento", text: "Logo, portada, catálogo de productos y servicios, horarios y contacto.", icon: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5" },
+  { title: "Pedí presupuestos", text: "Publicá lo que necesitás: los del rubro en tu ciudad te mandan propuestas y elegís la mejor.", icon: "M9 5h6M9 3h6v4H9zM6 5H5v16h14V5h-1M9 12h6M9 16h4" },
   { title: "Buscador", text: "Encontrá personas por nombre o rubro, emprendimientos y publicaciones.", icon: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5" },
   { title: "Me gusta, comentarios y guardados", text: "Preguntá por precio o disponibilidad y guardá lo que querés ver después.", icon: "M12 20s-7.5-4.6-9.2-9.3C1.6 7.3 3.9 4 7.3 4c2 0 3.6 1.1 4.7 2.8C13.1 5.1 14.7 4 16.7 4c3.4 0 5.7 3.3 4.5 6.7C19.5 15.4 12 20 12 20Z" },
+  { title: "Mensajes privados", text: "Chateá con quien quieras sin compartir tu número, desde la compu o el celular.", icon: "M4 5h16v11H8l-4 4V5Z" },
   { title: "Tus datos, cuidados", text: "Tu WhatsApp y teléfono solo los ven personas con cuenta. Podés bloquear a quien quieras.", icon: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" },
 ];
 
@@ -1744,7 +1892,8 @@ const faqs = [
   { q: "¿Necesito tener un emprendimiento?", a: "No. Podés usar WorkLink solo con tu perfil personal, para buscar trabajo, ofrecer tus servicios o encontrar a quien contratar. La página de emprendimiento es opcional." },
   { q: "¿Quién ve mi WhatsApp?", a: "Solo las personas que tienen cuenta en WorkLink. Los visitantes sin cuenta y los buscadores como Google no lo ven." },
   { q: "¿En qué ciudades funciona?", a: "Arrancamos en Córdoba, pero podés sumarte desde cualquier ciudad de Argentina." },
-  { q: "¿Cómo contacto a alguien?", a: "Desde su perfil o su página: por WhatsApp, o comentando su publicación. El trato lo arreglan directamente entre ustedes." },
+  { q: "¿Cómo contacto a alguien?", a: "Desde su perfil o su página: por mensaje privado, por WhatsApp o comentando su publicación. El trato lo arreglan directamente entre ustedes." },
+  { q: "¿Cómo pido presupuestos?", a: "Entrá a Necesidades y publicá lo que necesitás. Les avisamos a los emprendimientos de ese rubro en tu ciudad, te mandan su propuesta con precio y disponibilidad, y vos elegís la que más te convenga." },
 ];
 
 const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!;
@@ -2022,6 +2171,7 @@ const year = new Date().getFullYear();
 const links = [
   { href: "/rubros", label: "Rubros" },
   { href: "/publicaciones", label: "Publicaciones" },
+  { href: "/necesidades", label: "Necesidades" },
   { href: "/buscar", label: "Buscar" },
   { href: "/terminos", label: "Términos" },
   { href: "/privacidad", label: "Privacidad" },
@@ -2167,6 +2317,58 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
     </script>
   )
 }
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/needs/NeedCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Necesidad en listados: título, presupuesto, ciudad, fecha y propuestas. */
+import Avatar from "../ui/Avatar.astro";
+import VerifiedBadge from "../ui/VerifiedBadge.astro";
+import type { NeedView } from "../../services/needs";
+import { budgetLabel, NEED_STATUS_LABELS } from "../../services/needs";
+import { displayName } from "../../services/profiles";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
+import { needPath } from "../../lib/urls";
+
+interface Props {
+  need: NeedView;
+  showStatus?: boolean;
+}
+
+const { need, showStatus = false } = Astro.props;
+const name = need.author ? displayName(need.author) : "Usuario";
+const budget = budgetLabel(need.budget_min, need.budget_max, formatMoney);
+const status = NEED_STATUS_LABELS[need.status];
+---
+
+<article class="rounded-wl-lg border border-line bg-surface p-4">
+  <div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+      <p class="text-xs font-semibold uppercase tracking-wide text-seek">{need.subcategory?.name ?? need.category?.name}</p>
+      <h2 class="mt-1 text-lg font-semibold leading-snug">
+        <a href={needPath(need)} class="hover:underline">{need.title}</a>
+      </h2>
+    </div>
+    {showStatus && <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", status.class]}>{status.label}</span>}
+  </div>
+  <p class="mt-2 line-clamp-2 text-sm text-ink-muted">{need.description}</p>
+  <ul class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+    {budget && <li><span class="text-ink-muted">Presupuesto:</span> <strong>{budget}</strong></li>}
+    {need.city && <li>📍 {need.city.name}</li>}
+    {need.needed_by && <li>📅 Para el {formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" })}</li>}
+  </ul>
+  <div class="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3 text-sm">
+    <span class="flex min-w-0 items-center gap-2 text-ink-muted">
+      <Avatar name={name} path={need.author?.avatar_path} size={24} />
+      <span class="truncate">{name}</span>
+      {need.author?.verified_at && <VerifiedBadge size={13} />}
+      <span class="shrink-0">· {formatRelative(need.created_at)}</span>
+    </span>
+    <a href={needPath(need)} class="shrink-0 font-semibold text-brand hover:underline">
+      {need.proposals_count === 0 ? "Sé el primero en proponer" : `${need.proposals_count} ${need.proposals_count === 1 ? "propuesta" : "propuestas"}`}
+    </a>
+  </div>
+</article>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/posts/FeedPage.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -3421,7 +3623,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -4329,6 +4531,7 @@ const links = [
   { href: "/panel", label: "Resumen", active: path === "/panel" },
   { href: viewer ? `/u/${viewer.username}` : "/panel/perfil", label: "Mi perfil", active: path.startsWith("/panel/perfil") },
   { href: "/panel/publicaciones", label: "Mis publicaciones", active: path.startsWith("/panel/publicaciones") },
+  { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
 ];
@@ -4972,6 +5175,9 @@ export function postIdFromRef(ref: string | undefined): string | null {
 
 export const businessPath = (slug: string) => `/e/${slug}`;
 export const profilePath = (username: string) => `/u/${username}`;
+
+/** /necesidades/texto-legible-<id> (el texto es el slug que guarda la base). */
+export const needPath = (need: { id: string; slug: string }) => `/necesidades/${need.slug}-${need.id}`;
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/lib/viewer.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -5233,7 +5439,8 @@ import { createSupabaseAdminClient } from "../../../lib/supabase/admin";
  *  - se subieron pero nunca se publicaron (pending) hace más de 24 h, o
  *  - quedaron desvinculados (orphan) hace más de 24 h (editados o eliminados).
  *
- * Además borra las notificaciones leídas hace más de 90 días.
+ * Además borra las notificaciones leídas hace más de 90 días y marca como
+ * vencidas las necesidades que pasaron sus 30 días sin resolverse.
  *
  * Vercel envía "Authorization: Bearer <CRON_SECRET>": sin ese secreto, 401.
  * Procesa en lotes para no exceder el tiempo de una función.
@@ -5289,8 +5496,12 @@ export const GET: APIRoute = async ({ request }) => {
     .lt("read_at", oldRead);
   if (notifError) console.error("[cron/limpiar-archivos] notificaciones", notifError.message);
 
+  const { data: expiredNeeds, error: needsError } = await supabase.rpc("expire_needs");
+  if (needsError) console.error("[cron/limpiar-archivos] necesidades", needsError.message);
+
   return Response.json({
     ok: true,
+    expiredNeeds: Number(expiredNeeds ?? 0),
     media: removedRows.length,
     files: removedFiles,
     notifications: notifications ?? 0,
@@ -6527,10 +6738,577 @@ if (/^[a-z0-9_.]{3,30}$/.test(username)) {
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/necesidades/[ref].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Una necesidad: /necesidades/texto-legible-<id>
+ *
+ * - Quien la publicó ve todas las propuestas, puede aceptar una (se abre el
+ *   chat con esa persona), rechazar, cerrar o renovar si venció.
+ * - Otra persona con sesión puede mandar UNA propuesta (como persona o en
+ *   nombre de su emprendimiento), editarla o retirarla mientras espera.
+ * - Las propuestas de los demás no se ven nunca (lo controla la base, RLS).
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Button from "../../components/ui/Button.astro";
+import Field from "../../components/ui/Field.astro";
+import TextArea from "../../components/ui/TextArea.astro";
+import Alert from "../../components/ui/Alert.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import { budgetLabel, getNeed, getProposals, isOpen, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
+import type { ProposalView } from "../../services/needs";
+import { getMyBusinesses } from "../../services/businesses";
+import { displayName } from "../../services/profiles";
+import { newMessagePath } from "../../services/messages";
+import { getSubmittedForm } from "../../utils/form";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
+import { businessPath, needPath, postIdFromRef, profilePath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const id = postIdFromRef(Astro.params.ref);
+if (!id) return Astro.rewrite("/404");
+
+const need = await getNeed(supabase, id);
+if (!need) return Astro.rewrite("/404");
+
+const canonical = needPath(need);
+if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
+
+// Formularios de esta página: si salió bien, volver con GET (recargar no reenvía).
+const accepted = Astro.getActionResult(actions.needs.accept);
+if (accepted && !accepted.error) return Astro.redirect(`/mensajes/${accepted.data.conversationId}`, 303);
+const done: [ReturnType<typeof Astro.getActionResult>, string][] = [
+  [Astro.getActionResult(actions.needs.propose), "enviada"],
+  [Astro.getActionResult(actions.needs.updateProposal), "editada"],
+  [Astro.getActionResult(actions.needs.withdraw), "retirada"],
+  [Astro.getActionResult(actions.needs.decline), "rechazada"],
+  [Astro.getActionResult(actions.needs.close), "cerrada"],
+  [Astro.getActionResult(actions.needs.renew), "renovada"],
+];
+for (const [result, key] of done) {
+  if (result && !result.error) return Astro.redirect(`${canonical}?ok=${key}#propuestas`, 303);
+}
+const failed = [accepted, ...done.map(([r]) => r)].find((r) => r?.error)?.error ?? null;
+const fieldErrors = failed && isInputError(failed) ? (failed.fields as Record<string, string[] | undefined>) : {};
+const formError = failed && !isInputError(failed) ? failed.message : failed ? "Revisá los datos marcados." : null;
+const err = (name: string) => fieldErrors[name]?.[0];
+const submitted = failed ? await getSubmittedForm(Astro.request) : null;
+const v = (name: string, fallback = "") => (submitted ? String(submitted.get(name) ?? "") : fallback);
+
+const isAuthor = user?.id === need.author_id;
+const open = isOpen(need);
+const status = open ? NEED_STATUS_LABELS.open : need.status === "in_review" || need.status === "open" ? NEED_STATUS_LABELS.expired : NEED_STATUS_LABELS[need.status];
+const expired = !open && (need.status === "open" || need.status === "in_review" || need.status === "expired");
+
+const [proposals, businesses] = await Promise.all([
+  user ? getProposals(supabase, need.id) : Promise.resolve([] as ProposalView[]),
+  user && !isAuthor ? getMyBusinesses(supabase, user.id) : Promise.resolve([]),
+]);
+const mine = !isAuthor ? (proposals.find((p) => p.author_id === user?.id) ?? null) : null;
+const activeBusinesses = businesses.filter((b) => b.status === "active");
+const visible = isAuthor ? proposals.filter((p) => p.status !== "withdrawn") : [];
+// Primero la aceptada, después las pendientes, al final las no elegidas.
+const order = { accepted: 0, pending: 1, declined: 2, withdrawn: 3 };
+visible.sort((a, b) => order[a.status] - order[b.status] || a.created_at.localeCompare(b.created_at));
+
+const name = need.author ? displayName(need.author) : "Usuario";
+const budget = budgetLabel(need.budget_min, need.budget_max, formatMoney);
+const location = need.city ? `${need.city.name}${need.city.provinces ? `, ${need.city.provinces.name}` : ""}` : null;
+const ok = Astro.url.searchParams.get("ok");
+const published = Astro.url.searchParams.get("publicada") === "1";
+const okMessages: Record<string, string> = {
+  enviada: "¡Listo! Mandamos tu propuesta. Te avisamos si la eligen.",
+  editada: "Guardamos los cambios de tu propuesta.",
+  retirada: "Retiraste tu propuesta.",
+  rechazada: "Rechazaste la propuesta.",
+  cerrada: "Cerraste la necesidad: ya no recibe propuestas.",
+  renovada: "Renovaste la necesidad: recibe propuestas por 30 días más.",
+};
+const description = need.description.replace(/\s+/g, " ").slice(0, 155);
+const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "Usuario");
+---
+
+<BaseLayout title={need.title} description={description} canonicalPath={canonical} noindex={!open}>
+  <article class="mx-auto max-w-3xl px-4 py-6 sm:py-10">
+    <a href="/necesidades" class="text-sm font-medium text-ink-muted hover:text-ink">← Necesidades</a>
+
+    {published && (
+      <Alert tone="success" class="mt-4" title="¡Publicaste tu necesidad!">
+        Les avisamos a los emprendimientos de {need.category?.name ?? "ese rubro"} en {need.city?.name ?? "tu ciudad"}. Las propuestas te van a llegar como notificación y las ves acá abajo.
+      </Alert>
+    )}
+    {ok && okMessages[ok] && <Alert tone="success" class="mt-4">{okMessages[ok]}</Alert>}
+    {formError && <Alert tone="danger" class="mt-4">{formError}</Alert>}
+
+    <header class="mt-4">
+      <div class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="font-semibold uppercase tracking-wide text-seek">{need.subcategory?.name ?? need.category?.name}</span>
+        <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", status.class]}>{status.label}</span>
+      </div>
+      <h1 class="mt-2 text-2xl font-bold sm:text-3xl">{need.title}</h1>
+      <div class="mt-3 flex items-center gap-3">
+        {need.author && (
+          <a href={profilePath(need.author.username)} class="shrink-0" aria-label={`Perfil de ${name}`}>
+            <Avatar name={name} path={need.author.avatar_path} size={40} />
+          </a>
+        )}
+        <span class="min-w-0 text-sm">
+          <span class="flex items-center gap-1 font-semibold">
+            {need.author ? <a href={profilePath(need.author.username)} class="truncate hover:underline">{name}</a> : name}
+            {need.author?.verified_at && <VerifiedBadge size={14} />}
+          </span>
+          <span class="text-ink-muted">
+            Publicada <time datetime={need.created_at}>{formatRelative(need.created_at)}</time>
+          </span>
+        </span>
+      </div>
+    </header>
+
+    <dl class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-3">
+      <div>
+        <dt class="text-xs text-ink-muted">Presupuesto</dt>
+        <dd class="font-semibold">{budget ?? "A convenir"}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-ink-muted">Dónde</dt>
+        <dd class="font-semibold">{location ?? "—"}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-ink-muted">Para cuándo</dt>
+        <dd class="font-semibold">{need.needed_by ? formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" }) : "Sin fecha fija"}</dd>
+      </div>
+    </dl>
+
+    <div class="mt-6 whitespace-pre-line text-lg leading-relaxed">{need.description}</div>
+
+    <p class="mt-4 text-sm text-ink-muted">
+      {need.proposals_count === 0 ? "Todavía no recibió propuestas." : need.proposals_count === 1 ? "Recibió 1 propuesta." : `Recibió ${need.proposals_count} propuestas.`}
+      {open && ` Recibe propuestas hasta el ${formatDate(need.expires_at, { day: "numeric", month: "long" })}.`}
+    </p>
+
+    <section id="propuestas" class="mt-8 scroll-mt-20">
+      {
+        isAuthor ? (
+          <>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-xl font-bold">Propuestas que recibiste</h2>
+              <div class="flex gap-2">
+                {expired && (
+                  <form method="POST" action={actions.needs.renew}>
+                    <input type="hidden" name="need_id" value={need.id} />
+                    <Button type="submit" size="sm">Renovar 30 días</Button>
+                  </form>
+                )}
+                {(open || need.status === "awarded") && (
+                  <form method="POST" action={actions.needs.close} data-confirm="¿Cerrar la necesidad? Ya no vas a recibir propuestas.">
+                    <input type="hidden" name="need_id" value={need.id} />
+                    <Button type="submit" size="sm" variant="ghost">Cerrar necesidad</Button>
+                  </form>
+                )}
+              </div>
+            </div>
+            {open && visible.length > 0 && (
+              <p class="mt-1 text-sm text-ink-muted">Compará y elegí una. Al aceptarla se abre el chat con esa persona y las demás quedan como “no elegidas”.</p>
+            )}
+            {visible.length === 0 ? (
+              <div class="mt-4 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">
+                {open ? "Cuando alguien te mande una propuesta, te avisamos y aparece acá." : "Esta necesidad no recibió propuestas."}
+              </div>
+            ) : (
+              <ul class="mt-4 flex flex-col gap-3">
+                {visible.map((p) => {
+                  const label = PROPOSAL_STATUS_LABELS[p.status];
+                  const pname = proposerName(p);
+                  return (
+                    <li
+                      class:list={[
+                        "rounded-wl-lg border bg-surface p-4",
+                        p.status === "accepted" ? "border-success" : "border-line",
+                        p.status === "declined" && "opacity-70",
+                      ]}
+                      data-proposal={p.id}
+                    >
+                      <div class="flex items-start gap-3">
+                        {p.business ? (
+                          <a href={businessPath(p.business.slug)} class="shrink-0">
+                            <Avatar name={p.business.name} path={p.business.logo_path} purpose="logo" shape="rounded" size={44} />
+                          </a>
+                        ) : (
+                          p.author && (
+                            <a href={profilePath(p.author.username)} class="shrink-0">
+                              <Avatar name={pname} path={p.author.avatar_path} size={44} />
+                            </a>
+                          )
+                        )}
+                        <div class="min-w-0 flex-1">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="min-w-0">
+                              {p.business ? (
+                                <a href={businessPath(p.business.slug)} class="block truncate font-semibold hover:underline">{p.business.name}</a>
+                              ) : null}
+                              <span class:list={["flex items-center gap-1", p.business ? "text-sm text-ink-muted" : "font-semibold"]}>
+                                {p.author ? <a href={profilePath(p.author.username)} class="truncate hover:underline">{pname}</a> : pname}
+                                {p.author?.verified_at && <VerifiedBadge size={13} />}
+                              </span>
+                            </span>
+                            <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
+                          </div>
+                          <p class="mt-1 flex flex-wrap gap-x-4 text-sm">
+                            <span><span class="text-ink-muted">Precio:</span> <strong>{p.amount != null ? formatMoney(p.amount) : "A convenir"}</strong></span>
+                            {p.availability && <span><span class="text-ink-muted">Disponibilidad:</span> {p.availability}</span>}
+                            <span class="text-ink-muted">{formatRelative(p.created_at)}</span>
+                          </p>
+                          <p class="mt-2 whitespace-pre-line">{p.message}</p>
+                          <div class="mt-3 flex flex-wrap gap-2">
+                            {p.status === "pending" && open && (
+                              <form method="POST" action={actions.needs.accept} data-confirm={`¿Aceptar la propuesta de ${p.business?.name ?? pname}? Las demás quedan como “no elegidas” y la necesidad se marca como resuelta.`}>
+                                <input type="hidden" name="proposal_id" value={p.id} />
+                                <Button type="submit" size="sm">Aceptar</Button>
+                              </form>
+                            )}
+                            {p.author && (
+                              <Button href={newMessagePath(p.author.username)} size="sm" variant="secondary" data-open-chat={p.author.username}>
+                                {p.status === "accepted" ? "Ir al chat" : "Preguntar"}
+                              </Button>
+                            )}
+                            {p.status === "pending" && (
+                              <form method="POST" action={actions.needs.decline}>
+                                <input type="hidden" name="proposal_id" value={p.id} />
+                                <Button type="submit" size="sm" variant="ghost">Rechazar</Button>
+                              </form>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        ) : !user ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center">
+            <p class="font-semibold">{open ? "¿Podés resolverlo?" : "Esta necesidad ya no recibe propuestas."}</p>
+            {open && (
+              <>
+                <p class="mt-1 text-sm text-ink-muted">Ingresá para mandar tu propuesta con precio y disponibilidad.</p>
+                <Button href={`/ingresar?next=${encodeURIComponent(canonical + "#propuestas")}`} class="mt-4">Ingresar para proponer</Button>
+              </>
+            )}
+          </div>
+        ) : mine && mine.status !== "withdrawn" ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-lg font-bold">Tu propuesta</h2>
+              <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", PROPOSAL_STATUS_LABELS[mine.status].class]}>
+                {PROPOSAL_STATUS_LABELS[mine.status].label}
+              </span>
+            </div>
+            {mine.business && <p class="mt-1 text-sm text-ink-muted">En nombre de {mine.business.name}</p>}
+            <p class="mt-2 text-sm">
+              <span class="text-ink-muted">Precio:</span> <strong>{mine.amount != null ? formatMoney(mine.amount) : "A convenir"}</strong>
+              {mine.availability && <> · <span class="text-ink-muted">Disponibilidad:</span> {mine.availability}</>}
+            </p>
+            <p class="mt-2 whitespace-pre-line">{mine.message}</p>
+            {mine.status === "accepted" && need.author && (
+              <div class="mt-4">
+                <p class="text-sm">¡{name} eligió tu propuesta! Coordinen los detalles por mensajes.</p>
+                <Button href={newMessagePath(need.author.username)} class="mt-3" data-open-chat={need.author.username}>Ir al chat</Button>
+              </div>
+            )}
+            {mine.status === "declined" && <p class="mt-3 text-sm text-ink-muted">Esta vez eligieron otra propuesta. ¡Seguí atento a nuevas necesidades!</p>}
+            {mine.status === "pending" && (
+              <div class="mt-4 flex flex-wrap items-start gap-2">
+                <details class="w-full" open={Boolean(failed && submitted?.get("proposal_id"))}>
+                  <summary class="inline-flex h-9 cursor-pointer items-center rounded-wl border border-line px-3 text-sm font-medium hover:bg-surface-muted">Editar</summary>
+                  <form method="POST" action={actions.needs.updateProposal} class="mt-3 flex flex-col gap-4" novalidate>
+                    <input type="hidden" name="proposal_id" value={mine.id} />
+                    <TextArea name="message" label="Mensaje" rows={4} required maxlength={2000} value={v("message", mine.message)} error={err("message")} />
+                    <div class="grid gap-4 sm:grid-cols-2">
+                      <Field name="amount" label="Precio (opcional)" inputmode="decimal" value={v("amount", mine.amount != null ? String(mine.amount).replace(".", ",") : "")} error={err("amount")} />
+                      <Field name="availability" label="Disponibilidad (opcional)" maxlength={120} value={v("availability", mine.availability ?? "")} error={err("availability")} />
+                    </div>
+                    <div><Button type="submit" size="sm">Guardar cambios</Button></div>
+                  </form>
+                </details>
+                <form method="POST" action={actions.needs.withdraw} data-confirm="¿Retirar tu propuesta?">
+                  <input type="hidden" name="proposal_id" value={mine.id} />
+                  <Button type="submit" size="sm" variant="ghost" class="text-danger">Retirar propuesta</Button>
+                </form>
+              </div>
+            )}
+          </div>
+        ) : !open ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center text-ink-muted">Esta necesidad ya no recibe propuestas.</div>
+        ) : mine ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center text-ink-muted">Retiraste tu propuesta para esta necesidad.</div>
+        ) : (
+          <div class="rounded-wl-lg border border-line bg-surface p-4 sm:p-6">
+            <h2 class="text-xl font-bold">Mandá tu propuesta</h2>
+            <p class="mt-1 text-sm text-ink-muted">Contá cómo lo resolverías, tu precio y cuándo podés. Solo {name} ve tu propuesta.</p>
+            <form method="POST" action={actions.needs.propose} class="mt-4 flex flex-col gap-4" novalidate>
+              <input type="hidden" name="need_id" value={need.id} />
+              {activeBusinesses.length > 0 && (
+                <div class="flex flex-col gap-1.5">
+                  <label for="business_id" class="text-sm font-medium">Proponer como</label>
+                  <select
+                    id="business_id"
+                    name="business_id"
+                    class="h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+                  >
+                    <option value="">Yo, como persona</option>
+                    {activeBusinesses.map((b, i) => (
+                      <option value={b.id} selected={submitted ? v("business_id") === b.id : i === 0}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <TextArea
+                name="message"
+                label="Tu propuesta"
+                rows={5}
+                required
+                maxlength={2000}
+                placeholder="Ej.: Hola, soy electricista matriculado. Puedo pasar a revisar el tablero, incluye materiales básicos…"
+                value={v("message")}
+                error={err("message")}
+              />
+              <div class="grid gap-4 sm:grid-cols-2">
+                <Field name="amount" label="Precio (opcional)" inputmode="decimal" placeholder="Ej.: 35.000" value={v("amount")} error={err("amount")} hint="Dejalo vacío si es a convenir." />
+                <Field name="availability" label="Disponibilidad (opcional)" maxlength={120} placeholder="Ej.: Esta semana, de tarde" value={v("availability")} error={err("availability")} />
+              </div>
+              <div><Button type="submit" size="lg">Enviar propuesta</Button></div>
+            </form>
+          </div>
+        )
+      }
+    </section>
+  </article>
+</BaseLayout>
+
+<script>
+  // Confirmación antes de acciones que no se pueden deshacer.
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-confirm]");
+    if (form && !window.confirm(form.dataset.confirm!)) event.preventDefault();
+  });
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/necesidades/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Necesidades abiertas: lo que la gente está buscando, con filtros por rubro
+ * y ciudad. Quien ofrece ese servicio entra y manda su propuesta.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import NeedCard from "../../components/needs/NeedCard.astro";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { getOpenNeeds } from "../../services/needs";
+import { getCategoryTree } from "../../services/categories";
+import { getCity } from "../../services/locations";
+
+const { supabase, user } = Astro.locals;
+const params = Astro.url.searchParams;
+const categories = await getCategoryTree(supabase);
+const category = categories.find((c) => c.slug === params.get("rubro")) ?? null;
+const cityId = Number.parseInt(params.get("ciudad") ?? "", 10);
+const city = Number.isInteger(cityId) && cityId > 0 ? await getCity(supabase, cityId) : null;
+const page = Math.max(1, Math.min(50, Number.parseInt(params.get("pagina") ?? "1", 10) || 1));
+const { needs, hasMore } = await getOpenNeeds(supabase, { categoryId: category?.id, cityId: city?.id, page });
+
+const link = (p: number) => {
+  const q = new URLSearchParams();
+  if (category) q.set("rubro", category.slug);
+  if (city) q.set("ciudad", String(city.id));
+  if (p > 1) q.set("pagina", String(p));
+  const s = q.toString();
+  return `/necesidades${s ? `?${s}` : ""}`;
+};
+const filtered = Boolean(category || city);
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout
+  title={category || city ? `Necesidades${category ? ` de ${category.name.toLowerCase()}` : ""}${city ? ` en ${city.name}` : ""}` : "Necesidades: lo que la gente está buscando"}
+  description="Personas que buscan un servicio o un producto en tu zona. Si es lo tuyo, mandales una propuesta en WorkLink."
+  canonicalPath="/necesidades"
+  noindex={filtered || page > 1}
+>
+  <section class="mx-auto max-w-3xl px-4 py-8">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Necesidades</h1>
+        <p class="mt-1 max-w-xl text-ink-muted">Personas que están buscando algo. Si es lo tuyo, mandales una propuesta con tu precio.</p>
+      </div>
+      <Button href={user ? "/necesidades/nueva" : "/registrarse"}>Publicar una necesidad</Button>
+    </div>
+
+    <form method="GET" action="/necesidades" class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <div class="flex flex-col gap-1.5">
+        <label for="n-rubro" class="text-sm font-medium">Rubro</label>
+        <select id="n-rubro" name="rubro" class={selectClass}>
+          <option value="">Todos</option>
+          {categories.map((c) => <option value={c.slug} selected={c.id === category?.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <CityPicker client:load name="ciudad" label="Ciudad" initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null} />
+      <button type="submit" class="h-11 rounded-wl bg-brand px-5 font-semibold text-brand-contrast hover:bg-brand-hover">Filtrar</button>
+    </form>
+
+    {
+      needs.length === 0 ? (
+        <div class="mt-8 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <p class="font-semibold">{filtered ? "No hay necesidades abiertas con esos filtros." : "Todavía no hay necesidades abiertas."}</p>
+          <p class="mt-1 text-sm text-ink-muted">¿Buscás algo? Publicalo y que te lleguen propuestas.</p>
+        </div>
+      ) : (
+        <div class="mt-6 flex flex-col gap-4">
+          {needs.map((need) => <NeedCard need={need} />)}
+        </div>
+      )
+    }
+    {
+      (page > 1 || hasMore) && (
+        <nav class="mt-6 flex justify-between gap-4" aria-label="Páginas">
+          {page > 1 ? <a href={link(page - 1)} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
+          {hasMore && <a href={link(page + 1)} class="font-semibold text-brand hover:underline">Más necesidades →</a>}
+        </nav>
+      )
+    }
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/necesidades/nueva.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Publicar una necesidad: qué, rubro, ciudad, para cuándo y presupuesto. */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import TextArea from "../../components/ui/TextArea.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { getCategoryTree } from "../../services/categories";
+import { getCity } from "../../services/locations";
+import { getOwnProfile } from "../../services/profiles";
+import { getSubmittedForm } from "../../utils/form";
+import { needPath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const result = Astro.getActionResult(actions.needs.create);
+if (result && !result.error) return Astro.redirect(`${needPath(result.data)}?publicada=1`);
+
+const [categories, profile] = await Promise.all([getCategoryTree(supabase), getOwnProfile(supabase, user!.id)]);
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const err = (name: string) => fieldErrors[name]?.[0];
+const v = (name: string) => (submitted ? String(submitted.get(name) ?? "") : "");
+
+const submittedCity = Number(v("city_id"));
+const city = submittedCity ? await getCity(supabase, submittedCity) : (profile?.city ?? null);
+const categoryParam = Astro.url.searchParams.get("rubro");
+const categoryId = Number(v("category_id")) || categories.find((c) => c.slug === categoryParam)?.id || null;
+const subcategoryId = Number(v("subcategory_id")) || null;
+const today = new Date().toISOString().slice(0, 10);
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout title="Publicar una necesidad" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <a href="/necesidades" class="text-sm font-medium text-ink-muted hover:text-ink">← Necesidades</a>
+    <h1 class="mt-2 text-2xl font-bold sm:text-3xl">¿Qué necesitás?</h1>
+    <p class="mt-1 text-ink-muted">
+      Contalo con detalle. Los emprendimientos de ese rubro en tu ciudad reciben un aviso y te mandan propuestas con su precio.
+      Vos elegís la que más te convenga.
+    </p>
+
+    {formError && <Alert tone="danger" class="mt-6">{formError}</Alert>}
+
+    <form method="POST" action={actions.needs.create} class="mt-6 flex flex-col gap-5" novalidate data-need-form>
+      <Field name="title" label="Título" required maxlength={140} placeholder="Ej.: Necesito electricista para revisar un local" value={v("title")} error={err("title")} />
+      <TextArea
+        name="description"
+        label="Detalles"
+        rows={5}
+        required
+        maxlength={5000}
+        placeholder="Qué hay que hacer, dónde, cuándo, materiales, cualquier dato que ayude a darte un buen precio."
+        value={v("description")}
+        error={err("description")}
+      />
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div class="flex flex-col gap-1.5">
+          <label for="category_id" class="text-sm font-medium">Rubro</label>
+          <select id="category_id" name="category_id" required class={selectClass} data-category-select aria-invalid={err("category_id") ? "true" : undefined}>
+            <option value="">Elegí un rubro</option>
+            {categories.map((c) => <option value={c.id} selected={categoryId === c.id}>{c.name}</option>)}
+          </select>
+          {err("category_id") && <p class="text-sm text-danger" role="alert">{err("category_id")}</p>}
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label for="subcategory_id" class="text-sm font-medium">Especialidad (opcional)</label>
+          <select id="subcategory_id" name="subcategory_id" class={selectClass} data-subcategory-select>
+            <option value="">Ninguna en particular</option>
+            {categories.map((c) => (
+              <optgroup label={c.name} data-category={c.id}>
+                {c.subcategories.map((s) => <option value={s.id} selected={subcategoryId === s.id}>{s.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      </div>
+      <CityPicker
+        client:load
+        name="city_id"
+        label="Ciudad"
+        required
+        initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+        error={err("city_id")}
+      />
+      <div class="grid gap-4 sm:grid-cols-3">
+        <Field name="needed_by" label="¿Para cuándo? (opcional)" type="date" min={today} value={v("needed_by")} error={err("needed_by")} />
+        <Field name="budget_min" label="Presupuesto desde (opcional)" inputmode="decimal" placeholder="Ej.: 20.000" value={v("budget_min")} error={err("budget_min")} />
+        <Field name="budget_max" label="Presupuesto hasta (opcional)" inputmode="decimal" placeholder="Ej.: 50.000" value={v("budget_max")} error={err("budget_max")} />
+      </div>
+      <p class="text-xs text-ink-muted">No pongas tu teléfono ni tu dirección: hablás con quien elijas por mensajes privados. La necesidad recibe propuestas durante 30 días.</p>
+      <div>
+        <Button type="submit" size="lg">Publicar necesidad</Button>
+      </div>
+    </form>
+  </section>
+</BaseLayout>
+
+<script>
+  // Especialidades: solo las del rubro elegido.
+  const form = document.querySelector<HTMLFormElement>("[data-need-form]");
+  const category = form?.querySelector<HTMLSelectElement>("[data-category-select]");
+  const sub = form?.querySelector<HTMLSelectElement>("[data-subcategory-select]");
+  const sync = () => {
+    if (!category || !sub) return;
+    for (const group of sub.querySelectorAll<HTMLOptGroupElement>("optgroup")) {
+      const visible = group.dataset.category === category.value;
+      group.hidden = !visible;
+      group.disabled = !visible;
+    }
+    const selected = sub.selectedOptions[0];
+    if (selected?.parentElement instanceof HTMLOptGroupElement && selected.parentElement.disabled) sub.value = "";
+  };
+  category?.addEventListener("change", sync);
+  sync();
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/notificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Notificaciones del usuario: me gusta, comentarios y nuevos seguidores.
+ * Notificaciones del usuario: me gusta, comentarios, seguidores y
+ * necesidades/propuestas.
  * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
  * esta vez). Ruta protegida por el middleware.
  */
@@ -6541,7 +7319,7 @@ import { decodeCursor, getNotifications, markAllRead, type NotificationView } fr
 import { displayName } from "../services/profiles";
 import { postHeadline } from "../services/posts";
 import { formatDate, formatRelative } from "../lib/format";
-import { postPath, profilePath } from "../lib/urls";
+import { needPath, postPath, profilePath } from "../lib/urls";
 
 const { supabase, user } = Astro.locals;
 const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
@@ -6573,6 +7351,32 @@ function describe(n: NotificationView) {
         icon: "+",
         tone: "bg-offer text-white",
       };
+    case "need_proposal":
+      return {
+        name,
+        text: `te mandó una propuesta para “${n.need?.title ?? "tu necesidad"}”.`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
+        icon: "$",
+        tone: "bg-offer text-white",
+      };
+    case "proposal_accepted":
+      return {
+        name,
+        text: `aceptó tu propuesta para “${n.need?.title ?? "su necesidad"}”. ¡Coordinen por mensajes!`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
+        icon: "✓",
+        tone: "bg-success text-white",
+      };
+    case "need_match":
+      return {
+        name,
+        text: `necesita algo de tu rubro: “${n.need?.title ?? "una necesidad"}”. Mandale tu propuesta.`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/necesidades",
+        icon: "!",
+        tone: "bg-seek text-white",
+      };
+    default:
+      return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }
 }
 ---
@@ -6585,7 +7389,7 @@ function describe(n: NotificationView) {
       items.length === 0 ? (
         <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
-          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente o te siga, te avisamos acá.</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga o te mande una propuesta, te avisamos acá.</p>
         </div>
       ) : (
         <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
@@ -7429,6 +8233,87 @@ const logoutAction = `/salir${actions.auth.signOut}`;
   <form method="POST" action={logoutAction} class="mt-10 border-t border-line pt-6">
     <Button type="submit" variant="ghost" size="sm">Cerrar sesión</Button>
   </form>
+</PanelLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/panel/necesidades.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Mis necesidades (lo que publiqué y cuántas propuestas recibió) y mis
+ * propuestas (lo que ofrecí y en qué quedó). Solo las ve el usuario (RLS).
+ */
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import NeedCard from "../../components/needs/NeedCard.astro";
+import { getMyNeeds, getMyProposals, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
+import { formatMoney, formatRelative } from "../../lib/format";
+import { needPath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const tab = Astro.url.searchParams.get("ver") === "propuestas" ? "proposals" : "needs";
+const [needs, proposals] = await Promise.all([getMyNeeds(supabase, user!.id), getMyProposals(supabase, user!.id)]);
+const pending = needs.reduce((sum, n) => sum + (["open", "in_review"].includes(n.status) ? n.proposals_count : 0), 0);
+const tabClass = (active: boolean) =>
+  `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+---
+
+<PanelLayout title="Necesidades" description="Lo que pediste y las propuestas que mandaste.">
+  <Button slot="actions" href="/necesidades/nueva">Publicar una necesidad</Button>
+
+  <div class="mb-5 flex flex-wrap gap-2">
+    <a href="/panel/necesidades" class={tabClass(tab === "needs")} aria-current={tab === "needs" ? "page" : undefined}>
+      Mis necesidades ({needs.length})
+    </a>
+    <a href="/panel/necesidades?ver=propuestas" class={tabClass(tab === "proposals")} aria-current={tab === "proposals" ? "page" : undefined}>
+      Mis propuestas ({proposals.length})
+    </a>
+  </div>
+
+  {
+    tab === "needs" ? (
+      needs.length === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">¿Necesitás algo?</h2>
+          <p class="mt-1 text-ink-muted">Publicalo y los emprendimientos de ese rubro en tu ciudad te mandan propuestas con precio.</p>
+          <div class="mt-4"><Button href="/necesidades/nueva">Publicar una necesidad</Button></div>
+        </div>
+      ) : (
+        <>
+          {pending > 0 && <p class="mb-4 text-sm text-ink-muted">Tenés {pending === 1 ? "1 propuesta" : `${pending} propuestas`} para revisar en tus necesidades abiertas.</p>}
+          <div class="flex max-w-2xl flex-col gap-3">
+            {needs.map((need) => <NeedCard need={need} showStatus />)}
+          </div>
+        </>
+      )
+    ) : proposals.length === 0 ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <h2 class="text-lg font-semibold">Todavía no mandaste propuestas</h2>
+        <p class="mt-1 text-ink-muted">Mirá lo que la gente necesita y ofrecé tu trabajo.</p>
+        <div class="mt-4"><Button href="/necesidades" variant="secondary">Ver necesidades</Button></div>
+      </div>
+    ) : (
+      <ul class="flex max-w-2xl flex-col gap-3">
+        {proposals.map((p) => {
+          const label = PROPOSAL_STATUS_LABELS[p.status];
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4">
+              <div class="flex items-start justify-between gap-3">
+                <a href={p.need ? `${needPath(p.need)}#propuestas` : "#"} class="min-w-0 font-semibold hover:underline">
+                  {p.need?.title ?? "Necesidad eliminada"}
+                </a>
+                <span class:list={["shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
+              </div>
+              <p class="mt-1 text-sm text-ink-muted">
+                {p.amount != null ? formatMoney(Number(p.amount)) : "Precio a convenir"}
+                {p.need?.city && ` · ${p.need.city.name}`} · {formatRelative(p.created_at)}
+                {p.need && p.status === "pending" && ` · Necesidad: ${NEED_STATUS_LABELS[p.need.status].label.toLowerCase()}`}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
 </PanelLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -8567,18 +9452,19 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/pages/sitemap.xml.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { directoryPath, getDirectoryCategories, getSeoThresholds } from "../services/directory";
-import { postPath } from "../lib/urls";
+import { needPath, postPath } from "../lib/urls";
 
 /**
  * Mapa del sitio para buscadores: páginas públicas indexables.
  *  - inicio, publicaciones y directorio de rubros
  *  - rubros con suficientes emprendimientos y pares rubro + ciudad
- *  - emprendimientos activos y publicaciones públicas recientes
+ *  - emprendimientos activos, publicaciones públicas recientes y necesidades abiertas
  * Se genera en cada pedido y la CDN lo guarda una hora. Máximo 50.000 URLs
  * (límite del protocolo); cuando se acerque, se divide en un índice.
  */
 const MAX_POSTS = 10000;
 const MAX_BUSINESSES = 30000;
+const MAX_NEEDS = 5000;
 
 const escape = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -8588,7 +9474,7 @@ export const GET: APIRoute = async ({ locals, site, url }) => {
   const abs = (path: string) => new URL(path, origin).toString();
 
   const thresholds = await getSeoThresholds(supabase);
-  const [categories, pairs, businesses, posts] = await Promise.all([
+  const [categories, pairs, businesses, posts, needs] = await Promise.all([
     getDirectoryCategories(supabase),
     supabase.rpc("directory_landing_pairs", { p_min: thresholds.minBusinesses }),
     supabase
@@ -8605,11 +9491,20 @@ export const GET: APIRoute = async ({ locals, site, url }) => {
       .is("deleted_at", null)
       .order("published_at", { ascending: false })
       .limit(MAX_POSTS),
+    supabase
+      .from("needs")
+      .select("id, slug, updated_at")
+      .in("status", ["open", "in_review"])
+      .is("deleted_at", null)
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(MAX_NEEDS),
   ]);
 
   const entries: { loc: string; lastmod?: string }[] = [
     { loc: abs("/") },
     { loc: abs("/publicaciones") },
+    { loc: abs("/necesidades") },
     { loc: abs(directoryPath.index) },
     ...categories.filter((c) => c.businesses >= thresholds.minBusinessesAlt).map((c) => ({ loc: abs(directoryPath.category(c.slug)) })),
     ...((pairs.data ?? []) as { category_slug: string; province_slug: string; city_slug: string; last_updated: string }[]).map((p) => ({
@@ -8621,6 +9516,7 @@ export const GET: APIRoute = async ({ locals, site, url }) => {
       loc: abs(postPath(p)),
       lastmod: p.updated_at,
     })),
+    ...((needs.data ?? []) as { id: string; slug: string; updated_at: string }[]).map((n) => ({ loc: abs(needPath(n)), lastmod: n.updated_at })),
   ];
 
   const xml = [
@@ -9257,6 +10153,65 @@ export const sendMessageSchema = z.object({
 export const conversationRefSchema = z.object({
   conversation_id: z.string().regex(UUID),
 });
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/schemas/need.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+import { optionalAmount, optionalId, optionalText } from "./common";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const emptyToUndefined = (value: unknown) => (value === "" || value === null ? undefined : value);
+const uuid = z.string().regex(UUID);
+
+export const needSchema = z
+  .object({
+    title: z
+      .string({ error: "Escribí qué necesitás" })
+      .trim()
+      .min(10, { error: "Contalo en al menos 10 caracteres, por ejemplo “Necesito electricista”" })
+      .max(140, { error: "El título puede tener hasta 140 caracteres" }),
+    description: z
+      .string({ error: "Contá los detalles" })
+      .trim()
+      .min(20, { error: "Sumá algunos detalles (al menos 20 caracteres): qué, dónde, cuándo" })
+      .max(5000, { error: "La descripción puede tener hasta 5000 caracteres" }),
+    category_id: z.coerce.number({ error: "Elegí un rubro" }).int().positive({ error: "Elegí un rubro" }),
+    subcategory_id: optionalId,
+    city_id: z.coerce.number({ error: "Elegí la ciudad" }).int().positive({ error: "Elegí la ciudad" }),
+    needed_by: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Fecha inválida" })
+        .optional(),
+    ),
+    budget_min: optionalAmount,
+    budget_max: optionalAmount,
+  })
+  .refine((v) => v.budget_min == null || v.budget_max == null || v.budget_min <= v.budget_max, {
+    message: "El presupuesto mínimo no puede ser mayor que el máximo",
+    path: ["budget_max"],
+  });
+
+export type NeedInput = z.infer<typeof needSchema>;
+
+export const needRefSchema = z.object({ need_id: uuid });
+
+export const proposalSchema = z.object({
+  need_id: uuid,
+  message: z
+    .string({ error: "Escribí tu propuesta" })
+    .trim()
+    .min(20, { error: "Contá tu propuesta en al menos 20 caracteres" })
+    .max(2000, { error: "La propuesta puede tener hasta 2000 caracteres" }),
+  amount: optionalAmount,
+  availability: optionalText(120, "La disponibilidad"),
+  business_id: z.preprocess(emptyToUndefined, uuid.optional()),
+});
+
+export const proposalUpdateSchema = proposalSchema.omit({ need_id: true, business_id: true }).extend({ proposal_id: uuid });
+
+export const proposalRefSchema = z.object({ proposal_id: uuid });
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/post.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11057,6 +12012,163 @@ export function newMessagePath(username: string, postId?: string | null): string
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/services/needs.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * Necesidades (lo que alguien busca) y sus propuestas. Las propuestas solo las
+ * ven quien las mandó y quien publicó la necesidad (RLS).
+ */
+
+export type NeedStatus = "open" | "in_review" | "awarded" | "closed" | "expired";
+export type ProposalStatus = "pending" | "accepted" | "declined" | "withdrawn";
+
+export interface NeedView {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  author_id: string;
+  category_id: number;
+  subcategory_id: number | null;
+  city_id: number;
+  needed_by: string | null;
+  budget_min: number | null;
+  budget_max: number | null;
+  status: NeedStatus;
+  proposals_count: number;
+  expires_at: string;
+  created_at: string;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null } | null;
+  category: { name: string; slug: string } | null;
+  subcategory: { name: string } | null;
+  city: { name: string; slug: string; provinces: { name: string; slug: string } | null } | null;
+}
+
+export interface ProposalView {
+  id: string;
+  need_id: string;
+  author_id: string;
+  business_id: string | null;
+  message: string;
+  amount: number | null;
+  availability: string | null;
+  status: ProposalStatus;
+  created_at: string;
+  author: { username: string; first_name: string | null; last_name: string | null; avatar_path: string | null; verified_at: string | null; headline: string | null } | null;
+  business: { slug: string; name: string; logo_path: string | null } | null;
+}
+
+const NEED_COLUMNS = `id, slug, title, description, author_id, category_id, subcategory_id, city_id, needed_by,
+  budget_min, budget_max, status, proposals_count, expires_at, created_at,
+  author:profiles!needs_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at ),
+  category:categories ( name, slug ),
+  subcategory:subcategories ( name ),
+  city:cities ( name, slug, provinces ( name, slug ) )`;
+
+const PROPOSAL_COLUMNS = `id, need_id, author_id, business_id, message, amount, availability, status, created_at,
+  author:profiles!proposals_author_id_fkey ( username, first_name, last_name, avatar_path, verified_at, headline ),
+  business:businesses ( slug, name, logo_path )`;
+
+const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+const toNeed = (row: NeedView): NeedView => ({ ...row, budget_min: num(row.budget_min), budget_max: num(row.budget_max) });
+const toProposal = (row: ProposalView): ProposalView => ({ ...row, amount: num(row.amount) });
+
+export const NEEDS_PAGE = 20;
+export const OPEN_STATUSES: NeedStatus[] = ["open", "in_review"];
+
+export async function getOpenNeeds(
+  supabase: SupabaseClient,
+  { categoryId, cityId, page = 1 }: { categoryId?: number | null; cityId?: number | null; page?: number } = {},
+): Promise<{ needs: NeedView[]; hasMore: boolean }> {
+  const from = (page - 1) * NEEDS_PAGE;
+  let query = supabase
+    .from("needs")
+    .select(NEED_COLUMNS)
+    .in("status", OPEN_STATUSES)
+    .is("deleted_at", null)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, from + NEEDS_PAGE);
+  if (categoryId) query = query.eq("category_id", categoryId);
+  if (cityId) query = query.eq("city_id", cityId);
+  const { data, error } = await query;
+  if (error) throw error;
+  const rows = ((data ?? []) as unknown as NeedView[]).filter((n) => n.author).map(toNeed);
+  return { needs: rows.slice(0, NEEDS_PAGE), hasMore: rows.length > NEEDS_PAGE };
+}
+
+export async function getNeed(supabase: SupabaseClient, id: string): Promise<NeedView | null> {
+  const { data, error } = await supabase.from("needs").select(NEED_COLUMNS).eq("id", id).is("deleted_at", null).maybeSingle();
+  if (error) throw error;
+  return data ? toNeed(data as unknown as NeedView) : null;
+}
+
+/** Propuestas que el usuario puede ver de una necesidad (todas si es el autor; la propia si no). */
+export async function getProposals(supabase: SupabaseClient, needId: string): Promise<ProposalView[]> {
+  const { data, error } = await supabase.from("proposals").select(PROPOSAL_COLUMNS).eq("need_id", needId).order("created_at");
+  if (error) throw error;
+  return ((data ?? []) as unknown as ProposalView[]).map(toProposal);
+}
+
+export async function getMyNeeds(supabase: SupabaseClient, userId: string): Promise<NeedView[]> {
+  const { data, error } = await supabase
+    .from("needs")
+    .select(NEED_COLUMNS)
+    .eq("author_id", userId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return ((data ?? []) as unknown as NeedView[]).map(toNeed);
+}
+
+export async function getMyProposals(supabase: SupabaseClient, userId: string) {
+  const { data, error } = await supabase
+    .from("proposals")
+    .select(`id, need_id, status, amount, created_at, need:needs!proposals_need_id_fkey ( id, slug, title, status, city:cities ( name ) )`)
+    .eq("author_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []) as unknown as {
+    id: string;
+    need_id: string;
+    status: ProposalStatus;
+    amount: number | null;
+    created_at: string;
+    need: { id: string; slug: string; title: string; status: NeedStatus; city: { name: string } | null } | null;
+  }[];
+}
+
+export const NEED_STATUS_LABELS: Record<NeedStatus, { label: string; class: string }> = {
+  open: { label: "Recibe propuestas", class: "bg-success-soft text-success" },
+  in_review: { label: "Recibe propuestas", class: "bg-success-soft text-success" },
+  awarded: { label: "Resuelta", class: "bg-seek-soft text-seek" },
+  closed: { label: "Cerrada", class: "bg-surface-muted text-ink-muted" },
+  expired: { label: "Vencida", class: "bg-warning-soft text-warning" },
+};
+
+export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, { label: string; class: string }> = {
+  pending: { label: "Esperando respuesta", class: "bg-surface-muted text-ink" },
+  accepted: { label: "Aceptada", class: "bg-success-soft text-success" },
+  declined: { label: "No elegida", class: "bg-surface-muted text-ink-muted" },
+  withdrawn: { label: "Retirada", class: "bg-surface-muted text-ink-muted" },
+};
+
+/** "$ 20.000 a $ 50.000", "Hasta $ 50.000", "Desde $ 20.000" o null. */
+export function budgetLabel(min: number | null, max: number | null, format: (n: number) => string): string | null {
+  if (min != null && max != null) return min === max ? format(min) : `${format(min)} a ${format(max)}`;
+  if (max != null) return `Hasta ${format(max)}`;
+  if (min != null) return `Desde ${format(min)}`;
+  return null;
+}
+
+export const isOpen = (need: Pick<NeedView, "status" | "expires_at">) =>
+  OPEN_STATUSES.includes(need.status) && new Date(need.expires_at) > new Date();
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/services/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decodeCursor, encodeCursor, type Cursor } from "./posts";
@@ -11066,7 +12178,14 @@ import { decodeCursor, encodeCursor, type Cursor } from "./posts";
  * Las crea la base con triggers; acá solo se leen y se marcan como leídas.
  */
 
-export type NotificationType = "post_like" | "post_comment" | "profile_follow" | "business_follow";
+export type NotificationType =
+  | "post_like"
+  | "post_comment"
+  | "profile_follow"
+  | "business_follow"
+  | "need_proposal"
+  | "proposal_accepted"
+  | "need_match";
 
 export interface NotificationView {
   id: string;
@@ -11077,6 +12196,7 @@ export interface NotificationView {
   post: { id: string; title: string | null; body: string } | null;
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
+  need: { id: string; slug: string; title: string } | null;
 }
 
 export const NOTIFICATIONS_PAGE = 30;
@@ -11085,7 +12205,8 @@ const COLUMNS = `id, type, created_at, read_at,
   actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path, verified_at ),
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
-  business:businesses ( slug, name )`;
+  business:businesses ( slug, name ),
+  need:needs ( id, slug, title )`;
 
 export async function getNotifications(
   supabase: SupabaseClient,
@@ -13256,13 +14377,358 @@ grant  execute on function public.latest_unread_message() to authenticated;
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008001900_proposals_types.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0019 · Tipos para propuestas (Etapa 10)
+-- =============================================================================
+-- Van en una migración aparte porque Postgres no deja usar un valor nuevo de
+-- un enum en la misma transacción en que se agrega (lo usa la 0020).
+-- =============================================================================
+
+create type public.proposal_status as enum ('pending', 'accepted', 'declined', 'withdrawn');
+
+alter type public.notification_type add value if not exists 'need_proposal';
+alter type public.notification_type add value if not exists 'proposal_accepted';
+alter type public.notification_type add value if not exists 'need_match';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'supabase/migrations/20261008002000_proposals.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0020 · Propuestas a necesidades (Etapa 10)
+-- =============================================================================
+-- * Una persona (o uno de sus emprendimientos) le manda a una necesidad una
+--   propuesta: mensaje, precio opcional y disponibilidad. Una por persona.
+-- * Las propuestas son privadas: solo las ven quien la mandó y quien publicó
+--   la necesidad. El resto solo ve cuántas hay.
+-- * Quien publicó acepta una (la necesidad pasa a "resuelta", el resto queda
+--   rechazado y se abre un chat con quien ganó) o rechaza alguna.
+-- * Avisos: propuesta nueva → a quien publicó; propuesta aceptada → a quien la
+--   mandó; necesidad nueva → a los emprendimientos de ese rubro en esa ciudad.
+-- * Vencimiento: la limpieza diaria marca como vencidas las necesidades cuyo
+--   plazo pasó (sin pg_cron).
+-- =============================================================================
+
+
+alter table public.notifications
+  add column if not exists need_id uuid references public.needs (id) on delete cascade,
+  add column if not exists proposal_id uuid;
+
+create table public.proposals (
+  id            uuid primary key default gen_random_uuid(),
+  need_id       uuid not null references public.needs (id) on delete cascade,
+  author_id     uuid not null references public.profiles (id) on delete cascade,
+  business_id   uuid references public.businesses (id) on delete set null,
+  message       text not null,
+  amount        numeric(14, 2),
+  currency      char(3) not null default 'ARS',
+  availability  text,
+  status        public.proposal_status not null default 'pending',
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  decided_at    timestamptz,
+  constraint proposals_message_len check (char_length(btrim(message)) between 20 and 2000),
+  constraint proposals_amount check (amount is null or amount >= 0),
+  constraint proposals_availability_len check (char_length(availability) <= 120),
+  constraint proposals_one_per_person unique (need_id, author_id)
+);
+
+create index proposals_need_idx on public.proposals (need_id, created_at);
+create index proposals_author_idx on public.proposals (author_id, created_at desc);
+
+alter table public.needs
+  add constraint needs_awarded_proposal_fk foreign key (awarded_proposal_id) references public.proposals (id) on delete set null;
+
+alter table public.notifications
+  add constraint notifications_proposal_fk foreign key (proposal_id) references public.proposals (id) on delete cascade;
+
+create unique index if not exists notifications_need_match_once
+  on public.notifications (recipient_id, need_id) where type = 'need_match';
+
+create trigger proposals_set_updated_at
+  before update on public.proposals
+  for each row execute function public.set_updated_at();
+
+-- ¿El usuario actual mandó esta propuesta o publicó la necesidad?
+create or replace function public.can_see_proposal(p_need_id uuid, p_author_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p_author_id = (select auth.uid())
+      or exists (select 1 from public.needs n where n.id = p_need_id and n.author_id = (select auth.uid()));
+$$;
+
+revoke execute on function public.can_see_proposal(uuid, uuid) from public, anon;
+grant  execute on function public.can_see_proposal(uuid, uuid) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- Reglas al crear y editar propuestas
+-- -----------------------------------------------------------------------------
+create or replace function public.tg_proposals_before_write()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  need public.needs;
+begin
+  new.message := btrim(new.message);
+  new.availability := nullif(btrim(coalesce(new.availability, '')), '');
+  if public.is_system_call() then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.author_id := (select auth.uid());
+    new.status := 'pending';
+    new.decided_at := null;
+    new.created_at := now();
+
+    select * into need from public.needs n where n.id = new.need_id and n.deleted_at is null;
+    if not found then
+      raise exception 'La necesidad no existe' using errcode = '42501';
+    end if;
+    if need.author_id = new.author_id then
+      raise exception 'No podés mandarte una propuesta a vos' using errcode = '42501';
+    end if;
+    if need.status not in ('open', 'in_review') or need.expires_at < now() then
+      raise exception 'Esta necesidad ya no recibe propuestas' using errcode = '42501';
+    end if;
+    if public.is_blocked_between(new.author_id, need.author_id) then
+      raise exception 'No podés mandarle una propuesta a esta persona' using errcode = '42501';
+    end if;
+    if new.business_id is not null and not public.is_business_member(new.business_id) then
+      raise exception 'Ese emprendimiento no es tuyo' using errcode = '42501';
+    end if;
+
+    perform public.enforce_rate_limit(
+      (select count(*) from public.proposals p
+        where p.author_id = new.author_id and p.created_at > now() - interval '24 hours'),
+      'limits.proposals_per_day', 30,
+      'Mandaste muchas propuestas hoy. Probá de nuevo mañana.'
+    );
+    return new;
+  end if;
+
+  -- UPDATE por quien la mandó: solo texto, precio y disponibilidad, mientras esté pendiente
+  -- (o retirarla).
+  if new.need_id <> old.need_id or new.author_id <> old.author_id or new.created_at <> old.created_at
+     or new.business_id is distinct from old.business_id or new.decided_at is distinct from old.decided_at then
+    raise exception 'Campo administrado por el sistema' using errcode = '42501';
+  end if;
+  if old.status <> 'pending' then
+    raise exception 'La propuesta ya fue respondida' using errcode = '42501';
+  end if;
+  if new.status <> old.status and new.status <> 'withdrawn' then
+    raise exception 'Solo podés retirar tu propuesta' using errcode = '42501';
+  end if;
+  if new.status = 'withdrawn' then
+    new.decided_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger proposals_before_write
+  before insert or update on public.proposals
+  for each row execute function public.tg_proposals_before_write();
+
+-- Contador, estado "en revisión" y aviso a quien publicó.
+create or replace function public.tg_proposals_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  need_author uuid;
+begin
+  if tg_op = 'INSERT' then
+    update public.needs
+    set proposals_count = proposals_count + 1,
+        status = case when status = 'open' then 'in_review'::public.need_status else status end
+    where id = new.need_id
+    returning author_id into need_author;
+
+    if need_author is not null and not public.is_blocked_between(need_author, new.author_id) then
+      insert into public.notifications (recipient_id, actor_id, type, need_id, proposal_id)
+      values (need_author, new.author_id, 'need_proposal', new.need_id, new.id);
+    end if;
+  elsif tg_op = 'UPDATE' and new.status = 'withdrawn' and old.status <> 'withdrawn' then
+    update public.needs set proposals_count = greatest(proposals_count - 1, 0) where id = new.need_id;
+    delete from public.notifications where proposal_id = new.id and type = 'need_proposal';
+  end if;
+  return null;
+end;
+$$;
+
+create trigger proposals_after_write
+  after insert or update of status on public.proposals
+  for each row execute function public.tg_proposals_after_write();
+
+-- -----------------------------------------------------------------------------
+-- Aceptar / rechazar (solo quien publicó la necesidad)
+-- -----------------------------------------------------------------------------
+create or replace function public.accept_proposal(p_proposal_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me    uuid := (select auth.uid());
+  prop  public.proposals;
+  need  public.needs;
+  conv  uuid;
+begin
+  select * into prop from public.proposals where id = p_proposal_id for update;
+  if not found then
+    raise exception 'La propuesta no existe' using errcode = '42501';
+  end if;
+  select * into need from public.needs where id = prop.need_id for update;
+  if need.author_id is distinct from me then
+    raise exception 'Solo quien publicó la necesidad puede aceptar propuestas' using errcode = '42501';
+  end if;
+  if need.status not in ('open', 'in_review') then
+    raise exception 'Esta necesidad ya está resuelta o cerrada' using errcode = '42501';
+  end if;
+  if prop.status <> 'pending' then
+    raise exception 'Esta propuesta ya no está disponible' using errcode = '42501';
+  end if;
+
+  update public.proposals set status = 'accepted', decided_at = now() where id = prop.id;
+  update public.proposals set status = 'declined', decided_at = now()
+  where need_id = need.id and id <> prop.id and status = 'pending';
+  update public.needs
+  set status = 'awarded', awarded_proposal_id = prop.id, closed_at = now()
+  where id = need.id;
+
+  insert into public.notifications (recipient_id, actor_id, type, need_id, proposal_id)
+  values (prop.author_id, me, 'proposal_accepted', need.id, prop.id);
+
+  -- Chat con quien ganó, con un primer mensaje automático.
+  conv := public.start_conversation(prop.author_id);
+  insert into public.messages (conversation_id, sender_id, body)
+  values (conv, me, '¡Hola! Acepté tu propuesta para “' || need.title || '”. Sigamos por acá para coordinar.');
+  return conv;
+end;
+$$;
+
+revoke execute on function public.accept_proposal(uuid) from public, anon;
+grant  execute on function public.accept_proposal(uuid) to authenticated;
+
+create or replace function public.decline_proposal(p_proposal_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  prop public.proposals;
+begin
+  select * into prop from public.proposals where id = p_proposal_id;
+  if not found or not exists (
+    select 1 from public.needs n where n.id = prop.need_id and n.author_id = (select auth.uid())
+  ) then
+    raise exception 'Solo quien publicó la necesidad puede rechazar propuestas' using errcode = '42501';
+  end if;
+  if prop.status <> 'pending' then
+    raise exception 'Esta propuesta ya fue respondida' using errcode = '42501';
+  end if;
+  update public.proposals set status = 'declined', decided_at = now() where id = prop.id;
+end;
+$$;
+
+revoke execute on function public.decline_proposal(uuid) from public, anon;
+grant  execute on function public.decline_proposal(uuid) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Necesidad nueva: aviso a los emprendimientos de ese rubro en esa ciudad.
+-- -----------------------------------------------------------------------------
+create or replace function public.tg_needs_notify_match()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.notifications (recipient_id, actor_id, type, need_id)
+  select distinct b.owner_id, new.author_id, 'need_match'::public.notification_type, new.id
+  from public.businesses b
+  join public.profiles p on p.id = b.owner_id and p.status = 'active'
+  where b.category_id = new.category_id
+    and b.city_id = new.city_id
+    and b.status = 'active'
+    and b.deleted_at is null
+    and b.owner_id <> new.author_id
+    and not public.is_blocked_between(b.owner_id, new.author_id)
+  limit 300
+  on conflict do nothing;
+  return null;
+end;
+$$;
+
+create trigger needs_notify_match
+  after insert on public.needs
+  for each row execute function public.tg_needs_notify_match();
+
+-- Vencimiento (lo llama la limpieza diaria con la clave del sistema).
+create or replace function public.expire_needs()
+returns integer
+language sql
+security definer
+set search_path = ''
+as $$
+  with expired as (
+    update public.needs set status = 'expired'
+    where status in ('open', 'in_review') and expires_at < now() and deleted_at is null
+    returning 1
+  )
+  select count(*)::integer from expired;
+$$;
+
+revoke execute on function public.expire_needs() from public, anon, authenticated;
+grant  execute on function public.expire_needs() to service_role;
+
+-- -----------------------------------------------------------------------------
+-- Seguridad
+-- -----------------------------------------------------------------------------
+alter table public.proposals enable row level security;
+
+create policy "proposals: quien la mandó y quien publicó" on public.proposals
+  for select to authenticated
+  using ((select public.can_see_proposal(need_id, author_id)) or (select public.has_role('moderator')));
+
+create policy "proposals: usuarios activos proponen" on public.proposals
+  for insert to authenticated
+  with check (author_id = (select auth.uid()) and (select public.is_active_user()));
+
+create policy "proposals: quien la mandó la edita o retira" on public.proposals
+  for update to authenticated
+  using (author_id = (select auth.uid()))
+  with check (author_id = (select auth.uid()));
+
+revoke all on public.proposals from anon, authenticated;
+grant select, insert on public.proposals to authenticated;
+grant update (message, amount, availability, status) on public.proposals to authenticated;
+
+-- Las necesidades: columnas que puede tocar el autor (estado para cerrar o renovar).
+insert into public.settings (key, value, is_public, description) values
+  ('limits.proposals_per_day', '30', false, 'Propuestas que una persona puede mandar cada 24 h')
+on conflict (key) do nothing;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 150 archivos de los avisos instalados."
+echo " Listo. 160 archivos de la Etapa 10 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

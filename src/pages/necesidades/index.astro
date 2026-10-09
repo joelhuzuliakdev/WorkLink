@@ -1,0 +1,83 @@
+---
+/**
+ * Necesidades abiertas: lo que la gente está buscando, con filtros por rubro
+ * y ciudad. Quien ofrece ese servicio entra y manda su propuesta.
+ */
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import NeedCard from "../../components/needs/NeedCard.astro";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { getOpenNeeds } from "../../services/needs";
+import { getCategoryTree } from "../../services/categories";
+import { getCity } from "../../services/locations";
+
+const { supabase, user } = Astro.locals;
+const params = Astro.url.searchParams;
+const categories = await getCategoryTree(supabase);
+const category = categories.find((c) => c.slug === params.get("rubro")) ?? null;
+const cityId = Number.parseInt(params.get("ciudad") ?? "", 10);
+const city = Number.isInteger(cityId) && cityId > 0 ? await getCity(supabase, cityId) : null;
+const page = Math.max(1, Math.min(50, Number.parseInt(params.get("pagina") ?? "1", 10) || 1));
+const { needs, hasMore } = await getOpenNeeds(supabase, { categoryId: category?.id, cityId: city?.id, page });
+
+const link = (p: number) => {
+  const q = new URLSearchParams();
+  if (category) q.set("rubro", category.slug);
+  if (city) q.set("ciudad", String(city.id));
+  if (p > 1) q.set("pagina", String(p));
+  const s = q.toString();
+  return `/necesidades${s ? `?${s}` : ""}`;
+};
+const filtered = Boolean(category || city);
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout
+  title={category || city ? `Necesidades${category ? ` de ${category.name.toLowerCase()}` : ""}${city ? ` en ${city.name}` : ""}` : "Necesidades: lo que la gente está buscando"}
+  description="Personas que buscan un servicio o un producto en tu zona. Si es lo tuyo, mandales una propuesta en WorkLink."
+  canonicalPath="/necesidades"
+  noindex={filtered || page > 1}
+>
+  <section class="mx-auto max-w-3xl px-4 py-8">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Necesidades</h1>
+        <p class="mt-1 max-w-xl text-ink-muted">Personas que están buscando algo. Si es lo tuyo, mandales una propuesta con tu precio.</p>
+      </div>
+      <Button href={user ? "/necesidades/nueva" : "/registrarse"}>Publicar una necesidad</Button>
+    </div>
+
+    <form method="GET" action="/necesidades" class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <div class="flex flex-col gap-1.5">
+        <label for="n-rubro" class="text-sm font-medium">Rubro</label>
+        <select id="n-rubro" name="rubro" class={selectClass}>
+          <option value="">Todos</option>
+          {categories.map((c) => <option value={c.slug} selected={c.id === category?.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <CityPicker client:load name="ciudad" label="Ciudad" initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null} />
+      <button type="submit" class="h-11 rounded-wl bg-brand px-5 font-semibold text-brand-contrast hover:bg-brand-hover">Filtrar</button>
+    </form>
+
+    {
+      needs.length === 0 ? (
+        <div class="mt-8 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <p class="font-semibold">{filtered ? "No hay necesidades abiertas con esos filtros." : "Todavía no hay necesidades abiertas."}</p>
+          <p class="mt-1 text-sm text-ink-muted">¿Buscás algo? Publicalo y que te lleguen propuestas.</p>
+        </div>
+      ) : (
+        <div class="mt-6 flex flex-col gap-4">
+          {needs.map((need) => <NeedCard need={need} />)}
+        </div>
+      )
+    }
+    {
+      (page > 1 || hasMore) && (
+        <nav class="mt-6 flex justify-between gap-4" aria-label="Páginas">
+          {page > 1 ? <a href={link(page - 1)} class="font-semibold text-brand hover:underline">← Anteriores</a> : <span />}
+          {hasMore && <a href={link(page + 1)} class="font-semibold text-brand hover:underline">Más necesidades →</a>}
+        </nav>
+      )
+    }
+  </section>
+</BaseLayout>

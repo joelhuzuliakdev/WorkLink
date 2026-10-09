@@ -1,6 +1,7 @@
 ---
 /**
- * Notificaciones del usuario: me gusta, comentarios y nuevos seguidores.
+ * Notificaciones del usuario: me gusta, comentarios, seguidores y
+ * necesidades/propuestas.
  * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
  * esta vez). Ruta protegida por el middleware.
  */
@@ -11,7 +12,7 @@ import { decodeCursor, getNotifications, markAllRead, type NotificationView } fr
 import { displayName } from "../services/profiles";
 import { postHeadline } from "../services/posts";
 import { formatDate, formatRelative } from "../lib/format";
-import { postPath, profilePath } from "../lib/urls";
+import { needPath, postPath, profilePath } from "../lib/urls";
 
 const { supabase, user } = Astro.locals;
 const cursor = decodeCursor(Astro.url.searchParams.get("antes"));
@@ -43,6 +44,32 @@ function describe(n: NotificationView) {
         icon: "+",
         tone: "bg-offer text-white",
       };
+    case "need_proposal":
+      return {
+        name,
+        text: `te mandó una propuesta para “${n.need?.title ?? "tu necesidad"}”.`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
+        icon: "$",
+        tone: "bg-offer text-white",
+      };
+    case "proposal_accepted":
+      return {
+        name,
+        text: `aceptó tu propuesta para “${n.need?.title ?? "su necesidad"}”. ¡Coordinen por mensajes!`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
+        icon: "✓",
+        tone: "bg-success text-white",
+      };
+    case "need_match":
+      return {
+        name,
+        text: `necesita algo de tu rubro: “${n.need?.title ?? "una necesidad"}”. Mandale tu propuesta.`,
+        href: n.need ? `${needPath(n.need)}#propuestas` : "/necesidades",
+        icon: "!",
+        tone: "bg-seek text-white",
+      };
+    default:
+      return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
   }
 }
 ---
@@ -55,7 +82,7 @@ function describe(n: NotificationView) {
       items.length === 0 ? (
         <div class="mt-6 rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
           <p class="font-semibold">{cursor ? "No hay notificaciones más viejas." : "Todavía no tenés notificaciones."}</p>
-          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente o te siga, te avisamos acá.</p>
+          <p class="mt-1 text-sm text-ink-muted">Cuando alguien le dé me gusta a lo que publicás, lo comente, te siga o te mande una propuesta, te avisamos acá.</p>
         </div>
       ) : (
         <ul class="mt-6 divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">

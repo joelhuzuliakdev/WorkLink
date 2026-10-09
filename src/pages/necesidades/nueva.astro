@@ -1,0 +1,118 @@
+---
+/** Publicar una necesidad: qué, rubro, ciudad, para cuándo y presupuesto. */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import TextArea from "../../components/ui/TextArea.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import CityPicker from "../../islands/CityPicker.tsx";
+import { getCategoryTree } from "../../services/categories";
+import { getCity } from "../../services/locations";
+import { getOwnProfile } from "../../services/profiles";
+import { getSubmittedForm } from "../../utils/form";
+import { needPath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const result = Astro.getActionResult(actions.needs.create);
+if (result && !result.error) return Astro.redirect(`${needPath(result.data)}?publicada=1`);
+
+const [categories, profile] = await Promise.all([getCategoryTree(supabase), getOwnProfile(supabase, user!.id)]);
+const submitted = result?.error ? await getSubmittedForm(Astro.request) : null;
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const err = (name: string) => fieldErrors[name]?.[0];
+const v = (name: string) => (submitted ? String(submitted.get(name) ?? "") : "");
+
+const submittedCity = Number(v("city_id"));
+const city = submittedCity ? await getCity(supabase, submittedCity) : (profile?.city ?? null);
+const categoryParam = Astro.url.searchParams.get("rubro");
+const categoryId = Number(v("category_id")) || categories.find((c) => c.slug === categoryParam)?.id || null;
+const subcategoryId = Number(v("subcategory_id")) || null;
+const today = new Date().toISOString().slice(0, 10);
+const selectClass = "h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout title="Publicar una necesidad" noindex>
+  <section class="mx-auto max-w-2xl px-4 py-8">
+    <a href="/necesidades" class="text-sm font-medium text-ink-muted hover:text-ink">← Necesidades</a>
+    <h1 class="mt-2 text-2xl font-bold sm:text-3xl">¿Qué necesitás?</h1>
+    <p class="mt-1 text-ink-muted">
+      Contalo con detalle. Los emprendimientos de ese rubro en tu ciudad reciben un aviso y te mandan propuestas con su precio.
+      Vos elegís la que más te convenga.
+    </p>
+
+    {formError && <Alert tone="danger" class="mt-6">{formError}</Alert>}
+
+    <form method="POST" action={actions.needs.create} class="mt-6 flex flex-col gap-5" novalidate data-need-form>
+      <Field name="title" label="Título" required maxlength={140} placeholder="Ej.: Necesito electricista para revisar un local" value={v("title")} error={err("title")} />
+      <TextArea
+        name="description"
+        label="Detalles"
+        rows={5}
+        required
+        maxlength={5000}
+        placeholder="Qué hay que hacer, dónde, cuándo, materiales, cualquier dato que ayude a darte un buen precio."
+        value={v("description")}
+        error={err("description")}
+      />
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div class="flex flex-col gap-1.5">
+          <label for="category_id" class="text-sm font-medium">Rubro</label>
+          <select id="category_id" name="category_id" required class={selectClass} data-category-select aria-invalid={err("category_id") ? "true" : undefined}>
+            <option value="">Elegí un rubro</option>
+            {categories.map((c) => <option value={c.id} selected={categoryId === c.id}>{c.name}</option>)}
+          </select>
+          {err("category_id") && <p class="text-sm text-danger" role="alert">{err("category_id")}</p>}
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label for="subcategory_id" class="text-sm font-medium">Especialidad (opcional)</label>
+          <select id="subcategory_id" name="subcategory_id" class={selectClass} data-subcategory-select>
+            <option value="">Ninguna en particular</option>
+            {categories.map((c) => (
+              <optgroup label={c.name} data-category={c.id}>
+                {c.subcategories.map((s) => <option value={s.id} selected={subcategoryId === s.id}>{s.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      </div>
+      <CityPicker
+        client:load
+        name="city_id"
+        label="Ciudad"
+        required
+        initialCity={city ? { id: city.id, name: city.name, province_name: city.province_name } : null}
+        error={err("city_id")}
+      />
+      <div class="grid gap-4 sm:grid-cols-3">
+        <Field name="needed_by" label="¿Para cuándo? (opcional)" type="date" min={today} value={v("needed_by")} error={err("needed_by")} />
+        <Field name="budget_min" label="Presupuesto desde (opcional)" inputmode="decimal" placeholder="Ej.: 20.000" value={v("budget_min")} error={err("budget_min")} />
+        <Field name="budget_max" label="Presupuesto hasta (opcional)" inputmode="decimal" placeholder="Ej.: 50.000" value={v("budget_max")} error={err("budget_max")} />
+      </div>
+      <p class="text-xs text-ink-muted">No pongas tu teléfono ni tu dirección: hablás con quien elijas por mensajes privados. La necesidad recibe propuestas durante 30 días.</p>
+      <div>
+        <Button type="submit" size="lg">Publicar necesidad</Button>
+      </div>
+    </form>
+  </section>
+</BaseLayout>
+
+<script>
+  // Especialidades: solo las del rubro elegido.
+  const form = document.querySelector<HTMLFormElement>("[data-need-form]");
+  const category = form?.querySelector<HTMLSelectElement>("[data-category-select]");
+  const sub = form?.querySelector<HTMLSelectElement>("[data-subcategory-select]");
+  const sync = () => {
+    if (!category || !sub) return;
+    for (const group of sub.querySelectorAll<HTMLOptGroupElement>("optgroup")) {
+      const visible = group.dataset.category === category.value;
+      group.hidden = !visible;
+      group.disabled = !visible;
+    }
+    const selected = sub.selectedOptions[0];
+    if (selected?.parentElement instanceof HTMLOptGroupElement && selected.parentElement.disabled) sub.value = "";
+  };
+  category?.addEventListener("change", sync);
+  sync();
+</script>

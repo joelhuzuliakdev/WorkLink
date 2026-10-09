@@ -17,3 +17,6 @@ export function postIdFromRef(ref: string | undefined): string | null {
 
 export const businessPath = (slug: string) => `/e/${slug}`;
 export const profilePath = (username: string) => `/u/${username}`;
+
+/** /necesidades/texto-legible-<id> (el texto es el slug que guarda la base). */
+export const needPath = (need: { id: string; slug: string }) => `/necesidades/${need.slug}-${need.id}`;

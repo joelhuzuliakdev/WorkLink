@@ -1,0 +1,356 @@
+---
+/**
+ * Una necesidad: /necesidades/texto-legible-<id>
+ *
+ * - Quien la publicó ve todas las propuestas, puede aceptar una (se abre el
+ *   chat con esa persona), rechazar, cerrar o renovar si venció.
+ * - Otra persona con sesión puede mandar UNA propuesta (como persona o en
+ *   nombre de su emprendimiento), editarla o retirarla mientras espera.
+ * - Las propuestas de los demás no se ven nunca (lo controla la base, RLS).
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Button from "../../components/ui/Button.astro";
+import Field from "../../components/ui/Field.astro";
+import TextArea from "../../components/ui/TextArea.astro";
+import Alert from "../../components/ui/Alert.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import { budgetLabel, getNeed, getProposals, isOpen, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
+import type { ProposalView } from "../../services/needs";
+import { getMyBusinesses } from "../../services/businesses";
+import { displayName } from "../../services/profiles";
+import { newMessagePath } from "../../services/messages";
+import { getSubmittedForm } from "../../utils/form";
+import { formatDate, formatMoney, formatRelative } from "../../lib/format";
+import { businessPath, needPath, postIdFromRef, profilePath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const id = postIdFromRef(Astro.params.ref);
+if (!id) return Astro.rewrite("/404");
+
+const need = await getNeed(supabase, id);
+if (!need) return Astro.rewrite("/404");
+
+const canonical = needPath(need);
+if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
+
+// Formularios de esta página: si salió bien, volver con GET (recargar no reenvía).
+const accepted = Astro.getActionResult(actions.needs.accept);
+if (accepted && !accepted.error) return Astro.redirect(`/mensajes/${accepted.data.conversationId}`, 303);
+const done: [ReturnType<typeof Astro.getActionResult>, string][] = [
+  [Astro.getActionResult(actions.needs.propose), "enviada"],
+  [Astro.getActionResult(actions.needs.updateProposal), "editada"],
+  [Astro.getActionResult(actions.needs.withdraw), "retirada"],
+  [Astro.getActionResult(actions.needs.decline), "rechazada"],
+  [Astro.getActionResult(actions.needs.close), "cerrada"],
+  [Astro.getActionResult(actions.needs.renew), "renovada"],
+];
+for (const [result, key] of done) {
+  if (result && !result.error) return Astro.redirect(`${canonical}?ok=${key}#propuestas`, 303);
+}
+const failed = [accepted, ...done.map(([r]) => r)].find((r) => r?.error)?.error ?? null;
+const fieldErrors = failed && isInputError(failed) ? (failed.fields as Record<string, string[] | undefined>) : {};
+const formError = failed && !isInputError(failed) ? failed.message : failed ? "Revisá los datos marcados." : null;
+const err = (name: string) => fieldErrors[name]?.[0];
+const submitted = failed ? await getSubmittedForm(Astro.request) : null;
+const v = (name: string, fallback = "") => (submitted ? String(submitted.get(name) ?? "") : fallback);
+
+const isAuthor = user?.id === need.author_id;
+const open = isOpen(need);
+const status = open ? NEED_STATUS_LABELS.open : need.status === "in_review" || need.status === "open" ? NEED_STATUS_LABELS.expired : NEED_STATUS_LABELS[need.status];
+const expired = !open && (need.status === "open" || need.status === "in_review" || need.status === "expired");
+
+const [proposals, businesses] = await Promise.all([
+  user ? getProposals(supabase, need.id) : Promise.resolve([] as ProposalView[]),
+  user && !isAuthor ? getMyBusinesses(supabase, user.id) : Promise.resolve([]),
+]);
+const mine = !isAuthor ? (proposals.find((p) => p.author_id === user?.id) ?? null) : null;
+const activeBusinesses = businesses.filter((b) => b.status === "active");
+const visible = isAuthor ? proposals.filter((p) => p.status !== "withdrawn") : [];
+// Primero la aceptada, después las pendientes, al final las no elegidas.
+const order = { accepted: 0, pending: 1, declined: 2, withdrawn: 3 };
+visible.sort((a, b) => order[a.status] - order[b.status] || a.created_at.localeCompare(b.created_at));
+
+const name = need.author ? displayName(need.author) : "Usuario";
+const budget = budgetLabel(need.budget_min, need.budget_max, formatMoney);
+const location = need.city ? `${need.city.name}${need.city.provinces ? `, ${need.city.provinces.name}` : ""}` : null;
+const ok = Astro.url.searchParams.get("ok");
+const published = Astro.url.searchParams.get("publicada") === "1";
+const okMessages: Record<string, string> = {
+  enviada: "¡Listo! Mandamos tu propuesta. Te avisamos si la eligen.",
+  editada: "Guardamos los cambios de tu propuesta.",
+  retirada: "Retiraste tu propuesta.",
+  rechazada: "Rechazaste la propuesta.",
+  cerrada: "Cerraste la necesidad: ya no recibe propuestas.",
+  renovada: "Renovaste la necesidad: recibe propuestas por 30 días más.",
+};
+const description = need.description.replace(/\s+/g, " ").slice(0, 155);
+const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "Usuario");
+---
+
+<BaseLayout title={need.title} description={description} canonicalPath={canonical} noindex={!open}>
+  <article class="mx-auto max-w-3xl px-4 py-6 sm:py-10">
+    <a href="/necesidades" class="text-sm font-medium text-ink-muted hover:text-ink">← Necesidades</a>
+
+    {published && (
+      <Alert tone="success" class="mt-4" title="¡Publicaste tu necesidad!">
+        Les avisamos a los emprendimientos de {need.category?.name ?? "ese rubro"} en {need.city?.name ?? "tu ciudad"}. Las propuestas te van a llegar como notificación y las ves acá abajo.
+      </Alert>
+    )}
+    {ok && okMessages[ok] && <Alert tone="success" class="mt-4">{okMessages[ok]}</Alert>}
+    {formError && <Alert tone="danger" class="mt-4">{formError}</Alert>}
+
+    <header class="mt-4">
+      <div class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="font-semibold uppercase tracking-wide text-seek">{need.subcategory?.name ?? need.category?.name}</span>
+        <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", status.class]}>{status.label}</span>
+      </div>
+      <h1 class="mt-2 text-2xl font-bold sm:text-3xl">{need.title}</h1>
+      <div class="mt-3 flex items-center gap-3">
+        {need.author && (
+          <a href={profilePath(need.author.username)} class="shrink-0" aria-label={`Perfil de ${name}`}>
+            <Avatar name={name} path={need.author.avatar_path} size={40} />
+          </a>
+        )}
+        <span class="min-w-0 text-sm">
+          <span class="flex items-center gap-1 font-semibold">
+            {need.author ? <a href={profilePath(need.author.username)} class="truncate hover:underline">{name}</a> : name}
+            {need.author?.verified_at && <VerifiedBadge size={14} />}
+          </span>
+          <span class="text-ink-muted">
+            Publicada <time datetime={need.created_at}>{formatRelative(need.created_at)}</time>
+          </span>
+        </span>
+      </div>
+    </header>
+
+    <dl class="mt-6 grid gap-3 rounded-wl-lg border border-line bg-surface p-4 sm:grid-cols-3">
+      <div>
+        <dt class="text-xs text-ink-muted">Presupuesto</dt>
+        <dd class="font-semibold">{budget ?? "A convenir"}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-ink-muted">Dónde</dt>
+        <dd class="font-semibold">{location ?? "—"}</dd>
+      </div>
+      <div>
+        <dt class="text-xs text-ink-muted">Para cuándo</dt>
+        <dd class="font-semibold">{need.needed_by ? formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" }) : "Sin fecha fija"}</dd>
+      </div>
+    </dl>
+
+    <div class="mt-6 whitespace-pre-line text-lg leading-relaxed">{need.description}</div>
+
+    <p class="mt-4 text-sm text-ink-muted">
+      {need.proposals_count === 0 ? "Todavía no recibió propuestas." : need.proposals_count === 1 ? "Recibió 1 propuesta." : `Recibió ${need.proposals_count} propuestas.`}
+      {open && ` Recibe propuestas hasta el ${formatDate(need.expires_at, { day: "numeric", month: "long" })}.`}
+    </p>
+
+    <section id="propuestas" class="mt-8 scroll-mt-20">
+      {
+        isAuthor ? (
+          <>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-xl font-bold">Propuestas que recibiste</h2>
+              <div class="flex gap-2">
+                {expired && (
+                  <form method="POST" action={actions.needs.renew}>
+                    <input type="hidden" name="need_id" value={need.id} />
+                    <Button type="submit" size="sm">Renovar 30 días</Button>
+                  </form>
+                )}
+                {(open || need.status === "awarded") && (
+                  <form method="POST" action={actions.needs.close} data-confirm="¿Cerrar la necesidad? Ya no vas a recibir propuestas.">
+                    <input type="hidden" name="need_id" value={need.id} />
+                    <Button type="submit" size="sm" variant="ghost">Cerrar necesidad</Button>
+                  </form>
+                )}
+              </div>
+            </div>
+            {open && visible.length > 0 && (
+              <p class="mt-1 text-sm text-ink-muted">Compará y elegí una. Al aceptarla se abre el chat con esa persona y las demás quedan como “no elegidas”.</p>
+            )}
+            {visible.length === 0 ? (
+              <div class="mt-4 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-sm text-ink-muted">
+                {open ? "Cuando alguien te mande una propuesta, te avisamos y aparece acá." : "Esta necesidad no recibió propuestas."}
+              </div>
+            ) : (
+              <ul class="mt-4 flex flex-col gap-3">
+                {visible.map((p) => {
+                  const label = PROPOSAL_STATUS_LABELS[p.status];
+                  const pname = proposerName(p);
+                  return (
+                    <li
+                      class:list={[
+                        "rounded-wl-lg border bg-surface p-4",
+                        p.status === "accepted" ? "border-success" : "border-line",
+                        p.status === "declined" && "opacity-70",
+                      ]}
+                      data-proposal={p.id}
+                    >
+                      <div class="flex items-start gap-3">
+                        {p.business ? (
+                          <a href={businessPath(p.business.slug)} class="shrink-0">
+                            <Avatar name={p.business.name} path={p.business.logo_path} purpose="logo" shape="rounded" size={44} />
+                          </a>
+                        ) : (
+                          p.author && (
+                            <a href={profilePath(p.author.username)} class="shrink-0">
+                              <Avatar name={pname} path={p.author.avatar_path} size={44} />
+                            </a>
+                          )
+                        )}
+                        <div class="min-w-0 flex-1">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="min-w-0">
+                              {p.business ? (
+                                <a href={businessPath(p.business.slug)} class="block truncate font-semibold hover:underline">{p.business.name}</a>
+                              ) : null}
+                              <span class:list={["flex items-center gap-1", p.business ? "text-sm text-ink-muted" : "font-semibold"]}>
+                                {p.author ? <a href={profilePath(p.author.username)} class="truncate hover:underline">{pname}</a> : pname}
+                                {p.author?.verified_at && <VerifiedBadge size={13} />}
+                              </span>
+                            </span>
+                            <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
+                          </div>
+                          <p class="mt-1 flex flex-wrap gap-x-4 text-sm">
+                            <span><span class="text-ink-muted">Precio:</span> <strong>{p.amount != null ? formatMoney(p.amount) : "A convenir"}</strong></span>
+                            {p.availability && <span><span class="text-ink-muted">Disponibilidad:</span> {p.availability}</span>}
+                            <span class="text-ink-muted">{formatRelative(p.created_at)}</span>
+                          </p>
+                          <p class="mt-2 whitespace-pre-line">{p.message}</p>
+                          <div class="mt-3 flex flex-wrap gap-2">
+                            {p.status === "pending" && open && (
+                              <form method="POST" action={actions.needs.accept} data-confirm={`¿Aceptar la propuesta de ${p.business?.name ?? pname}? Las demás quedan como “no elegidas” y la necesidad se marca como resuelta.`}>
+                                <input type="hidden" name="proposal_id" value={p.id} />
+                                <Button type="submit" size="sm">Aceptar</Button>
+                              </form>
+                            )}
+                            {p.author && (
+                              <Button href={newMessagePath(p.author.username)} size="sm" variant="secondary" data-open-chat={p.author.username}>
+                                {p.status === "accepted" ? "Ir al chat" : "Preguntar"}
+                              </Button>
+                            )}
+                            {p.status === "pending" && (
+                              <form method="POST" action={actions.needs.decline}>
+                                <input type="hidden" name="proposal_id" value={p.id} />
+                                <Button type="submit" size="sm" variant="ghost">Rechazar</Button>
+                              </form>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        ) : !user ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center">
+            <p class="font-semibold">{open ? "¿Podés resolverlo?" : "Esta necesidad ya no recibe propuestas."}</p>
+            {open && (
+              <>
+                <p class="mt-1 text-sm text-ink-muted">Ingresá para mandar tu propuesta con precio y disponibilidad.</p>
+                <Button href={`/ingresar?next=${encodeURIComponent(canonical + "#propuestas")}`} class="mt-4">Ingresar para proponer</Button>
+              </>
+            )}
+          </div>
+        ) : mine && mine.status !== "withdrawn" ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-lg font-bold">Tu propuesta</h2>
+              <span class:list={["rounded-full px-2.5 py-0.5 text-xs font-semibold", PROPOSAL_STATUS_LABELS[mine.status].class]}>
+                {PROPOSAL_STATUS_LABELS[mine.status].label}
+              </span>
+            </div>
+            {mine.business && <p class="mt-1 text-sm text-ink-muted">En nombre de {mine.business.name}</p>}
+            <p class="mt-2 text-sm">
+              <span class="text-ink-muted">Precio:</span> <strong>{mine.amount != null ? formatMoney(mine.amount) : "A convenir"}</strong>
+              {mine.availability && <> · <span class="text-ink-muted">Disponibilidad:</span> {mine.availability}</>}
+            </p>
+            <p class="mt-2 whitespace-pre-line">{mine.message}</p>
+            {mine.status === "accepted" && need.author && (
+              <div class="mt-4">
+                <p class="text-sm">¡{name} eligió tu propuesta! Coordinen los detalles por mensajes.</p>
+                <Button href={newMessagePath(need.author.username)} class="mt-3" data-open-chat={need.author.username}>Ir al chat</Button>
+              </div>
+            )}
+            {mine.status === "declined" && <p class="mt-3 text-sm text-ink-muted">Esta vez eligieron otra propuesta. ¡Seguí atento a nuevas necesidades!</p>}
+            {mine.status === "pending" && (
+              <div class="mt-4 flex flex-wrap items-start gap-2">
+                <details class="w-full" open={Boolean(failed && submitted?.get("proposal_id"))}>
+                  <summary class="inline-flex h-9 cursor-pointer items-center rounded-wl border border-line px-3 text-sm font-medium hover:bg-surface-muted">Editar</summary>
+                  <form method="POST" action={actions.needs.updateProposal} class="mt-3 flex flex-col gap-4" novalidate>
+                    <input type="hidden" name="proposal_id" value={mine.id} />
+                    <TextArea name="message" label="Mensaje" rows={4} required maxlength={2000} value={v("message", mine.message)} error={err("message")} />
+                    <div class="grid gap-4 sm:grid-cols-2">
+                      <Field name="amount" label="Precio (opcional)" inputmode="decimal" value={v("amount", mine.amount != null ? String(mine.amount).replace(".", ",") : "")} error={err("amount")} />
+                      <Field name="availability" label="Disponibilidad (opcional)" maxlength={120} value={v("availability", mine.availability ?? "")} error={err("availability")} />
+                    </div>
+                    <div><Button type="submit" size="sm">Guardar cambios</Button></div>
+                  </form>
+                </details>
+                <form method="POST" action={actions.needs.withdraw} data-confirm="¿Retirar tu propuesta?">
+                  <input type="hidden" name="proposal_id" value={mine.id} />
+                  <Button type="submit" size="sm" variant="ghost" class="text-danger">Retirar propuesta</Button>
+                </form>
+              </div>
+            )}
+          </div>
+        ) : !open ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center text-ink-muted">Esta necesidad ya no recibe propuestas.</div>
+        ) : mine ? (
+          <div class="rounded-wl-lg border border-line bg-surface p-6 text-center text-ink-muted">Retiraste tu propuesta para esta necesidad.</div>
+        ) : (
+          <div class="rounded-wl-lg border border-line bg-surface p-4 sm:p-6">
+            <h2 class="text-xl font-bold">Mandá tu propuesta</h2>
+            <p class="mt-1 text-sm text-ink-muted">Contá cómo lo resolverías, tu precio y cuándo podés. Solo {name} ve tu propuesta.</p>
+            <form method="POST" action={actions.needs.propose} class="mt-4 flex flex-col gap-4" novalidate>
+              <input type="hidden" name="need_id" value={need.id} />
+              {activeBusinesses.length > 0 && (
+                <div class="flex flex-col gap-1.5">
+                  <label for="business_id" class="text-sm font-medium">Proponer como</label>
+                  <select
+                    id="business_id"
+                    name="business_id"
+                    class="h-11 w-full rounded-wl border border-line bg-surface px-3 text-base text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+                  >
+                    <option value="">Yo, como persona</option>
+                    {activeBusinesses.map((b, i) => (
+                      <option value={b.id} selected={submitted ? v("business_id") === b.id : i === 0}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <TextArea
+                name="message"
+                label="Tu propuesta"
+                rows={5}
+                required
+                maxlength={2000}
+                placeholder="Ej.: Hola, soy electricista matriculado. Puedo pasar a revisar el tablero, incluye materiales básicos…"
+                value={v("message")}
+                error={err("message")}
+              />
+              <div class="grid gap-4 sm:grid-cols-2">
+                <Field name="amount" label="Precio (opcional)" inputmode="decimal" placeholder="Ej.: 35.000" value={v("amount")} error={err("amount")} hint="Dejalo vacío si es a convenir." />
+                <Field name="availability" label="Disponibilidad (opcional)" maxlength={120} placeholder="Ej.: Esta semana, de tarde" value={v("availability")} error={err("availability")} />
+              </div>
+              <div><Button type="submit" size="lg">Enviar propuesta</Button></div>
+            </form>
+          </div>
+        )
+      }
+    </section>
+  </article>
+</BaseLayout>
+
+<script>
+  // Confirmación antes de acciones que no se pueden deshacer.
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("form[data-confirm]");
+    if (form && !window.confirm(form.dataset.confirm!)) event.preventDefault();
+  });
+</script>

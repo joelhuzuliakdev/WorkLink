@@ -6,7 +6,14 @@ import { decodeCursor, encodeCursor, type Cursor } from "./posts";
  * Las crea la base con triggers; acá solo se leen y se marcan como leídas.
  */
 
-export type NotificationType = "post_like" | "post_comment" | "profile_follow" | "business_follow";
+export type NotificationType =
+  | "post_like"
+  | "post_comment"
+  | "profile_follow"
+  | "business_follow"
+  | "need_proposal"
+  | "proposal_accepted"
+  | "need_match";
 
 export interface NotificationView {
   id: string;
@@ -17,6 +24,7 @@ export interface NotificationView {
   post: { id: string; title: string | null; body: string } | null;
   comment: { id: string; body: string } | null;
   business: { slug: string; name: string } | null;
+  need: { id: string; slug: string; title: string } | null;
 }
 
 export const NOTIFICATIONS_PAGE = 30;
@@ -25,7 +33,8 @@ const COLUMNS = `id, type, created_at, read_at,
   actor:profiles!notifications_actor_id_fkey ( username, first_name, last_name, avatar_path, verified_at ),
   post:posts ( id, title, body ),
   comment:post_comments ( id, body ),
-  business:businesses ( slug, name )`;
+  business:businesses ( slug, name ),
+  need:needs ( id, slug, title )`;
 
 export async function getNotifications(
   supabase: SupabaseClient,

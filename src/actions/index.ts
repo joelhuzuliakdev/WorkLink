@@ -5,6 +5,7 @@ import { catalog } from "./catalog";
 import { posts } from "./posts";
 import { social } from "./social";
 import { messages } from "./messages";
+import { needs } from "./needs";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -18,4 +19,5 @@ export const server = {
   posts,
   social,
   messages,
+  needs,
 };

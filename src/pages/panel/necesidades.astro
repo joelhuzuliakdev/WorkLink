@@ -1,0 +1,78 @@
+---
+/**
+ * Mis necesidades (lo que publiqué y cuántas propuestas recibió) y mis
+ * propuestas (lo que ofrecí y en qué quedó). Solo las ve el usuario (RLS).
+ */
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Button from "../../components/ui/Button.astro";
+import NeedCard from "../../components/needs/NeedCard.astro";
+import { getMyNeeds, getMyProposals, NEED_STATUS_LABELS, PROPOSAL_STATUS_LABELS } from "../../services/needs";
+import { formatMoney, formatRelative } from "../../lib/format";
+import { needPath } from "../../lib/urls";
+
+const { supabase, user } = Astro.locals;
+const tab = Astro.url.searchParams.get("ver") === "propuestas" ? "proposals" : "needs";
+const [needs, proposals] = await Promise.all([getMyNeeds(supabase, user!.id), getMyProposals(supabase, user!.id)]);
+const pending = needs.reduce((sum, n) => sum + (["open", "in_review"].includes(n.status) ? n.proposals_count : 0), 0);
+const tabClass = (active: boolean) =>
+  `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+---
+
+<PanelLayout title="Necesidades" description="Lo que pediste y las propuestas que mandaste.">
+  <Button slot="actions" href="/necesidades/nueva">Publicar una necesidad</Button>
+
+  <div class="mb-5 flex flex-wrap gap-2">
+    <a href="/panel/necesidades" class={tabClass(tab === "needs")} aria-current={tab === "needs" ? "page" : undefined}>
+      Mis necesidades ({needs.length})
+    </a>
+    <a href="/panel/necesidades?ver=propuestas" class={tabClass(tab === "proposals")} aria-current={tab === "proposals" ? "page" : undefined}>
+      Mis propuestas ({proposals.length})
+    </a>
+  </div>
+
+  {
+    tab === "needs" ? (
+      needs.length === 0 ? (
+        <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+          <h2 class="text-lg font-semibold">¿Necesitás algo?</h2>
+          <p class="mt-1 text-ink-muted">Publicalo y los emprendimientos de ese rubro en tu ciudad te mandan propuestas con precio.</p>
+          <div class="mt-4"><Button href="/necesidades/nueva">Publicar una necesidad</Button></div>
+        </div>
+      ) : (
+        <>
+          {pending > 0 && <p class="mb-4 text-sm text-ink-muted">Tenés {pending === 1 ? "1 propuesta" : `${pending} propuestas`} para revisar en tus necesidades abiertas.</p>}
+          <div class="flex max-w-2xl flex-col gap-3">
+            {needs.map((need) => <NeedCard need={need} showStatus />)}
+          </div>
+        </>
+      )
+    ) : proposals.length === 0 ? (
+      <div class="rounded-wl-lg border border-dashed border-line bg-surface p-10 text-center">
+        <h2 class="text-lg font-semibold">Todavía no mandaste propuestas</h2>
+        <p class="mt-1 text-ink-muted">Mirá lo que la gente necesita y ofrecé tu trabajo.</p>
+        <div class="mt-4"><Button href="/necesidades" variant="secondary">Ver necesidades</Button></div>
+      </div>
+    ) : (
+      <ul class="flex max-w-2xl flex-col gap-3">
+        {proposals.map((p) => {
+          const label = PROPOSAL_STATUS_LABELS[p.status];
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4">
+              <div class="flex items-start justify-between gap-3">
+                <a href={p.need ? `${needPath(p.need)}#propuestas` : "#"} class="min-w-0 font-semibold hover:underline">
+                  {p.need?.title ?? "Necesidad eliminada"}
+                </a>
+                <span class:list={["shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold", label.class]}>{label.label}</span>
+              </div>
+              <p class="mt-1 text-sm text-ink-muted">
+                {p.amount != null ? formatMoney(Number(p.amount)) : "Precio a convenir"}
+                {p.need?.city && ` · ${p.need.city.name}`} · {formatRelative(p.created_at)}
+                {p.need && p.status === "pending" && ` · Necesidad: ${NEED_STATUS_LABELS[p.need.status].label.toLowerCase()}`}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+</PanelLayout>
