@@ -1,0 +1,87 @@
+---
+/**
+ * Botones de moderación para un contenido (con nota opcional). Un solo
+ * formulario: cada botón manda su acción. La base revisa el rol.
+ */
+import { actions } from "astro:actions";
+import type { ModerationTarget, TargetType } from "../../services/admin";
+
+interface Props {
+  type: TargetType;
+  id: string;
+  target: ModerationTarget | null;
+  /** Página a la que vuelve el formulario. */
+  returnTo: string;
+  /** Mostrar "Descartar denuncia". */
+  withDismiss?: boolean;
+  /** Mostrar Verificar / Quitar verificación (solo administración). */
+  canVerify?: boolean;
+  verified?: boolean;
+}
+
+const { type, id, target, returnTo, withDismiss = false, canVerify = false, verified = false } = Astro.props;
+const hidden = target?.hidden ?? false;
+const status = target?.status ?? "";
+
+type Btn = { action: string; label: string; tone: "danger" | "normal"; confirm?: string };
+const buttons: Btn[] = [];
+if (target) {
+  if (type === "review") {
+    buttons.push(hidden ? { action: "restore", label: "Restaurar", tone: "normal" } : { action: "hide", label: "Ocultar reseña", tone: "danger" });
+    buttons.push({ action: "delete", label: "Borrar", tone: "danger", confirm: "¿Borrar la reseña? No se puede deshacer." });
+  } else if (type === "post") {
+    if (status === "removed") buttons.push({ action: "restore", label: "Restaurar", tone: "normal" });
+    else if (status === "published") buttons.push({ action: "hide", label: "Quitar publicación", tone: "danger" });
+  } else if (type === "comment") {
+    buttons.push({ action: "delete", label: "Borrar comentario", tone: "danger", confirm: "¿Borrar el comentario? No se puede deshacer." });
+  } else if (type === "need") {
+    buttons.push(hidden ? { action: "restore", label: "Restaurar", tone: "normal" } : { action: "hide", label: "Quitar necesidad", tone: "danger" });
+  } else if (type === "profile" || type === "business") {
+    buttons.push(
+      status === "suspended" || status === "banned"
+        ? { action: "reactivate", label: "Reactivar", tone: "normal" }
+        : { action: "suspend", label: type === "profile" ? "Suspender cuenta" : "Suspender emprendimiento", tone: "danger", confirm: "¿Suspender? Deja de verse y no puede publicar." },
+    );
+    if (canVerify) buttons.push(verified ? { action: "unverify", label: "Quitar verificación", tone: "normal" } : { action: "verify", label: "Verificar ✓", tone: "normal" });
+  }
+}
+if (withDismiss) buttons.push({ action: "dismiss", label: "Descartar denuncia", tone: "normal" });
+const base = "h-9 rounded-wl px-3 text-sm font-semibold";
+---
+
+{
+  buttons.length > 0 && (
+    <form method="POST" action={`${returnTo}${returnTo.includes("?") ? "&" : "?"}${String(actions.admin.moderate).replace(/^\?/, "")}`} class="flex flex-col gap-2" data-moderation>
+      <input type="hidden" name="target_type" value={type} />
+      <input type="hidden" name="target_id" value={id} />
+      <label class="sr-only" for={`note-${id}`}>Nota interna (opcional)</label>
+      <input
+        id={`note-${id}`}
+        name="note"
+        maxlength="500"
+        placeholder="Nota interna (opcional)"
+        class="h-9 w-full rounded-wl border border-line bg-surface px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+      />
+      <div class="flex flex-wrap gap-2">
+        {buttons.map((b) => (
+          <button
+            type="submit"
+            name="action"
+            value={b.action}
+            data-confirm={b.confirm}
+            class:list={[base, b.tone === "danger" ? "border border-danger/40 bg-danger-soft text-danger hover:border-danger" : "border border-line bg-surface hover:bg-surface-muted"]}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+    </form>
+  )
+}
+
+<script>
+  document.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("form[data-moderation] button[data-confirm]");
+    if (button && !window.confirm(button.dataset.confirm!)) event.preventDefault();
+  });
+</script>

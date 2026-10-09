@@ -147,6 +147,7 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
     <p class="mt-4 text-sm text-ink-muted">
       {need.proposals_count === 0 ? "Todavía no recibió propuestas." : need.proposals_count === 1 ? "Recibió 1 propuesta." : `Recibió ${need.proposals_count} propuestas.`}
       {open && ` Recibe propuestas hasta el ${formatDate(need.expires_at, { day: "numeric", month: "long" })}.`}
+      {user && !isAuthor && <a href={`/denunciar?tipo=necesidad&id=${need.id}`} class="ml-1 text-xs underline hover:text-danger">Denunciar</a>}
     </p>
 
     <section id="propuestas" class="mt-8 scroll-mt-20">

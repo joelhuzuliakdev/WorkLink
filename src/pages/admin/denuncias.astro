@@ -1,0 +1,41 @@
+---
+/** Denuncias agrupadas por contenido: abiertas, resueltas y descartadas. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import ReportGroupCard from "../../components/admin/ReportGroupCard.astro";
+import { getAdminStats, getReportGroups } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+
+const { supabase } = Astro.locals;
+const views = { abiertas: "open", resueltas: "resolved", descartadas: "dismissed" } as const;
+const ver = (Astro.url.searchParams.get("ver") ?? "abiertas") as keyof typeof views;
+const status = views[ver] ?? "open";
+const returnTo = ver === "abiertas" ? "/admin/denuncias" : `/admin/denuncias?ver=${ver}`;
+
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [groups, stats] = await Promise.all([getReportGroups(supabase, status, 100), getAdminStats(supabase)]);
+const tab = (active: boolean) => `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+---
+
+<AdminLayout
+  title="Denuncias"
+  description="Lo más denunciado primero. Al decidir, se cierran todas las denuncias de ese contenido y queda en el historial."
+  openReports={stats?.reports_open}
+  error={forms.error}
+>
+  <div class="mb-4 flex flex-wrap gap-2">
+    {Object.keys(views).map((key) => <a href={key === "abiertas" ? "/admin/denuncias" : `/admin/denuncias?ver=${key}`} class={tab(ver === key)}>{key[0].toUpperCase() + key.slice(1)}</a>)}
+  </div>
+  {
+    groups.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
+        {status === "open" ? "No hay denuncias pendientes. 🎉" : "Todavía no hay denuncias en esta lista."}
+      </p>
+    ) : (
+      <div class="flex flex-col gap-3">
+        {groups.map((g) => <ReportGroupCard group={g} returnTo={returnTo} open={status === "open"} />)}
+      </div>
+    )
+  }
+</AdminLayout>

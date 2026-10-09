@@ -66,6 +66,7 @@ const links = [
   { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
   { href: "/publicaciones", label: "Todas las publicaciones" },
   { href: "/rubros", label: "Explorar rubros" },
+  ...(viewer.role ? [{ href: "/admin", label: "⚙ Administración" }] : []),
 ];
 ---
 

@@ -1,6 +1,6 @@
 ---
 /**
- * Menú "⋯" de una publicación propia: Editar y Eliminar.
+ * Menú "⋯" de una publicación. Propia: Editar y Eliminar. Ajena: Denunciar.
  * Eliminar pide confirmación y, con JavaScript, saca la publicación de la
  * página sin recargar (scripts/social.ts). Sin JavaScript, el formulario
  * va a "Mis publicaciones", que la elimina y muestra el aviso.
@@ -11,10 +11,12 @@ interface Props {
   postId: string;
   /** Adónde ir después de eliminar (en la página de la publicación). */
   redirectTo?: string;
+  /** "owner": editar y eliminar; "other": denunciar. */
+  mode?: "owner" | "other";
   class?: string;
 }
 
-const { postId, redirectTo, class: className = "" } = Astro.props;
+const { postId, redirectTo, mode = "owner", class: className = "" } = Astro.props;
 const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted";
 ---
 
@@ -26,11 +28,19 @@ const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text
     <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
   </summary>
   <div class="absolute right-0 top-9 z-20 w-44 rounded-wl-lg border border-line bg-surface p-1 shadow-lg">
-    <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
-    <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
-      <input type="hidden" name="post_id" value={postId} />
-      <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
-    </form>
+    {
+      mode === "owner" ? (
+        <>
+          <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
+          <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
+            <input type="hidden" name="post_id" value={postId} />
+            <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
+          </form>
+        </>
+      ) : (
+        <a href={`/denunciar?tipo=publicacion&id=${postId}`} class={item}>Denunciar publicación</a>
+      )
+    }
   </div>
 </details>
 

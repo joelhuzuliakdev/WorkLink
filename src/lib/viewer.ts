@@ -11,6 +11,9 @@ export interface ViewerProfile {
   headline: string | null;
   following_count: number;
   verified_at: string | null;
+  status: "active" | "suspended" | "banned";
+  /** Rol en el equipo de WorkLink (null si no es staff). */
+  role: "moderator" | "admin" | "super_admin" | null;
 }
 
 /**
@@ -20,16 +23,19 @@ export interface ViewerProfile {
 export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | null> {
   if (!locals.user) return Promise.resolve(null);
   locals.viewerProfile ??= (async () => {
-    const { data, error } = await locals.supabase
-      .from("profiles")
-      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at")
-      .eq("id", locals.user!.id)
-      .maybeSingle();
+    const [{ data, error }, { data: role }] = await Promise.all([
+      locals.supabase
+        .from("profiles")
+        .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at, status")
+        .eq("id", locals.user!.id)
+        .maybeSingle(),
+      locals.supabase.from("user_roles").select("role").eq("user_id", locals.user!.id).maybeSingle(),
+    ]);
     if (error) {
       console.error("[viewer]", error.message);
       return null;
     }
-    return (data as ViewerProfile | null) ?? null;
+    return data ? ({ ...data, role: (role?.role as ViewerProfile["role"]) ?? null } as ViewerProfile) : null;
   })();
   return locals.viewerProfile;
 }

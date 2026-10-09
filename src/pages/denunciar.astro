@@ -1,0 +1,77 @@
+---
+/**
+ * Denunciar contenido: /denunciar?tipo=publicacion|comentario|perfil|emprendimiento|necesidad|resena&id=<uuid>
+ * La denuncia la revisa el equipo en /admin/denuncias. La base valida que el
+ * contenido exista y que no sea propio. Ruta protegida (requiere sesión).
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Alert from "../components/ui/Alert.astro";
+import { REPORT_REASONS } from "../schemas/review";
+import { getModerationTarget, TARGET_FROM_PARAM, TARGET_LABELS } from "../services/admin";
+
+const { supabase } = Astro.locals;
+const tipo = Astro.url.searchParams.get("tipo") ?? "";
+const id = Astro.url.searchParams.get("id") ?? "";
+const type = TARGET_FROM_PARAM[tipo];
+if (!type || !/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+const target = await getModerationTarget(supabase, type, id);
+if (!target) return Astro.rewrite("/404");
+
+const result = Astro.getActionResult(actions.reviews.report);
+const sent = result && !result.error;
+const formError = result?.error ? (isInputError(result.error) ? "Elegí un motivo." : result.error.message) : null;
+const self = `/denunciar?tipo=${tipo}&id=${id}`;
+const formAction = `${self}&${String(actions.reviews.report).replace(/^\?/, "")}`;
+const textarea =
+  "w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout title="Denunciar" noindex>
+  <section class="mx-auto max-w-xl px-4 py-8">
+    <a href={target.href} class="text-sm font-medium text-ink-muted hover:text-ink">← Volver</a>
+    <h1 class="mt-3 text-2xl font-bold">Denunciar {TARGET_LABELS[type].toLowerCase()}</h1>
+
+    <div class="mt-4 rounded-wl-lg border border-line bg-surface p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-ink-muted">{TARGET_LABELS[type]}{target.ownerName && ` de ${target.ownerName}`}</p>
+      <p class="mt-1 font-semibold">{target.title}</p>
+      {target.excerpt && <p class="mt-1 line-clamp-3 text-sm text-ink-muted">{target.excerpt}</p>}
+    </div>
+
+    {
+      sent ? (
+        <div class="mt-6">
+          <Alert tone="success" title="¡Gracias por avisarnos!">
+            {result.data.already ? "Ya habías denunciado este contenido. " : ""}El equipo de WorkLink lo va a revisar. Si no cumple las reglas, lo vamos a quitar.
+          </Alert>
+          <Button href={target.href} variant="secondary" class="mt-4">Volver</Button>
+        </div>
+      ) : (
+        <form method="POST" action={formAction} class="mt-6 flex flex-col gap-4">
+          {formError && <Alert tone="danger">{formError}</Alert>}
+          <input type="hidden" name="target_type" value={type} />
+          <input type="hidden" name="target_id" value={id} />
+          <fieldset>
+            <legend class="font-medium">¿Cuál es el problema?</legend>
+            <div class="mt-2 flex flex-col gap-2">
+              {Object.entries(REPORT_REASONS).map(([value, label]) => (
+                <label class="flex items-center gap-3 rounded-wl border border-line bg-surface px-3 py-2.5 has-[:checked]:border-brand">
+                  <input type="radio" name="reason" value={value} required class="accent-brand" />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div class="flex flex-col gap-1.5">
+            <label for="details" class="text-sm font-medium">Contanos más (opcional)</label>
+            <textarea id="details" name="details" rows="3" maxlength="500" class={textarea} placeholder="Cualquier dato que nos ayude a revisarlo."></textarea>
+          </div>
+          <p class="text-xs text-ink-muted">La persona denunciada no sabe quién la denunció.</p>
+          <div><Button type="submit">Enviar denuncia</Button></div>
+        </form>
+      )
+    }
+  </section>
+</BaseLayout>

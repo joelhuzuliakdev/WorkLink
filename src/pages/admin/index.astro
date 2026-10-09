@@ -1,28 +1,57 @@
 ---
-/**
- * Panel administrativo (Etapa 12). El middleware ya verificó sesión y rol
- * de staff contra la base; acá solo se muestra el rol actual.
- */
-import BaseLayout from "../../layouts/BaseLayout.astro";
+/** Resumen del panel: números de la semana y denuncias más urgentes. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import ReportGroupCard from "../../components/admin/ReportGroupCard.astro";
+import { getAdminStats, getReportGroups } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
 
-const { supabase, user } = Astro.locals;
-const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
+const { supabase } = Astro.locals;
+const forms = handleAdminActions(Astro, "/admin");
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
 
-const roleLabel: Record<string, string> = {
-  moderator: "Moderación",
-  admin: "Administración",
-  super_admin: "Super administración",
-};
+const [stats, groups] = await Promise.all([getAdminStats(supabase), getReportGroups(supabase, "open", 5)]);
+const n = (v: number | undefined) => (v ?? 0).toLocaleString("es-AR");
+const cards = stats
+  ? [
+      { label: "Usuarios", value: n(stats.users), sub: `+${n(stats.users_week)} esta semana`, href: "/admin/usuarios" },
+      { label: "Emprendimientos activos", value: n(stats.businesses), sub: `+${n(stats.businesses_week)} esta semana`, href: "/admin/emprendimientos" },
+      { label: "Publicaciones", value: n(stats.posts), sub: `+${n(stats.posts_week)} esta semana`, href: "/publicaciones" },
+      { label: "Necesidades abiertas", value: n(stats.needs_open), sub: `${n(stats.needs_awarded)} resueltas en total`, href: "/necesidades" },
+      { label: "Propuestas", value: n(stats.proposals_week), sub: "en los últimos 7 días", href: null },
+      { label: "Mensajes", value: n(stats.messages_week), sub: "en los últimos 7 días", href: null },
+      { label: "Reseñas publicadas", value: n(stats.reviews), sub: `${n(stats.reviews_hidden)} ocultas por denuncias`, href: null },
+      { label: "Cuentas suspendidas", value: n(stats.users_suspended), sub: "", href: "/admin/usuarios?estado=suspended" },
+    ]
+  : [];
 ---
 
-<BaseLayout title="Administración" noindex>
-  <section class="mx-auto max-w-6xl px-4 py-10">
-    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">
-      {role ? roleLabel[role.role] ?? role.role : "Staff"}
-    </p>
-    <h1 class="mt-2 text-3xl font-bold">Panel administrativo</h1>
-    <p class="mt-2 max-w-2xl text-ink-muted">
-      Acá van a estar el dashboard, la moderación, las categorías propuestas y las métricas. Se construye en la Etapa 12.
-    </p>
-  </section>
-</BaseLayout>
+<AdminLayout title="Resumen" openReports={stats?.reports_open} error={forms.error}>
+  <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+    {
+      cards.map((c) => {
+        const Tag = c.href ? "a" : "div";
+        return (
+          <Tag href={c.href ?? undefined} class:list={["rounded-wl-lg border border-line bg-surface p-4", c.href && "hover:border-brand"]}>
+            <p class="text-sm text-ink-muted">{c.label}</p>
+            <p class="mt-1 text-2xl font-bold">{c.value}</p>
+            {c.sub && <p class="mt-0.5 text-xs text-ink-muted">{c.sub}</p>}
+          </Tag>
+        );
+      })
+    }
+  </div>
+
+  <div class="mt-8 flex items-baseline justify-between gap-3">
+    <h2 class="text-lg font-semibold">Denuncias para revisar {stats && stats.reports_open > 0 && <span class="text-ink-muted">({n(stats.reports_open)})</span>}</h2>
+    <a href="/admin/denuncias" class="text-sm font-semibold text-brand hover:underline">Ver todas</a>
+  </div>
+  {
+    groups.length === 0 ? (
+      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-ink-muted">No hay denuncias pendientes. 🎉</p>
+    ) : (
+      <div class="mt-3 flex flex-col gap-3">
+        {groups.map((g) => <ReportGroupCard group={g} returnTo="/admin" open />)}
+      </div>
+    )
+  }
+</AdminLayout>

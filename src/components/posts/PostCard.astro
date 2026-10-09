@@ -78,7 +78,7 @@ const isOwner = Astro.locals.user?.id === post.author_id;
       </p>
     </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
-    {isOwner && <PostOwnerMenu postId={post.id} class="-mr-2" />}
+    {isOwner ? <PostOwnerMenu postId={post.id} class="-mr-2" /> : Astro.locals.user && <PostOwnerMenu postId={post.id} mode="other" class="-mr-2" />}
   </header>
 
   <div class="px-4 pt-3">

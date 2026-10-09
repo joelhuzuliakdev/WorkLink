@@ -105,6 +105,7 @@ const firstName = profile.first_name ?? name;
           <ul class="mt-3 flex flex-col gap-1.5 text-sm text-ink-muted">
             {location && <li>📍 {location}</li>}
             <li>📅 En WorkLink desde {formatMonthYear(profile.created_at)}</li>
+            {user && !isMe && <li><a href={`/denunciar?tipo=perfil&id=${profile.id}`} class="text-xs underline hover:text-danger">Denunciar perfil</a></li>}
             {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram @{profile.instagram}</a></li>}
             {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok @{profile.tiktok}</a></li>}
             {profile.facebook && <li><a href={profile.facebook.startsWith("http") ? profile.facebook : `https://${profile.facebook}`} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Facebook</a></li>}

@@ -23,6 +23,7 @@ const links = [
   { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
+  ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
 ];
 ---
 

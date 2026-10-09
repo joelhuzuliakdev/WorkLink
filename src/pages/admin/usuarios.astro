@@ -1,0 +1,116 @@
+---
+/**
+ * Cuentas: buscar, suspender o reactivar, verificar (administración) y
+ * asignar roles del equipo (super administración).
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import ModerationForm from "../../components/admin/ModerationForm.astro";
+import { getAdminStats, searchUsers, type AdminUser } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const { supabase, user } = Astro.locals;
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+const estados = ["all", "active", "suspended", "staff"] as const;
+const estado = (estados.find((e) => e === Astro.url.searchParams.get("estado")) ?? "all") as (typeof estados)[number];
+const params = new URLSearchParams();
+if (q) params.set("q", q);
+if (estado !== "all") params.set("estado", estado);
+const returnTo = `/admin/usuarios${params.size ? `?${params}` : ""}`;
+
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [{ data: me }, users, stats] = await Promise.all([
+  supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle(),
+  searchUsers(supabase, { q, status: estado }),
+  getAdminStats(supabase),
+]);
+const myRole = (me?.role ?? "moderator") as NonNullable<AdminUser["role"]>;
+const rank = { moderator: 1, admin: 2, super_admin: 3 } as const;
+const canVerify = rank[myRole] >= 2;
+const isSuper = myRole === "super_admin";
+const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super admin" };
+const statusLabel: Record<string, string> = { active: "Activa", suspended: "Suspendida", banned: "Bloqueada" };
+const filterLabels = { all: "Todas", active: "Activas", suspended: "Suspendidas", staff: "Equipo" };
+const selectClass = "h-10 rounded-wl border border-line bg-surface px-3 text-sm";
+---
+
+<AdminLayout title="Usuarios" description="Buscá por usuario, nombre o apellido." openReports={stats?.reports_open} error={forms.error}>
+  <form method="GET" class="mb-4 flex flex-wrap gap-2">
+    <label for="q" class="sr-only">Buscar</label>
+    <input id="q" name="q" value={q} type="search" placeholder="Usuario o nombre" class="h-10 min-w-0 flex-1 rounded-wl border border-line bg-surface px-3" />
+    <label for="estado" class="sr-only">Estado</label>
+    <select id="estado" name="estado" class={selectClass}>
+      {estados.map((e) => <option value={e} selected={e === estado}>{filterLabels[e]}</option>)}
+    </select>
+    <button class="h-10 rounded-wl bg-brand px-4 text-sm font-semibold text-brand-contrast">Buscar</button>
+  </form>
+
+  {
+    users.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No encontramos cuentas.</p>
+    ) : (
+      <ul class="flex flex-col gap-3">
+        {users.map((u) => {
+          const name = displayName(u);
+          const isMe = u.id === user!.id;
+          // No se modera a alguien del equipo con el mismo rol o superior.
+          const protectedStaff = Boolean(u.role) && rank[u.role!] >= rank[myRole];
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4" data-user={u.username}>
+              <div class="flex flex-wrap items-center gap-3">
+                <Avatar name={name} path={u.avatar_path} size={44} />
+                <div class="min-w-0 flex-1">
+                  <p class="flex flex-wrap items-center gap-x-2 font-semibold">
+                    <a href={`/u/${u.username}`} target="_blank" rel="noopener" class="hover:underline">{name}</a>
+                    {u.verified_at && <VerifiedBadge size={14} />}
+                    <span class="text-sm font-normal text-ink-muted">@{u.username}</span>
+                  </p>
+                  <p class="mt-0.5 flex flex-wrap gap-x-2 text-xs text-ink-muted">
+                    <span class:list={["rounded-full px-2 py-0.5 font-semibold", u.status === "active" ? "bg-success-soft text-success" : "bg-danger-soft text-danger"]}>{statusLabel[u.status]}</span>
+                    {u.role && <span class="rounded-full bg-seek-soft px-2 py-0.5 font-semibold text-seek">{roleLabel[u.role]}</span>}
+                    <span>Desde {formatDate(u.created_at, { dateStyle: "medium" })}</span>
+                    <span>· {u.followers_count} seguidores</span>
+                  </p>
+                </div>
+              </div>
+              {!isMe && !protectedStaff && (
+                <div class="mt-3 grid gap-3 border-t border-line pt-3 md:grid-cols-[1fr_auto]">
+                  <ModerationForm
+                    type="profile"
+                    id={u.id}
+                    target={{ type: "profile", id: u.id, title: name, excerpt: null, href: `/u/${u.username}`, status: u.status, hidden: u.status !== "active", ownerName: name, ownerUsername: u.username }}
+                    returnTo={returnTo}
+                    canVerify={canVerify}
+                    verified={Boolean(u.verified_at)}
+                  />
+                  {isSuper && (
+                    <form method="POST" action={`${returnTo}${returnTo.includes("?") ? "&" : "?"}${String(actions.admin.setRole).replace(/^\?/, "")}`} class="flex items-end gap-2">
+                      <input type="hidden" name="user_id" value={u.id} />
+                      <label class="flex flex-col gap-1 text-xs text-ink-muted">
+                        Rol en el equipo
+                        <select name="role" class={selectClass}>
+                          <option value="" selected={!u.role}>Sin rol</option>
+                          <option value="moderator" selected={u.role === "moderator"}>Moderación</option>
+                          <option value="admin" selected={u.role === "admin"}>Administración</option>
+                          <option value="super_admin" selected={u.role === "super_admin"}>Super admin</option>
+                        </select>
+                      </label>
+                      <button class="h-10 rounded-wl border border-line px-3 text-sm font-semibold hover:bg-surface-muted">Guardar rol</button>
+                    </form>
+                  )}
+                </div>
+              )}
+              {isMe && <p class="mt-2 text-xs text-ink-muted">Es tu cuenta.</p>}
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+</AdminLayout>

@@ -289,7 +289,10 @@ const jsonLd = [
             </section>
           )}
 
-          <p class="px-1 text-xs text-ink-muted">En WorkLink desde {formatMonthYear(business.created_at)}.</p>
+          <p class="px-1 text-xs text-ink-muted">
+            En WorkLink desde {formatMonthYear(business.created_at)}.
+            {user && !canEdit && <a href={`/denunciar?tipo=emprendimiento&id=${business.id}`} class="ml-1 underline hover:text-danger">Denunciar</a>}
+          </p>
         </aside>
       </div>
     </div>

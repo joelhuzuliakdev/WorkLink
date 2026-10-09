@@ -108,6 +108,13 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
       }
     </nav>
   </div>
+  {
+    viewer && viewer.status !== "active" && (
+      <div class="border-t border-danger/30 bg-danger-soft px-4 py-2 text-center text-sm" role="status">
+        Tu cuenta está suspendida por no cumplir las reglas de WorkLink: no podés publicar, comentar ni escribir mensajes.
+      </div>
+    )
+  }
 </header>
 
 {

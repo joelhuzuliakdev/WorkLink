@@ -33,7 +33,7 @@ export const REPORT_REASONS = {
 } as const;
 
 export const reportSchema = z.object({
-  target_type: z.enum(["review"]),
+  target_type: z.enum(["review", "post", "comment", "profile", "business", "need"]),
   target_id: uuid,
   reason: z.enum(Object.keys(REPORT_REASONS) as [keyof typeof REPORT_REASONS, ...(keyof typeof REPORT_REASONS)[]], {
     error: "Elegí un motivo",

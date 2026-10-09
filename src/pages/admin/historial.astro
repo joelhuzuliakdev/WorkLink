@@ -1,0 +1,33 @@
+---
+/** Historial: cada decisión del equipo, quién la tomó y sobre qué. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import { ACTION_LABELS, getAdminStats, getModerationLog, TARGET_LABELS } from "../../services/admin";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const { supabase } = Astro.locals;
+const [log, stats] = await Promise.all([getModerationLog(supabase, 100), getAdminStats(supabase)]);
+---
+
+<AdminLayout title="Historial" description="Las últimas 100 decisiones del equipo." openReports={stats?.reports_open}>
+  {
+    log.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">Todavía no hay decisiones registradas.</p>
+    ) : (
+      <ol class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+        {log.map((e) => (
+          <li class="p-4 text-sm">
+            <p>
+              <strong>{e.moderator ? displayName(e.moderator) : "Alguien del equipo"}</strong> {(ACTION_LABELS[e.action] ?? e.action).toLowerCase()}{" "}
+              <span class="text-ink-muted">{TARGET_LABELS[e.target_type].toLowerCase()}</span>{" "}
+              {e.target ? <a href={e.target.href} target="_blank" rel="noopener" class="font-medium underline">{e.target.title}</a> : <span class="text-ink-muted">(ya no existe)</span>}
+              {e.action === "role" && e.note && <span> → {e.note}</span>}
+            </p>
+            {e.note && e.action !== "role" && <p class="mt-1 text-ink-muted">Nota: {e.note}</p>}
+            <p class="mt-1 text-xs text-ink-muted">{formatDate(e.created_at, { dateStyle: "medium", timeStyle: "short" })}</p>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+</AdminLayout>

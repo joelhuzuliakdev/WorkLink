@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · arreglo: necesidades en el inicio y en el buscador
+# WorkLink · instalador de la Etapa 12 (administración y moderación)
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-necesidades-inicio.sh
+#     bash instalar-etapa12.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0023 (incluye todo lo anterior). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0024 (incluye todo lo anterior). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -26,7 +26,7 @@ echo ""
 # Archivos que cambiaron de lugar (si quedaran, Astro tendría dos rutas iguales).
 rm -f 'src/pages/u/[username].astro'
 
-echo "Instalando archivos del arreglo..."
+echo "Instalando archivos de la Etapa 12..."
 
 escribir 'public/brand/logo.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 32" width="168" height="32" role="img" aria-label="WorkLink">
@@ -60,6 +60,50 @@ escribir 'public/favicon.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
     <path d="M18.19 9.24 A7 7 0 0 0 13.42 13.61" stroke="#e8572e" stroke-linecap="butt"/>
   </g>
 </svg>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/admin.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { moderateSchema, setRoleSchema } from "../schemas/admin";
+import { dbError, requireUser } from "../lib/auth/guards";
+
+/**
+ * Decisiones de moderación. La base (moderate / set_staff_role) revisa el rol
+ * de quien llama: aunque alguien envíe este formulario a mano, sin rol no pasa.
+ */
+const fromDb = (error: { code?: string; message?: string; hint?: string | null }, fallback: string) =>
+  error.message && ["42501", "22023", "23514"].includes(error.code ?? "") && !error.message.startsWith("permission")
+    ? new ActionError({ code: "FORBIDDEN", message: error.message })
+    : dbError(error, fallback);
+
+export const admin = {
+  moderate: defineAction({
+    accept: "form",
+    input: moderateSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("moderate", {
+        p_target_type: input.target_type,
+        p_target_id: input.target_id,
+        p_action: input.action,
+        p_note: input.note ?? null,
+      });
+      if (error) throw fromDb(error, "No pudimos aplicar la decisión.");
+      return { action: input.action, target: input.target_id };
+    },
+  }),
+
+  setRole: defineAction({
+    accept: "form",
+    input: setRoleSchema,
+    handler: async (input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.rpc("set_staff_role", { p_user_id: input.user_id, p_role: input.role });
+      if (error) throw fromDb(error, "No pudimos cambiar el rol.");
+      return { role: input.role };
+    },
+  }),
+};
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/actions/auth.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -509,6 +553,7 @@ import { social } from "./social";
 import { messages } from "./messages";
 import { needs } from "./needs";
 import { reviews } from "./reviews";
+import { admin } from "./admin";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -524,6 +569,7 @@ export const server = {
   messages,
   needs,
   reviews,
+  admin,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -1173,6 +1219,152 @@ export const social = {
     },
   }),
 };
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/admin/ModerationForm.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Botones de moderación para un contenido (con nota opcional). Un solo
+ * formulario: cada botón manda su acción. La base revisa el rol.
+ */
+import { actions } from "astro:actions";
+import type { ModerationTarget, TargetType } from "../../services/admin";
+
+interface Props {
+  type: TargetType;
+  id: string;
+  target: ModerationTarget | null;
+  /** Página a la que vuelve el formulario. */
+  returnTo: string;
+  /** Mostrar "Descartar denuncia". */
+  withDismiss?: boolean;
+  /** Mostrar Verificar / Quitar verificación (solo administración). */
+  canVerify?: boolean;
+  verified?: boolean;
+}
+
+const { type, id, target, returnTo, withDismiss = false, canVerify = false, verified = false } = Astro.props;
+const hidden = target?.hidden ?? false;
+const status = target?.status ?? "";
+
+type Btn = { action: string; label: string; tone: "danger" | "normal"; confirm?: string };
+const buttons: Btn[] = [];
+if (target) {
+  if (type === "review") {
+    buttons.push(hidden ? { action: "restore", label: "Restaurar", tone: "normal" } : { action: "hide", label: "Ocultar reseña", tone: "danger" });
+    buttons.push({ action: "delete", label: "Borrar", tone: "danger", confirm: "¿Borrar la reseña? No se puede deshacer." });
+  } else if (type === "post") {
+    if (status === "removed") buttons.push({ action: "restore", label: "Restaurar", tone: "normal" });
+    else if (status === "published") buttons.push({ action: "hide", label: "Quitar publicación", tone: "danger" });
+  } else if (type === "comment") {
+    buttons.push({ action: "delete", label: "Borrar comentario", tone: "danger", confirm: "¿Borrar el comentario? No se puede deshacer." });
+  } else if (type === "need") {
+    buttons.push(hidden ? { action: "restore", label: "Restaurar", tone: "normal" } : { action: "hide", label: "Quitar necesidad", tone: "danger" });
+  } else if (type === "profile" || type === "business") {
+    buttons.push(
+      status === "suspended" || status === "banned"
+        ? { action: "reactivate", label: "Reactivar", tone: "normal" }
+        : { action: "suspend", label: type === "profile" ? "Suspender cuenta" : "Suspender emprendimiento", tone: "danger", confirm: "¿Suspender? Deja de verse y no puede publicar." },
+    );
+    if (canVerify) buttons.push(verified ? { action: "unverify", label: "Quitar verificación", tone: "normal" } : { action: "verify", label: "Verificar ✓", tone: "normal" });
+  }
+}
+if (withDismiss) buttons.push({ action: "dismiss", label: "Descartar denuncia", tone: "normal" });
+const base = "h-9 rounded-wl px-3 text-sm font-semibold";
+---
+
+{
+  buttons.length > 0 && (
+    <form method="POST" action={`${returnTo}${returnTo.includes("?") ? "&" : "?"}${String(actions.admin.moderate).replace(/^\?/, "")}`} class="flex flex-col gap-2" data-moderation>
+      <input type="hidden" name="target_type" value={type} />
+      <input type="hidden" name="target_id" value={id} />
+      <label class="sr-only" for={`note-${id}`}>Nota interna (opcional)</label>
+      <input
+        id={`note-${id}`}
+        name="note"
+        maxlength="500"
+        placeholder="Nota interna (opcional)"
+        class="h-9 w-full rounded-wl border border-line bg-surface px-3 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+      />
+      <div class="flex flex-wrap gap-2">
+        {buttons.map((b) => (
+          <button
+            type="submit"
+            name="action"
+            value={b.action}
+            data-confirm={b.confirm}
+            class:list={[base, b.tone === "danger" ? "border border-danger/40 bg-danger-soft text-danger hover:border-danger" : "border border-line bg-surface hover:bg-surface-muted"]}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+    </form>
+  )
+}
+
+<script>
+  document.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("form[data-moderation] button[data-confirm]");
+    if (button && !window.confirm(button.dataset.confirm!)) event.preventDefault();
+  });
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/components/admin/ReportGroupCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Contenido denunciado: qué es, de quién, motivos y botones para decidir. */
+import ModerationForm from "./ModerationForm.astro";
+import type { ReportGroup } from "../../services/admin";
+import { REASON_LABELS, TARGET_LABELS } from "../../services/admin";
+import { formatRelative } from "../../lib/format";
+
+interface Props {
+  group: ReportGroup;
+  returnTo: string;
+  open: boolean;
+}
+
+const { group: g, returnTo, open } = Astro.props;
+const t = g.target;
+---
+
+<article class="rounded-wl-lg border border-line bg-surface p-4" data-report-group={g.target_id}>
+  <div class="flex flex-wrap items-center gap-2 text-xs">
+    <span class="rounded-full bg-surface-muted px-2 py-0.5 font-semibold">{TARGET_LABELS[g.target_type]}</span>
+    <span class="rounded-full bg-danger-soft px-2 py-0.5 font-semibold text-danger">{g.reports} {g.reports === 1 ? "denuncia" : "denuncias"}</span>
+    {g.reasons.map((r) => <span class="rounded-full border border-line px-2 py-0.5">{REASON_LABELS[r] ?? r}</span>)}
+    {t?.hidden && <span class="rounded-full bg-warning-soft px-2 py-0.5 font-semibold text-warning">No se ve ({t.status})</span>}
+    <span class="text-ink-muted">· {formatRelative(g.last_at)}</span>
+  </div>
+  {
+    t ? (
+      <>
+        <a href={t.href} target="_blank" rel="noopener" class="mt-2 block font-semibold hover:underline">{t.title} ↗</a>
+        {t.excerpt && <p class="mt-1 whitespace-pre-line break-words text-sm">{t.excerpt}</p>}
+        {t.ownerUsername && (
+          <p class="mt-1 text-xs text-ink-muted">
+            De <a href={`/admin/usuarios?q=${t.ownerUsername}`} class="font-medium underline">{t.ownerName} (@{t.ownerUsername})</a>
+          </p>
+        )}
+      </>
+    ) : (
+      <p class="mt-2 text-sm text-ink-muted">El contenido ya no existe (lo borró su autor).</p>
+    )
+  }
+  {
+    g.details && g.details.length > 0 && (
+      <ul class="mt-2 flex flex-col gap-1 border-l-2 border-line pl-3 text-sm text-ink-muted">
+        {g.details.map((d) => <li>“{d}”</li>)}
+      </ul>
+    )
+  }
+  {open && (
+    <div class="mt-3 border-t border-line pt-3">
+      <ModerationForm type={g.target_type} id={g.target_id} target={t} returnTo={returnTo} withDismiss />
+    </div>
+  )}
+</article>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/brand/Logo.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -1865,6 +2057,7 @@ const links = [
   { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
   { href: "/publicaciones", label: "Todas las publicaciones" },
   { href: "/rubros", label: "Explorar rubros" },
+  ...(viewer.role ? [{ href: "/admin", label: "⚙ Administración" }] : []),
 ];
 ---
 
@@ -2425,6 +2618,13 @@ const query = Astro.url.pathname === "/buscar" ? (Astro.url.searchParams.get("q"
       }
     </nav>
   </div>
+  {
+    viewer && viewer.status !== "active" && (
+      <div class="border-t border-danger/30 bg-danger-soft px-4 py-2 text-center text-sm" role="status">
+        Tu cuenta está suspendida por no cumplir las reglas de WorkLink: no podés publicar, comentar ni escribir mensajes.
+      </div>
+    )
+  }
 </header>
 
 {
@@ -2624,7 +2824,7 @@ const isOwner = Astro.locals.user?.id === post.author_id;
       </p>
     </div>
     <span class:list={["shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold", type.class]}>{type.label}</span>
-    {isOwner && <PostOwnerMenu postId={post.id} class="-mr-2" />}
+    {isOwner ? <PostOwnerMenu postId={post.id} class="-mr-2" /> : Astro.locals.user && <PostOwnerMenu postId={post.id} mode="other" class="-mr-2" />}
   </header>
 
   <div class="px-4 pt-3">
@@ -2945,7 +3145,7 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 escribir 'src/components/posts/PostOwnerMenu.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
- * Menú "⋯" de una publicación propia: Editar y Eliminar.
+ * Menú "⋯" de una publicación. Propia: Editar y Eliminar. Ajena: Denunciar.
  * Eliminar pide confirmación y, con JavaScript, saca la publicación de la
  * página sin recargar (scripts/social.ts). Sin JavaScript, el formulario
  * va a "Mis publicaciones", que la elimina y muestra el aviso.
@@ -2956,10 +3156,12 @@ interface Props {
   postId: string;
   /** Adónde ir después de eliminar (en la página de la publicación). */
   redirectTo?: string;
+  /** "owner": editar y eliminar; "other": denunciar. */
+  mode?: "owner" | "other";
   class?: string;
 }
 
-const { postId, redirectTo, class: className = "" } = Astro.props;
+const { postId, redirectTo, mode = "owner", class: className = "" } = Astro.props;
 const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text-sm font-medium hover:bg-surface-muted";
 ---
 
@@ -2971,11 +3173,19 @@ const item = "flex w-full items-center gap-2 rounded-wl px-3 py-2 text-left text
     <svg viewBox="0 0 24 24" class="h-5 w-5 fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
   </summary>
   <div class="absolute right-0 top-9 z-20 w-44 rounded-wl-lg border border-line bg-surface p-1 shadow-lg">
-    <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
-    <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
-      <input type="hidden" name="post_id" value={postId} />
-      <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
-    </form>
+    {
+      mode === "owner" ? (
+        <>
+          <a href={`/panel/publicaciones/${postId}`} class={item}>Editar</a>
+          <form method="POST" action={`/panel/publicaciones${actions.posts.remove}`} data-delete-post data-redirect={redirectTo}>
+            <input type="hidden" name="post_id" value={postId} />
+            <button type="submit" class:list={[item, "text-danger"]}>Eliminar</button>
+          </form>
+        </>
+      ) : (
+        <a href={`/denunciar?tipo=publicacion&id=${postId}`} class={item}>Denunciar publicación</a>
+      )
+    }
   </div>
 </details>
 
@@ -3438,12 +3648,17 @@ const generalError = error && !bodyError ? error.message : null;
                   </p>
                   <p class="mt-0.5 whitespace-pre-line break-words">{comment.body}</p>
                 </div>
-                {canDelete && (
-                  <form method="POST" action={actions.social.removeComment} data-confirm="¿Borrar este comentario?" class="mt-1">
-                    <input type="hidden" name="comment_id" value={comment.id} />
-                    <button type="submit" class="px-3 text-xs font-semibold text-ink-muted hover:text-danger">Borrar</button>
-                  </form>
-                )}
+                <div class="mt-1 flex gap-1">
+                  {canDelete && (
+                    <form method="POST" action={actions.social.removeComment} data-confirm="¿Borrar este comentario?">
+                      <input type="hidden" name="comment_id" value={comment.id} />
+                      <button type="submit" class="px-3 text-xs font-semibold text-ink-muted hover:text-danger">Borrar</button>
+                    </form>
+                  )}
+                  {user && comment.author_id !== user.id && (
+                    <a href={`/denunciar?tipo=comentario&id=${comment.id}`} class="px-3 text-xs font-semibold text-ink-muted hover:text-danger">Denunciar</a>
+                  )}
+                </div>
               </div>
             </li>
           );
@@ -4117,7 +4332,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas", "/denunciar"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;
@@ -4890,6 +5105,78 @@ export async function inspectVideo(file: File, posterWidth: number): Promise<{
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/layouts/AdminLayout.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Layout del panel de administración: navegación entre secciones.
+ * El middleware ya exige sesión y rol de staff para /admin.
+ */
+import BaseLayout from "./BaseLayout.astro";
+import Alert from "../components/ui/Alert.astro";
+import { DONE_MESSAGES } from "../lib/admin-actions";
+
+interface Props {
+  title: string;
+  description?: string;
+  /** Denuncias abiertas (número en la pestaña). */
+  openReports?: number | null;
+  error?: string | null;
+}
+
+const { title, description, openReports, error } = Astro.props;
+const path = Astro.url.pathname;
+const done = DONE_MESSAGES[Astro.url.searchParams.get("hecho") ?? ""] ?? null;
+const { supabase, user } = Astro.locals;
+const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
+const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super administración" };
+
+const links = [
+  { href: "/admin", label: "Resumen", active: path === "/admin" },
+  { href: "/admin/denuncias", label: "Denuncias", active: path.startsWith("/admin/denuncias"), badge: openReports },
+  { href: "/admin/usuarios", label: "Usuarios", active: path.startsWith("/admin/usuarios") },
+  { href: "/admin/emprendimientos", label: "Emprendimientos", active: path.startsWith("/admin/emprendimientos") },
+  { href: "/admin/historial", label: "Historial", active: path.startsWith("/admin/historial") },
+];
+---
+
+<BaseLayout title={`${title} · Administración`} noindex>
+  <div class="border-b border-line bg-surface">
+    <div class="mx-auto max-w-6xl px-4 pt-4">
+      <p class="text-xs font-semibold uppercase tracking-wider text-ink-muted">{role ? (roleLabel[role.role] ?? role.role) : "Equipo"} · WorkLink</p>
+    </div>
+    <nav aria-label="Administración" class="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4">
+      {
+        links.map((link) => (
+          <a
+            href={link.href}
+            aria-current={link.active ? "page" : undefined}
+            class:list={[
+              "flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium",
+              link.active ? "border-brand text-ink" : "border-transparent text-ink-muted hover:text-ink",
+            ]}
+          >
+            {link.label}
+            {link.badge ? (
+              <span class="grid h-5 min-w-5 place-items-center rounded-full bg-brand px-1.5 text-[11px] font-bold text-brand-contrast">{link.badge}</span>
+            ) : null}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+
+  <section class="mx-auto max-w-6xl px-4 py-6">
+    <h1 class="text-2xl font-bold">{title}</h1>
+    {description && <p class="mt-1 text-ink-muted">{description}</p>}
+    {done && <Alert tone="success" class="mt-4">{done}</Alert>}
+    {error && <Alert tone="danger" class="mt-4">{error}</Alert>}
+    <div class="mt-6">
+      <slot />
+    </div>
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/layouts/AuthLayout.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -5028,6 +5315,7 @@ const links = [
   { href: "/panel/necesidades", label: "Necesidades", active: path.startsWith("/panel/necesidades") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/emprendimientos", label: "Emprendimientos", active: path.startsWith("/panel/emprendimientos") },
+  ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
 ];
 ---
 
@@ -5063,6 +5351,37 @@ const links = [
     <slot />
   </section>
 </BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/lib/admin-actions.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { AstroGlobal } from "astro";
+import { actions } from "astro:actions";
+
+/**
+ * Formularios del panel (moderar y cambiar roles): si salió bien devuelve la
+ * redirección (PRG); si falló, el mensaje.
+ */
+export function handleAdminActions(Astro: AstroGlobal, returnTo: string): { redirect: string | null; error: string | null } {
+  const moderate = Astro.getActionResult(actions.admin.moderate);
+  const role = Astro.getActionResult(actions.admin.setRole);
+  const sep = returnTo.includes("?") ? "&" : "?";
+  if (moderate && !moderate.error) return { redirect: `${returnTo}${sep}hecho=${moderate.data.action}`, error: null };
+  if (role && !role.error) return { redirect: `${returnTo}${sep}hecho=role`, error: null };
+  const failed = moderate?.error ?? role?.error;
+  return { redirect: null, error: failed ? failed.message || "No pudimos aplicar el cambio." : null };
+}
+
+export const DONE_MESSAGES: Record<string, string> = {
+  hide: "Listo: el contenido ya no se ve.",
+  restore: "Listo: el contenido se ve de nuevo.",
+  delete: "Listo: se borró.",
+  suspend: "Listo: la cuenta quedó suspendida.",
+  reactivate: "Listo: la cuenta está activa de nuevo.",
+  verify: "Listo: quedó verificada.",
+  unverify: "Listo: se quitó la verificación.",
+  dismiss: "Listo: descartaste la denuncia.",
+  role: "Listo: cambiaste el rol.",
+};
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/lib/auth/errors.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -5720,6 +6039,9 @@ export interface ViewerProfile {
   headline: string | null;
   following_count: number;
   verified_at: string | null;
+  status: "active" | "suspended" | "banned";
+  /** Rol en el equipo de WorkLink (null si no es staff). */
+  role: "moderator" | "admin" | "super_admin" | null;
 }
 
 /**
@@ -5729,16 +6051,19 @@ export interface ViewerProfile {
 export function getViewerProfile(locals: App.Locals): Promise<ViewerProfile | null> {
   if (!locals.user) return Promise.resolve(null);
   locals.viewerProfile ??= (async () => {
-    const { data, error } = await locals.supabase
-      .from("profiles")
-      .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at")
-      .eq("id", locals.user!.id)
-      .maybeSingle();
+    const [{ data, error }, { data: role }] = await Promise.all([
+      locals.supabase
+        .from("profiles")
+        .select("id, username, first_name, last_name, avatar_path, situation, headline, following_count, verified_at, status")
+        .eq("id", locals.user!.id)
+        .maybeSingle(),
+      locals.supabase.from("user_roles").select("role").eq("user_id", locals.user!.id).maybeSingle(),
+    ]);
     if (error) {
       console.error("[viewer]", error.message);
       return null;
     }
-    return (data as ViewerProfile | null) ?? null;
+    return data ? ({ ...data, role: (role?.role as ViewerProfile["role"]) ?? null } as ViewerProfile) : null;
   })();
   return locals.viewerProfile;
 }
@@ -5835,35 +6160,351 @@ Astro.response.status = 404;
 </BaseLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
-escribir 'src/pages/admin/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+escribir 'src/pages/admin/denuncias.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
-/**
- * Panel administrativo (Etapa 12). El middleware ya verificó sesión y rol
- * de staff contra la base; acá solo se muestra el rol actual.
- */
-import BaseLayout from "../../layouts/BaseLayout.astro";
+/** Denuncias agrupadas por contenido: abiertas, resueltas y descartadas. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import ReportGroupCard from "../../components/admin/ReportGroupCard.astro";
+import { getAdminStats, getReportGroups } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+
+const { supabase } = Astro.locals;
+const views = { abiertas: "open", resueltas: "resolved", descartadas: "dismissed" } as const;
+const ver = (Astro.url.searchParams.get("ver") ?? "abiertas") as keyof typeof views;
+const status = views[ver] ?? "open";
+const returnTo = ver === "abiertas" ? "/admin/denuncias" : `/admin/denuncias?ver=${ver}`;
+
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [groups, stats] = await Promise.all([getReportGroups(supabase, status, 100), getAdminStats(supabase)]);
+const tab = (active: boolean) => `rounded-full px-4 py-2 text-sm font-semibold ${active ? "bg-ink text-bg" : "bg-surface-muted text-ink hover:bg-line"}`;
+---
+
+<AdminLayout
+  title="Denuncias"
+  description="Lo más denunciado primero. Al decidir, se cierran todas las denuncias de ese contenido y queda en el historial."
+  openReports={stats?.reports_open}
+  error={forms.error}
+>
+  <div class="mb-4 flex flex-wrap gap-2">
+    {Object.keys(views).map((key) => <a href={key === "abiertas" ? "/admin/denuncias" : `/admin/denuncias?ver=${key}`} class={tab(ver === key)}>{key[0].toUpperCase() + key.slice(1)}</a>)}
+  </div>
+  {
+    groups.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
+        {status === "open" ? "No hay denuncias pendientes. 🎉" : "Todavía no hay denuncias en esta lista."}
+      </p>
+    ) : (
+      <div class="flex flex-col gap-3">
+        {groups.map((g) => <ReportGroupCard group={g} returnTo={returnTo} open={status === "open"} />)}
+      </div>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/admin/emprendimientos.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Emprendimientos: buscar, suspender o reactivar y verificar (administración). */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import ModerationForm from "../../components/admin/ModerationForm.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { getAdminStats, searchAdminBusinesses } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
 
 const { supabase, user } = Astro.locals;
-const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+const estados = ["all", "active", "suspended", "pending"] as const;
+const estado = (estados.find((e) => e === Astro.url.searchParams.get("estado")) ?? "all") as (typeof estados)[number];
+const params = new URLSearchParams();
+if (q) params.set("q", q);
+if (estado !== "all") params.set("estado", estado);
+const returnTo = `/admin/emprendimientos${params.size ? `?${params}` : ""}`;
 
-const roleLabel: Record<string, string> = {
-  moderator: "Moderación",
-  admin: "Administración",
-  super_admin: "Super administración",
-};
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [{ data: me }, businesses, stats] = await Promise.all([
+  supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle(),
+  searchAdminBusinesses(supabase, { q, status: estado }),
+  getAdminStats(supabase),
+]);
+const canVerify = me?.role === "admin" || me?.role === "super_admin";
+const statusLabel: Record<string, string> = { draft: "Borrador", active: "Activo", inactive: "Pausado", suspended: "Suspendido" };
+const filterLabels = { all: "Todos", active: "Activos", suspended: "Suspendidos", pending: "Piden verificación" };
 ---
 
-<BaseLayout title="Administración" noindex>
-  <section class="mx-auto max-w-6xl px-4 py-10">
-    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">
-      {role ? roleLabel[role.role] ?? role.role : "Staff"}
-    </p>
-    <h1 class="mt-2 text-3xl font-bold">Panel administrativo</h1>
-    <p class="mt-2 max-w-2xl text-ink-muted">
-      Acá van a estar el dashboard, la moderación, las categorías propuestas y las métricas. Se construye en la Etapa 12.
-    </p>
-  </section>
-</BaseLayout>
+<AdminLayout title="Emprendimientos" openReports={stats?.reports_open} error={forms.error}>
+  <form method="GET" class="mb-4 flex flex-wrap gap-2">
+    <label for="q" class="sr-only">Buscar</label>
+    <input id="q" name="q" value={q} type="search" placeholder="Nombre del emprendimiento" class="h-10 min-w-0 flex-1 rounded-wl border border-line bg-surface px-3" />
+    <label for="estado" class="sr-only">Estado</label>
+    <select id="estado" name="estado" class="h-10 rounded-wl border border-line bg-surface px-3 text-sm">
+      {estados.map((e) => <option value={e} selected={e === estado}>{filterLabels[e]}</option>)}
+    </select>
+    <button class="h-10 rounded-wl bg-brand px-4 text-sm font-semibold text-brand-contrast">Buscar</button>
+  </form>
+  {
+    businesses.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No encontramos emprendimientos.</p>
+    ) : (
+      <ul class="flex flex-col gap-3">
+        {businesses.map((b) => (
+          <li class="rounded-wl-lg border border-line bg-surface p-4" data-business={b.slug}>
+            <div class="flex flex-wrap items-center gap-3">
+              <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={44} />
+              <div class="min-w-0 flex-1">
+                <p class="flex flex-wrap items-center gap-x-2 font-semibold">
+                  <a href={`/e/${b.slug}`} target="_blank" rel="noopener" class="hover:underline">{b.name}</a>
+                  {b.verification === "verified" && <span class="text-sm text-seek">✓ Verificado</span>}
+                  {b.verification === "pending" && <span class="rounded-full bg-warning-soft px-2 py-0.5 text-xs font-semibold text-warning">Pide verificación</span>}
+                </p>
+                <p class="mt-0.5 flex flex-wrap gap-x-2 text-xs text-ink-muted">
+                  <span class:list={["rounded-full px-2 py-0.5 font-semibold", b.status === "active" ? "bg-success-soft text-success" : b.status === "suspended" ? "bg-danger-soft text-danger" : "bg-surface-muted"]}>
+                    {statusLabel[b.status]}
+                  </span>
+                  {[b.category?.name, b.city?.name].filter(Boolean).join(" · ")}
+                  {b.owner && <span>· de <a href={`/admin/usuarios?q=${b.owner.username}`} class="underline">{displayName(b.owner)}</a></span>}
+                  <span>· {formatDate(b.created_at, { dateStyle: "medium" })}</span>
+                </p>
+                <RatingBadge sum={b.rating_sum} count={b.rating_count} size={12} class="mt-1" />
+              </div>
+            </div>
+            <div class="mt-3 border-t border-line pt-3">
+              <ModerationForm
+                type="business"
+                id={b.id}
+                target={{ type: "business", id: b.id, title: b.name, excerpt: null, href: `/e/${b.slug}`, status: b.status, hidden: b.status !== "active", ownerName: null, ownerUsername: b.owner?.username ?? null }}
+                returnTo={returnTo}
+                canVerify={canVerify}
+                verified={b.verification === "verified"}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/admin/historial.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Historial: cada decisión del equipo, quién la tomó y sobre qué. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import { ACTION_LABELS, getAdminStats, getModerationLog, TARGET_LABELS } from "../../services/admin";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const { supabase } = Astro.locals;
+const [log, stats] = await Promise.all([getModerationLog(supabase, 100), getAdminStats(supabase)]);
+---
+
+<AdminLayout title="Historial" description="Las últimas 100 decisiones del equipo." openReports={stats?.reports_open}>
+  {
+    log.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">Todavía no hay decisiones registradas.</p>
+    ) : (
+      <ol class="divide-y divide-line overflow-hidden rounded-wl-lg border border-line bg-surface">
+        {log.map((e) => (
+          <li class="p-4 text-sm">
+            <p>
+              <strong>{e.moderator ? displayName(e.moderator) : "Alguien del equipo"}</strong> {(ACTION_LABELS[e.action] ?? e.action).toLowerCase()}{" "}
+              <span class="text-ink-muted">{TARGET_LABELS[e.target_type].toLowerCase()}</span>{" "}
+              {e.target ? <a href={e.target.href} target="_blank" rel="noopener" class="font-medium underline">{e.target.title}</a> : <span class="text-ink-muted">(ya no existe)</span>}
+              {e.action === "role" && e.note && <span> → {e.note}</span>}
+            </p>
+            {e.note && e.action !== "role" && <p class="mt-1 text-ink-muted">Nota: {e.note}</p>}
+            <p class="mt-1 text-xs text-ink-muted">{formatDate(e.created_at, { dateStyle: "medium", timeStyle: "short" })}</p>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/admin/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/** Resumen del panel: números de la semana y denuncias más urgentes. */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import ReportGroupCard from "../../components/admin/ReportGroupCard.astro";
+import { getAdminStats, getReportGroups } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+
+const { supabase } = Astro.locals;
+const forms = handleAdminActions(Astro, "/admin");
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [stats, groups] = await Promise.all([getAdminStats(supabase), getReportGroups(supabase, "open", 5)]);
+const n = (v: number | undefined) => (v ?? 0).toLocaleString("es-AR");
+const cards = stats
+  ? [
+      { label: "Usuarios", value: n(stats.users), sub: `+${n(stats.users_week)} esta semana`, href: "/admin/usuarios" },
+      { label: "Emprendimientos activos", value: n(stats.businesses), sub: `+${n(stats.businesses_week)} esta semana`, href: "/admin/emprendimientos" },
+      { label: "Publicaciones", value: n(stats.posts), sub: `+${n(stats.posts_week)} esta semana`, href: "/publicaciones" },
+      { label: "Necesidades abiertas", value: n(stats.needs_open), sub: `${n(stats.needs_awarded)} resueltas en total`, href: "/necesidades" },
+      { label: "Propuestas", value: n(stats.proposals_week), sub: "en los últimos 7 días", href: null },
+      { label: "Mensajes", value: n(stats.messages_week), sub: "en los últimos 7 días", href: null },
+      { label: "Reseñas publicadas", value: n(stats.reviews), sub: `${n(stats.reviews_hidden)} ocultas por denuncias`, href: null },
+      { label: "Cuentas suspendidas", value: n(stats.users_suspended), sub: "", href: "/admin/usuarios?estado=suspended" },
+    ]
+  : [];
+---
+
+<AdminLayout title="Resumen" openReports={stats?.reports_open} error={forms.error}>
+  <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+    {
+      cards.map((c) => {
+        const Tag = c.href ? "a" : "div";
+        return (
+          <Tag href={c.href ?? undefined} class:list={["rounded-wl-lg border border-line bg-surface p-4", c.href && "hover:border-brand"]}>
+            <p class="text-sm text-ink-muted">{c.label}</p>
+            <p class="mt-1 text-2xl font-bold">{c.value}</p>
+            {c.sub && <p class="mt-0.5 text-xs text-ink-muted">{c.sub}</p>}
+          </Tag>
+        );
+      })
+    }
+  </div>
+
+  <div class="mt-8 flex items-baseline justify-between gap-3">
+    <h2 class="text-lg font-semibold">Denuncias para revisar {stats && stats.reports_open > 0 && <span class="text-ink-muted">({n(stats.reports_open)})</span>}</h2>
+    <a href="/admin/denuncias" class="text-sm font-semibold text-brand hover:underline">Ver todas</a>
+  </div>
+  {
+    groups.length === 0 ? (
+      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-ink-muted">No hay denuncias pendientes. 🎉</p>
+    ) : (
+      <div class="mt-3 flex flex-col gap-3">
+        {groups.map((g) => <ReportGroupCard group={g} returnTo="/admin" open />)}
+      </div>
+    )
+  }
+</AdminLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/admin/usuarios.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Cuentas: buscar, suspender o reactivar, verificar (administración) y
+ * asignar roles del equipo (super administración).
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import VerifiedBadge from "../../components/ui/VerifiedBadge.astro";
+import ModerationForm from "../../components/admin/ModerationForm.astro";
+import { getAdminStats, searchUsers, type AdminUser } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const { supabase, user } = Astro.locals;
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+const estados = ["all", "active", "suspended", "staff"] as const;
+const estado = (estados.find((e) => e === Astro.url.searchParams.get("estado")) ?? "all") as (typeof estados)[number];
+const params = new URLSearchParams();
+if (q) params.set("q", q);
+if (estado !== "all") params.set("estado", estado);
+const returnTo = `/admin/usuarios${params.size ? `?${params}` : ""}`;
+
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [{ data: me }, users, stats] = await Promise.all([
+  supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle(),
+  searchUsers(supabase, { q, status: estado }),
+  getAdminStats(supabase),
+]);
+const myRole = (me?.role ?? "moderator") as NonNullable<AdminUser["role"]>;
+const rank = { moderator: 1, admin: 2, super_admin: 3 } as const;
+const canVerify = rank[myRole] >= 2;
+const isSuper = myRole === "super_admin";
+const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super admin" };
+const statusLabel: Record<string, string> = { active: "Activa", suspended: "Suspendida", banned: "Bloqueada" };
+const filterLabels = { all: "Todas", active: "Activas", suspended: "Suspendidas", staff: "Equipo" };
+const selectClass = "h-10 rounded-wl border border-line bg-surface px-3 text-sm";
+---
+
+<AdminLayout title="Usuarios" description="Buscá por usuario, nombre o apellido." openReports={stats?.reports_open} error={forms.error}>
+  <form method="GET" class="mb-4 flex flex-wrap gap-2">
+    <label for="q" class="sr-only">Buscar</label>
+    <input id="q" name="q" value={q} type="search" placeholder="Usuario o nombre" class="h-10 min-w-0 flex-1 rounded-wl border border-line bg-surface px-3" />
+    <label for="estado" class="sr-only">Estado</label>
+    <select id="estado" name="estado" class={selectClass}>
+      {estados.map((e) => <option value={e} selected={e === estado}>{filterLabels[e]}</option>)}
+    </select>
+    <button class="h-10 rounded-wl bg-brand px-4 text-sm font-semibold text-brand-contrast">Buscar</button>
+  </form>
+
+  {
+    users.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No encontramos cuentas.</p>
+    ) : (
+      <ul class="flex flex-col gap-3">
+        {users.map((u) => {
+          const name = displayName(u);
+          const isMe = u.id === user!.id;
+          // No se modera a alguien del equipo con el mismo rol o superior.
+          const protectedStaff = Boolean(u.role) && rank[u.role!] >= rank[myRole];
+          return (
+            <li class="rounded-wl-lg border border-line bg-surface p-4" data-user={u.username}>
+              <div class="flex flex-wrap items-center gap-3">
+                <Avatar name={name} path={u.avatar_path} size={44} />
+                <div class="min-w-0 flex-1">
+                  <p class="flex flex-wrap items-center gap-x-2 font-semibold">
+                    <a href={`/u/${u.username}`} target="_blank" rel="noopener" class="hover:underline">{name}</a>
+                    {u.verified_at && <VerifiedBadge size={14} />}
+                    <span class="text-sm font-normal text-ink-muted">@{u.username}</span>
+                  </p>
+                  <p class="mt-0.5 flex flex-wrap gap-x-2 text-xs text-ink-muted">
+                    <span class:list={["rounded-full px-2 py-0.5 font-semibold", u.status === "active" ? "bg-success-soft text-success" : "bg-danger-soft text-danger"]}>{statusLabel[u.status]}</span>
+                    {u.role && <span class="rounded-full bg-seek-soft px-2 py-0.5 font-semibold text-seek">{roleLabel[u.role]}</span>}
+                    <span>Desde {formatDate(u.created_at, { dateStyle: "medium" })}</span>
+                    <span>· {u.followers_count} seguidores</span>
+                  </p>
+                </div>
+              </div>
+              {!isMe && !protectedStaff && (
+                <div class="mt-3 grid gap-3 border-t border-line pt-3 md:grid-cols-[1fr_auto]">
+                  <ModerationForm
+                    type="profile"
+                    id={u.id}
+                    target={{ type: "profile", id: u.id, title: name, excerpt: null, href: `/u/${u.username}`, status: u.status, hidden: u.status !== "active", ownerName: name, ownerUsername: u.username }}
+                    returnTo={returnTo}
+                    canVerify={canVerify}
+                    verified={Boolean(u.verified_at)}
+                  />
+                  {isSuper && (
+                    <form method="POST" action={`${returnTo}${returnTo.includes("?") ? "&" : "?"}${String(actions.admin.setRole).replace(/^\?/, "")}`} class="flex items-end gap-2">
+                      <input type="hidden" name="user_id" value={u.id} />
+                      <label class="flex flex-col gap-1 text-xs text-ink-muted">
+                        Rol en el equipo
+                        <select name="role" class={selectClass}>
+                          <option value="" selected={!u.role}>Sin rol</option>
+                          <option value="moderator" selected={u.role === "moderator"}>Moderación</option>
+                          <option value="admin" selected={u.role === "admin"}>Administración</option>
+                          <option value="super_admin" selected={u.role === "super_admin"}>Super admin</option>
+                        </select>
+                      </label>
+                      <button class="h-10 rounded-wl border border-line px-3 text-sm font-semibold hover:bg-surface-muted">Guardar rol</button>
+                    </form>
+                  )}
+                </div>
+              )}
+              {isMe && <p class="mt-2 text-xs text-ink-muted">Es tu cuenta.</p>}
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+</AdminLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/api/ciudades.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -6547,6 +7188,86 @@ const formError = result?.error && !isInputError(result.error) ? result.error.me
 </AuthLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/denunciar.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Denunciar contenido: /denunciar?tipo=publicacion|comentario|perfil|emprendimiento|necesidad|resena&id=<uuid>
+ * La denuncia la revisa el equipo en /admin/denuncias. La base valida que el
+ * contenido exista y que no sea propio. Ruta protegida (requiere sesión).
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Alert from "../components/ui/Alert.astro";
+import { REPORT_REASONS } from "../schemas/review";
+import { getModerationTarget, TARGET_FROM_PARAM, TARGET_LABELS } from "../services/admin";
+
+const { supabase } = Astro.locals;
+const tipo = Astro.url.searchParams.get("tipo") ?? "";
+const id = Astro.url.searchParams.get("id") ?? "";
+const type = TARGET_FROM_PARAM[tipo];
+if (!type || !/^[0-9a-f-]{36}$/.test(id)) return Astro.rewrite("/404");
+
+const target = await getModerationTarget(supabase, type, id);
+if (!target) return Astro.rewrite("/404");
+
+const result = Astro.getActionResult(actions.reviews.report);
+const sent = result && !result.error;
+const formError = result?.error ? (isInputError(result.error) ? "Elegí un motivo." : result.error.message) : null;
+const self = `/denunciar?tipo=${tipo}&id=${id}`;
+const formAction = `${self}&${String(actions.reviews.report).replace(/^\?/, "")}`;
+const textarea =
+  "w-full rounded-wl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25";
+---
+
+<BaseLayout title="Denunciar" noindex>
+  <section class="mx-auto max-w-xl px-4 py-8">
+    <a href={target.href} class="text-sm font-medium text-ink-muted hover:text-ink">← Volver</a>
+    <h1 class="mt-3 text-2xl font-bold">Denunciar {TARGET_LABELS[type].toLowerCase()}</h1>
+
+    <div class="mt-4 rounded-wl-lg border border-line bg-surface p-4">
+      <p class="text-xs font-semibold uppercase tracking-wide text-ink-muted">{TARGET_LABELS[type]}{target.ownerName && ` de ${target.ownerName}`}</p>
+      <p class="mt-1 font-semibold">{target.title}</p>
+      {target.excerpt && <p class="mt-1 line-clamp-3 text-sm text-ink-muted">{target.excerpt}</p>}
+    </div>
+
+    {
+      sent ? (
+        <div class="mt-6">
+          <Alert tone="success" title="¡Gracias por avisarnos!">
+            {result.data.already ? "Ya habías denunciado este contenido. " : ""}El equipo de WorkLink lo va a revisar. Si no cumple las reglas, lo vamos a quitar.
+          </Alert>
+          <Button href={target.href} variant="secondary" class="mt-4">Volver</Button>
+        </div>
+      ) : (
+        <form method="POST" action={formAction} class="mt-6 flex flex-col gap-4">
+          {formError && <Alert tone="danger">{formError}</Alert>}
+          <input type="hidden" name="target_type" value={type} />
+          <input type="hidden" name="target_id" value={id} />
+          <fieldset>
+            <legend class="font-medium">¿Cuál es el problema?</legend>
+            <div class="mt-2 flex flex-col gap-2">
+              {Object.entries(REPORT_REASONS).map(([value, label]) => (
+                <label class="flex items-center gap-3 rounded-wl border border-line bg-surface px-3 py-2.5 has-[:checked]:border-brand">
+                  <input type="radio" name="reason" value={value} required class="accent-brand" />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div class="flex flex-col gap-1.5">
+            <label for="details" class="text-sm font-medium">Contanos más (opcional)</label>
+            <textarea id="details" name="details" rows="3" maxlength="500" class={textarea} placeholder="Cualquier dato que nos ayude a revisarlo."></textarea>
+          </div>
+          <p class="text-xs text-ink-muted">La persona denunciada no sabe quién la denunció.</p>
+          <div><Button type="submit">Enviar denuncia</Button></div>
+        </form>
+      )
+    }
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/e/[slug].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -6839,7 +7560,10 @@ const jsonLd = [
             </section>
           )}
 
-          <p class="px-1 text-xs text-ink-muted">En WorkLink desde {formatMonthYear(business.created_at)}.</p>
+          <p class="px-1 text-xs text-ink-muted">
+            En WorkLink desde {formatMonthYear(business.created_at)}.
+            {user && !canEdit && <a href={`/denunciar?tipo=emprendimiento&id=${business.id}`} class="ml-1 underline hover:text-danger">Denunciar</a>}
+          </p>
         </aside>
       </div>
     </div>
@@ -7529,6 +8253,7 @@ const proposerName = (p: ProposalView) => (p.author ? displayName(p.author) : "U
     <p class="mt-4 text-sm text-ink-muted">
       {need.proposals_count === 0 ? "Todavía no recibió propuestas." : need.proposals_count === 1 ? "Recibió 1 propuesta." : `Recibió ${need.proposals_count} propuestas.`}
       {open && ` Recibe propuestas hasta el ${formatDate(need.expires_at, { day: "numeric", month: "long" })}.`}
+      {user && !isAuthor && <a href={`/denunciar?tipo=necesidad&id=${need.id}`} class="ml-1 text-xs underline hover:text-danger">Denunciar</a>}
     </p>
 
     <section id="propuestas" class="mt-8 scroll-mt-20">
@@ -10549,6 +11274,7 @@ const firstName = profile.first_name ?? name;
           <ul class="mt-3 flex flex-col gap-1.5 text-sm text-ink-muted">
             {location && <li>📍 {location}</li>}
             <li>📅 En WorkLink desde {formatMonthYear(profile.created_at)}</li>
+            {user && !isMe && <li><a href={`/denunciar?tipo=perfil&id=${profile.id}`} class="text-xs underline hover:text-danger">Denunciar perfil</a></li>}
             {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram @{profile.instagram}</a></li>}
             {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok @{profile.tiktok}</a></li>}
             {profile.facebook && <li><a href={profile.facebook.startsWith("http") ? profile.facebook : `https://${profile.facebook}`} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Facebook</a></li>}
@@ -10717,6 +11443,25 @@ const name = displayName(profile);
     />
   </div>
 </BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/schemas/admin.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+import { optionalText } from "./common";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export const moderateSchema = z.object({
+  target_type: z.enum(["review", "post", "comment", "profile", "business", "need"]),
+  target_id: z.string().regex(UUID),
+  action: z.enum(["hide", "restore", "delete", "suspend", "reactivate", "verify", "unverify", "dismiss"]),
+  note: optionalText(500, "La nota"),
+});
+
+export const setRoleSchema = z.object({
+  user_id: z.string().regex(UUID),
+  role: z.preprocess((v) => (v === "" ? null : v), z.enum(["moderator", "admin", "super_admin"]).nullable()),
+});
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/schemas/auth.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11379,7 +12124,7 @@ export const REPORT_REASONS = {
 } as const;
 
 export const reportSchema = z.object({
-  target_type: z.enum(["review"]),
+  target_type: z.enum(["review", "post", "comment", "profile", "business", "need"]),
   target_id: uuid,
   reason: z.enum(Object.keys(REPORT_REASONS) as [keyof typeof REPORT_REASONS, ...(keyof typeof REPORT_REASONS)[]], {
     error: "Elegí un motivo",
@@ -12394,6 +13139,364 @@ document.addEventListener("click", (event) => {
     if (!menu.contains(event.target as Node)) menu.open = false;
   }
 });
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/admin.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { displayName } from "./profiles";
+import { postHeadline } from "./posts";
+import { needPath, postPath } from "../lib/urls";
+
+/**
+ * Panel de administración y denuncias. Todo pasa por RLS y por funciones de
+ * la base que revisan el rol (moderate, admin_stats, admin_report_groups):
+ * el frontend nunca decide permisos.
+ */
+
+export type TargetType = "review" | "post" | "comment" | "profile" | "business" | "need";
+
+/** ?tipo= de /denunciar → tipo de la base. */
+export const TARGET_FROM_PARAM: Record<string, TargetType | undefined> = {
+  resena: "review",
+  publicacion: "post",
+  comentario: "comment",
+  perfil: "profile",
+  emprendimiento: "business",
+  necesidad: "need",
+};
+
+export const TARGET_LABELS: Record<TargetType, string> = {
+  review: "Reseña",
+  post: "Publicación",
+  comment: "Comentario",
+  profile: "Perfil",
+  business: "Emprendimiento",
+  need: "Necesidad",
+};
+
+export const REASON_LABELS: Record<string, string> = {
+  spam: "Spam",
+  offensive: "Ofensivo",
+  fake: "Falso",
+  scam: "Estafa",
+  other: "Otro",
+};
+
+export const ACTION_LABELS: Record<string, string> = {
+  hide: "Ocultó / quitó",
+  restore: "Restauró",
+  delete: "Borró",
+  suspend: "Suspendió",
+  reactivate: "Reactivó",
+  verify: "Verificó",
+  unverify: "Quitó la verificación",
+  dismiss: "Descartó la denuncia",
+  role: "Cambió el rol",
+};
+
+export interface ModerationTarget {
+  type: TargetType;
+  id: string;
+  title: string;
+  excerpt: string | null;
+  href: string;
+  /** Estado tal como lo guarda la base (published, hidden, suspended...). */
+  status: string;
+  /** true si hoy no se ve públicamente. */
+  hidden: boolean;
+  ownerName: string | null;
+  ownerUsername: string | null;
+}
+
+type Person = { username: string; first_name: string | null; last_name: string | null } | null;
+const PERSON = "username, first_name, last_name";
+const clip = (text: string | null | undefined, max = 220) => (text ? (text.length > max ? `${text.slice(0, max)}…` : text) : null);
+const owner = (p: Person) => ({ ownerName: p ? displayName(p) : null, ownerUsername: p?.username ?? null });
+
+/** Datos para mostrar varios contenidos del mismo tipo (vista previa en el panel). */
+export async function getModerationTargets(supabase: SupabaseClient, type: TargetType, ids: string[]): Promise<Map<string, ModerationTarget>> {
+  const out = new Map<string, ModerationTarget>();
+  if (!ids.length) return out;
+  const unique = [...new Set(ids)];
+
+  if (type === "review") {
+    const { data } = await supabase
+      .from("reviews")
+      .select(`id, rating, body, status, author:profiles!reviews_author_id_fkey ( ${PERSON} ), business:businesses ( slug, name ), subject:profiles!reviews_profile_id_fkey ( ${PERSON} )`)
+      .in("id", unique);
+    for (const r of (data ?? []) as unknown as {
+      id: string;
+      rating: number;
+      body: string | null;
+      status: string;
+      author: Person;
+      business: { slug: string; name: string } | null;
+      subject: Person;
+    }[]) {
+      const about = r.business ? r.business.name : r.subject ? displayName(r.subject) : "—";
+      const base = r.business ? `/e/${r.business.slug}/resenas` : r.subject ? `/u/${r.subject.username}/resenas` : "/";
+      out.set(r.id, {
+        type,
+        id: r.id,
+        title: `${"★".repeat(r.rating)}${"☆".repeat(5 - r.rating)} sobre ${about}`,
+        excerpt: clip(r.body),
+        href: `${base}#r-${r.id}`,
+        status: r.status,
+        hidden: r.status !== "published",
+        ...owner(r.author),
+      });
+    }
+  } else if (type === "post") {
+    const { data } = await supabase.from("posts").select(`id, title, body, status, deleted_at, author:profiles!posts_author_id_fkey ( ${PERSON} )`).in("id", unique);
+    for (const p of (data ?? []) as unknown as { id: string; title: string | null; body: string; status: string; deleted_at: string | null; author: Person }[]) {
+      out.set(p.id, {
+        type,
+        id: p.id,
+        title: postHeadline(p, 90),
+        excerpt: p.title ? clip(p.body) : null,
+        href: postPath(p),
+        status: p.deleted_at ? "deleted" : p.status,
+        hidden: Boolean(p.deleted_at) || p.status !== "published",
+        ...owner(p.author),
+      });
+    }
+  } else if (type === "comment") {
+    const { data } = await supabase
+      .from("post_comments")
+      .select(`id, body, author:profiles!post_comments_author_id_fkey ( ${PERSON} ), post:posts ( id, title, body )`)
+      .in("id", unique);
+    for (const c of (data ?? []) as unknown as { id: string; body: string; author: Person; post: { id: string; title: string | null; body: string } | null }[]) {
+      out.set(c.id, {
+        type,
+        id: c.id,
+        title: c.post ? `En “${postHeadline(c.post, 60)}”` : "Comentario",
+        excerpt: clip(c.body),
+        href: c.post ? `${postPath(c.post)}#c-${c.id}` : "/",
+        status: "published",
+        hidden: false,
+        ...owner(c.author),
+      });
+    }
+  } else if (type === "profile") {
+    const { data } = await supabase.from("profiles").select(`id, ${PERSON}, headline, bio, status`).in("id", unique);
+    for (const p of (data ?? []) as unknown as { id: string; username: string; first_name: string | null; last_name: string | null; headline: string | null; bio: string | null; status: string }[]) {
+      out.set(p.id, {
+        type,
+        id: p.id,
+        title: `${displayName(p)} (@${p.username})`,
+        excerpt: clip(p.headline ?? p.bio),
+        href: `/u/${p.username}`,
+        status: p.status,
+        hidden: p.status !== "active",
+        ownerName: displayName(p),
+        ownerUsername: p.username,
+      });
+    }
+  } else if (type === "business") {
+    const { data } = await supabase
+      .from("businesses")
+      .select(`id, slug, name, tagline, status, verification, owner:profiles!businesses_owner_id_fkey ( ${PERSON} )`)
+      .in("id", unique);
+    for (const b of (data ?? []) as unknown as { id: string; slug: string; name: string; tagline: string | null; status: string; owner: Person }[]) {
+      out.set(b.id, {
+        type,
+        id: b.id,
+        title: b.name,
+        excerpt: clip(b.tagline),
+        href: `/e/${b.slug}`,
+        status: b.status,
+        hidden: b.status !== "active",
+        ...owner(b.owner),
+      });
+    }
+  } else if (type === "need") {
+    const { data } = await supabase
+      .from("needs")
+      .select(`id, slug, title, description, status, deleted_at, author:profiles!needs_author_id_fkey ( ${PERSON} )`)
+      .in("id", unique);
+    for (const n of (data ?? []) as unknown as { id: string; slug: string; title: string; description: string; status: string; deleted_at: string | null; author: Person }[]) {
+      out.set(n.id, {
+        type,
+        id: n.id,
+        title: n.title,
+        excerpt: clip(n.description),
+        href: needPath(n),
+        status: n.deleted_at ? "deleted" : n.status,
+        hidden: Boolean(n.deleted_at),
+        ...owner(n.author),
+      });
+    }
+  }
+  return out;
+}
+
+export async function getModerationTarget(supabase: SupabaseClient, type: TargetType, id: string): Promise<ModerationTarget | null> {
+  return (await getModerationTargets(supabase, type, [id])).get(id) ?? null;
+}
+
+/** Varios tipos mezclados (denuncias e historial). */
+export async function getTargetsMixed(supabase: SupabaseClient, items: { target_type: TargetType; target_id: string }[]) {
+  const byType = new Map<TargetType, string[]>();
+  for (const item of items) byType.set(item.target_type, [...(byType.get(item.target_type) ?? []), item.target_id]);
+  const maps = await Promise.all([...byType.entries()].map(([type, ids]) => getModerationTargets(supabase, type, ids)));
+  const all = new Map<string, ModerationTarget>();
+  for (const map of maps) for (const [id, target] of map) all.set(`${target.type}:${id}`, target);
+  return all;
+}
+
+export interface AdminStats {
+  users: number;
+  users_week: number;
+  users_suspended: number;
+  businesses: number;
+  businesses_week: number;
+  posts: number;
+  posts_week: number;
+  needs_open: number;
+  needs_awarded: number;
+  proposals_week: number;
+  messages_week: number;
+  reviews: number;
+  reports_open: number;
+  reviews_hidden: number;
+}
+
+export async function getAdminStats(supabase: SupabaseClient): Promise<AdminStats | null> {
+  const { data, error } = await supabase.rpc("admin_stats");
+  if (error) {
+    console.error("[admin]", error.message);
+    return null;
+  }
+  return data as AdminStats;
+}
+
+export interface ReportGroup {
+  target_type: TargetType;
+  target_id: string;
+  reports: number;
+  reasons: string[];
+  details: string[] | null;
+  last_at: string;
+  target: ModerationTarget | null;
+}
+
+export async function getReportGroups(supabase: SupabaseClient, status: "open" | "resolved" | "dismissed" = "open", limit = 50): Promise<ReportGroup[]> {
+  const { data, error } = await supabase.rpc("admin_report_groups", { p_status: status, p_limit: limit });
+  if (error) throw error;
+  const groups = (data ?? []) as Omit<ReportGroup, "target">[];
+  const targets = await getTargetsMixed(supabase, groups);
+  return groups.map((g) => ({ ...g, target: targets.get(`${g.target_type}:${g.target_id}`) ?? null }));
+}
+
+export interface ModerationLogEntry {
+  id: string;
+  target_type: TargetType;
+  target_id: string;
+  action: string;
+  note: string | null;
+  created_at: string;
+  moderator: Person;
+  target: ModerationTarget | null;
+}
+
+export async function getModerationLog(supabase: SupabaseClient, limit = 50): Promise<ModerationLogEntry[]> {
+  const { data, error } = await supabase
+    .from("moderation_actions")
+    .select(`id, target_type, target_id, action, note, created_at, moderator:profiles!moderation_actions_moderator_id_fkey ( ${PERSON} )`)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const rows = (data ?? []) as unknown as Omit<ModerationLogEntry, "target">[];
+  const targets = await getTargetsMixed(supabase, rows);
+  return rows.map((r) => ({ ...r, target: targets.get(`${r.target_type}:${r.target_id}`) ?? null }));
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  status: "active" | "suspended" | "banned";
+  verified_at: string | null;
+  created_at: string;
+  followers_count: number;
+  role: "moderator" | "admin" | "super_admin" | null;
+}
+
+/** Busca cuentas por usuario o nombre (o las últimas registradas). */
+export async function searchUsers(
+  supabase: SupabaseClient,
+  { q, status }: { q: string; status: "all" | "active" | "suspended" | "staff" },
+): Promise<AdminUser[]> {
+  let query = supabase
+    .from("profiles")
+    .select("id, username, first_name, last_name, avatar_path, status, verified_at, created_at, followers_count")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const term = q.replace(/[%_,()*\\]/g, " ").trim();
+  if (term) query = query.or(`username.ilike.%${term}%,first_name.ilike.%${term}%,last_name.ilike.%${term}%`);
+  if (status === "active") query = query.eq("status", "active");
+  if (status === "suspended") query = query.neq("status", "active");
+
+  const [{ data, error }, roles] = await Promise.all([query, supabase.from("user_roles").select("user_id, role")]);
+  if (error) throw error;
+  // user_roles: el equipo ve todos los roles (RLS).
+  const roleOf = new Map(((roles.data ?? []) as { user_id: string; role: AdminUser["role"] }[]).map((r) => [r.user_id, r.role]));
+  let users = ((data ?? []) as Omit<AdminUser, "role">[]).map((u) => ({ ...u, role: roleOf.get(u.id) ?? null }));
+  if (status === "staff") {
+    const staffIds = [...roleOf.keys()];
+    if (!term) {
+      const { data: staff } = await supabase
+        .from("profiles")
+        .select("id, username, first_name, last_name, avatar_path, status, verified_at, created_at, followers_count")
+        .in("id", staffIds.length ? staffIds : ["00000000-0000-0000-0000-000000000000"]);
+      users = ((staff ?? []) as Omit<AdminUser, "role">[]).map((u) => ({ ...u, role: roleOf.get(u.id) ?? null }));
+    } else {
+      users = users.filter((u) => u.role);
+    }
+  }
+  return users;
+}
+
+export interface AdminBusiness {
+  id: string;
+  slug: string;
+  name: string;
+  logo_path: string | null;
+  status: "draft" | "active" | "inactive" | "suspended";
+  verification: string;
+  created_at: string;
+  followers_count: number;
+  rating_sum: number;
+  rating_count: number;
+  owner: Person;
+  category: { name: string } | null;
+  city: { name: string } | null;
+}
+
+export async function searchAdminBusinesses(
+  supabase: SupabaseClient,
+  { q, status }: { q: string; status: "all" | "active" | "suspended" | "pending" },
+): Promise<AdminBusiness[]> {
+  let query = supabase
+    .from("businesses")
+    .select(
+      `id, slug, name, logo_path, status, verification, created_at, followers_count, rating_sum, rating_count,
+       owner:profiles!businesses_owner_id_fkey ( ${PERSON} ), category:categories ( name ), city:cities ( name )`,
+    )
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const term = q.replace(/[%_,()*\\]/g, " ").trim();
+  if (term) query = query.ilike("name", `%${term}%`);
+  if (status === "active") query = query.eq("status", "active");
+  if (status === "suspended") query = query.eq("status", "suspended");
+  if (status === "pending") query = query.eq("verification", "pending");
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data ?? []) as unknown as AdminBusiness[];
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/services/businesses.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -16618,13 +17721,325 @@ grant  execute on function public.search_need_ids(text, integer, integer, intege
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008002400_moderation.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0024 · Panel de administración y moderación (Etapa 12)
+-- =============================================================================
+-- * moderate(): ÚNICA puerta para las decisiones de moderación (ocultar o
+--   restaurar reseñas, publicaciones y necesidades; borrar comentarios;
+--   suspender o reactivar cuentas y emprendimientos; verificar). Revisa el rol
+--   en la base, aplica el cambio, cierra las denuncias de ese contenido y deja
+--   registro en moderation_actions.
+-- * set_staff_role(): solo super_admin da o quita roles de staff.
+-- * admin_stats() y admin_report_groups(): números del resumen y denuncias
+--   agrupadas por contenido, solo para staff.
+-- * Un moderador no puede actuar sobre otra cuenta de staff de su mismo
+--   nivel o superior, ni sobre su propia cuenta.
+-- =============================================================================
+
+create table public.moderation_actions (
+  id            uuid primary key default gen_random_uuid(),
+  moderator_id  uuid references public.profiles (id) on delete set null,
+  target_type   public.report_target not null,
+  target_id     uuid not null,
+  action        text not null,
+  note          text,
+  created_at    timestamptz not null default now(),
+  constraint moderation_actions_note_len check (note is null or char_length(note) <= 500)
+);
+
+create index moderation_actions_recent_idx on public.moderation_actions (created_at desc);
+create index moderation_actions_target_idx on public.moderation_actions (target_type, target_id);
+
+alter table public.moderation_actions enable row level security;
+
+create policy "moderation_actions: solo staff" on public.moderation_actions
+  for select to authenticated
+  using ((select public.has_role('moderator')));
+
+revoke all on public.moderation_actions from anon, authenticated;
+grant select on public.moderation_actions to authenticated;
+
+-- Todo el equipo ve quién más es del equipo (para no moderarse entre sí por
+-- error); el resto de las personas solo ve su propio rol.
+drop policy if exists "user_roles: cada uno ve su rol, admin ve todos" on public.user_roles;
+create policy "user_roles: cada uno ve su rol, el equipo ve todos" on public.user_roles
+  for select to authenticated
+  using (user_id = (select auth.uid()) or (select public.has_role('moderator')));
+
+-- Rol de staff de una cuenta (null si no tiene). Solo se responde sobre la
+-- propia cuenta o si quien pregunta es del equipo (no se expone quién es staff).
+create or replace function public.staff_role_of(p_user_id uuid)
+returns public.staff_role
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select ur.role
+  from public.user_roles ur
+  where ur.user_id = p_user_id
+    and (
+      p_user_id = (select auth.uid())
+      or exists (select 1 from public.user_roles me where me.user_id = (select auth.uid()))
+    );
+$$;
+
+revoke execute on function public.staff_role_of(uuid) from public, anon;
+grant  execute on function public.staff_role_of(uuid) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- Decisiones de moderación
+-- -----------------------------------------------------------------------------
+create or replace function public.moderate(
+  p_target_type public.report_target,
+  p_target_id   uuid,
+  p_action      text,
+  p_note        text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me        uuid := (select auth.uid());
+  my_role   public.staff_role := public.staff_role_of((select auth.uid()));
+  owner     uuid;   -- dueño del contenido (para no actuar sobre staff superior)
+  done      integer := 0;
+  v_note    text := nullif(btrim(coalesce(p_note, '')), '');
+begin
+  if me is null or my_role is null then
+    raise exception 'Solo el equipo de moderación puede hacer esto' using errcode = '42501';
+  end if;
+  if v_note is not null and char_length(v_note) > 500 then
+    raise exception 'La nota puede tener hasta 500 caracteres' using errcode = '23514';
+  end if;
+  if p_action not in ('hide', 'restore', 'delete', 'suspend', 'reactivate', 'verify', 'unverify', 'dismiss') then
+    raise exception 'Acción desconocida' using errcode = '22023';
+  end if;
+
+  -- Quién es el dueño del contenido.
+  owner := case p_target_type
+    when 'review'   then (select r.author_id from public.reviews r where r.id = p_target_id)
+    when 'post'     then (select p.author_id from public.posts p where p.id = p_target_id)
+    when 'comment'  then (select c.author_id from public.post_comments c where c.id = p_target_id)
+    when 'profile'  then (select p.id from public.profiles p where p.id = p_target_id)
+    when 'business' then (select b.owner_id from public.businesses b where b.id = p_target_id)
+    when 'need'     then (select n.author_id from public.needs n where n.id = p_target_id)
+  end;
+  if owner is null and p_action <> 'dismiss' then
+    raise exception 'El contenido ya no existe' using errcode = '42501';
+  end if;
+
+  if p_action <> 'dismiss' and owner is not null then
+    if owner = me and p_target_type = 'profile' then
+      raise exception 'No podés moderar tu propia cuenta' using errcode = '42501';
+    end if;
+    if owner <> me and public.staff_role_of(owner) is not null and public.staff_role_of(owner) >= my_role then
+      raise exception 'No podés moderar a alguien del equipo con tu mismo rol o superior' using errcode = '42501';
+    end if;
+  end if;
+
+  if p_action in ('verify', 'unverify') and my_role < 'admin' then
+    raise exception 'Solo la administración puede verificar cuentas' using errcode = '42501';
+  end if;
+
+  if p_action = 'dismiss' then
+    done := 1;
+  elsif p_target_type = 'review' then
+    if p_action = 'hide' then
+      update public.reviews set status = 'removed' where id = p_target_id;
+    elsif p_action = 'restore' then
+      update public.reviews set status = 'published', reports_count = 0 where id = p_target_id;
+    elsif p_action = 'delete' then
+      delete from public.reviews where id = p_target_id;
+    end if;
+    get diagnostics done = row_count;
+  elsif p_target_type = 'post' then
+    if p_action = 'hide' then
+      update public.posts set status = 'removed' where id = p_target_id;
+    elsif p_action = 'restore' then
+      update public.posts set status = 'published' where id = p_target_id and status = 'removed';
+    end if;
+    get diagnostics done = row_count;
+  elsif p_target_type = 'comment' then
+    if p_action in ('hide', 'delete') then
+      delete from public.post_comments where id = p_target_id;
+    end if;
+    get diagnostics done = row_count;
+  elsif p_target_type = 'need' then
+    if p_action in ('hide', 'delete') then
+      update public.needs set deleted_at = now(), status = 'closed', closed_at = coalesce(closed_at, now()) where id = p_target_id;
+    elsif p_action = 'restore' then
+      update public.needs set deleted_at = null where id = p_target_id;
+    end if;
+    get diagnostics done = row_count;
+  elsif p_target_type = 'business' then
+    if p_action in ('hide', 'suspend') then
+      update public.businesses set status = 'suspended' where id = p_target_id;
+    elsif p_action in ('restore', 'reactivate') then
+      update public.businesses set status = 'active' where id = p_target_id and status = 'suspended';
+    elsif p_action = 'verify' then
+      update public.businesses set verification = 'verified', verified_at = now() where id = p_target_id;
+    elsif p_action = 'unverify' then
+      update public.businesses set verification = 'none', verified_at = null where id = p_target_id;
+    end if;
+    get diagnostics done = row_count;
+  elsif p_target_type = 'profile' then
+    if p_action in ('hide', 'suspend') then
+      update public.profiles set status = 'suspended' where id = p_target_id;
+    elsif p_action in ('restore', 'reactivate') then
+      update public.profiles set status = 'active' where id = p_target_id;
+    elsif p_action = 'verify' then
+      update public.profiles set verified_at = now() where id = p_target_id;
+    elsif p_action = 'unverify' then
+      update public.profiles set verified_at = null where id = p_target_id;
+    end if;
+    get diagnostics done = row_count;
+  end if;
+
+  if done = 0 then
+    raise exception 'Esa acción no aplica a este contenido' using errcode = '22023';
+  end if;
+
+  -- Cierra las denuncias abiertas de ese contenido.
+  if p_action not in ('verify', 'unverify') then
+    update public.reports
+    set status = case when p_action in ('dismiss', 'restore', 'reactivate') then 'dismissed'::public.report_status else 'resolved'::public.report_status end,
+        resolved_at = now(),
+        resolved_by = me,
+        resolution_note = v_note
+    where target_type = p_target_type and target_id = p_target_id and status = 'open';
+  end if;
+
+  insert into public.moderation_actions (moderator_id, target_type, target_id, action, note)
+  values (me, p_target_type, p_target_id, p_action, v_note);
+end;
+$$;
+
+revoke execute on function public.moderate(public.report_target, uuid, text, text) from public, anon;
+grant  execute on function public.moderate(public.report_target, uuid, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Roles del equipo (solo super_admin)
+-- -----------------------------------------------------------------------------
+create or replace function public.set_staff_role(p_user_id uuid, p_role public.staff_role)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  me uuid := (select auth.uid());
+begin
+  if me is null or public.staff_role_of(me) is distinct from 'super_admin' then
+    raise exception 'Solo super administración asigna roles' using errcode = '42501';
+  end if;
+  if p_user_id = me then
+    raise exception 'No podés cambiar tu propio rol' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = p_user_id) then
+    raise exception 'La cuenta no existe' using errcode = '42501';
+  end if;
+
+  if p_role is null then
+    delete from public.user_roles where user_id = p_user_id;
+  else
+    insert into public.user_roles (user_id, role, granted_by)
+    values (p_user_id, p_role, me)
+    on conflict (user_id) do update set role = excluded.role, granted_by = excluded.granted_by;
+  end if;
+
+  insert into public.moderation_actions (moderator_id, target_type, target_id, action, note)
+  values (me, 'profile', p_user_id, 'role', coalesce(p_role::text, 'sin rol'));
+end;
+$$;
+
+revoke execute on function public.set_staff_role(uuid, public.staff_role) from public, anon;
+grant  execute on function public.set_staff_role(uuid, public.staff_role) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Números del resumen
+-- -----------------------------------------------------------------------------
+create or replace function public.admin_stats()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not (select public.has_role('moderator')) then
+    raise exception 'Solo staff' using errcode = '42501';
+  end if;
+  return jsonb_build_object(
+    'users',            (select count(*) from public.profiles),
+    'users_week',       (select count(*) from public.profiles where created_at > now() - interval '7 days'),
+    'users_suspended',  (select count(*) from public.profiles where status <> 'active'),
+    'businesses',       (select count(*) from public.businesses where status = 'active' and deleted_at is null),
+    'businesses_week',  (select count(*) from public.businesses where created_at > now() - interval '7 days' and deleted_at is null),
+    'posts',            (select count(*) from public.posts where status = 'published' and deleted_at is null),
+    'posts_week',       (select count(*) from public.posts where created_at > now() - interval '7 days' and deleted_at is null),
+    'needs_open',       (select count(*) from public.needs where status in ('open', 'in_review') and deleted_at is null and expires_at > now()),
+    'needs_awarded',    (select count(*) from public.needs where status = 'awarded'),
+    'proposals_week',   (select count(*) from public.proposals where created_at > now() - interval '7 days'),
+    'messages_week',    (select count(*) from public.messages where created_at > now() - interval '7 days'),
+    'reviews',          (select count(*) from public.reviews where status = 'published'),
+    'reports_open',     (select count(*) from public.reports where status = 'open'),
+    'reviews_hidden',   (select count(*) from public.reviews where status = 'hidden')
+  );
+end;
+$$;
+
+revoke execute on function public.admin_stats() from public, anon;
+grant  execute on function public.admin_stats() to authenticated;
+
+-- Denuncias agrupadas por contenido (lo más denunciado y reciente primero).
+create or replace function public.admin_report_groups(p_status public.report_status default 'open', p_limit integer default 50)
+returns table (
+  target_type  public.report_target,
+  target_id    uuid,
+  reports      integer,
+  reasons      text[],
+  details      text[],
+  last_at      timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not (select public.has_role('moderator')) then
+    raise exception 'Solo staff' using errcode = '42501';
+  end if;
+  return query
+    select r.target_type, r.target_id, count(*)::integer,
+           array_agg(distinct r.reason::text),
+           (array_agg(r.details order by r.created_at desc) filter (where r.details is not null))[1:5],
+           max(r.created_at)
+    from public.reports r
+    where r.status = p_status
+    group by r.target_type, r.target_id
+    order by count(*) desc, max(r.created_at) desc
+    limit least(greatest(coalesce(p_limit, 50), 1), 200);
+end;
+$$;
+
+revoke execute on function public.admin_report_groups(public.report_status, integer) from public, anon;
+grant  execute on function public.admin_report_groups(public.report_status, integer) to authenticated;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 174 archivos del arreglo instalados."
+echo " Listo. 187 archivos de la Etapa 12 instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

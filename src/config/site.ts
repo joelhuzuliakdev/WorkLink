@@ -16,7 +16,7 @@ export const routes = {
  * Prefijos que requieren sesión. El middleware redirige al login si no hay
  * usuario, y vuelve a la página pedida después de ingresar.
  */
-export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas"] as const;
+export const protectedPrefixes = ["/panel", "/cuenta", "/admin", "/notificaciones", "/mensajes", "/necesidades/nueva", "/resenas", "/denunciar"] as const;
 
 /** Prefijos que además requieren rol de staff (moderator o superior). */
 export const staffPrefixes = ["/admin"] as const;

@@ -1,0 +1,85 @@
+---
+/** Emprendimientos: buscar, suspender o reactivar y verificar (administración). */
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import ModerationForm from "../../components/admin/ModerationForm.astro";
+import RatingBadge from "../../components/reviews/RatingBadge.astro";
+import { getAdminStats, searchAdminBusinesses } from "../../services/admin";
+import { handleAdminActions } from "../../lib/admin-actions";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+
+const { supabase, user } = Astro.locals;
+const q = (Astro.url.searchParams.get("q") ?? "").slice(0, 60);
+const estados = ["all", "active", "suspended", "pending"] as const;
+const estado = (estados.find((e) => e === Astro.url.searchParams.get("estado")) ?? "all") as (typeof estados)[number];
+const params = new URLSearchParams();
+if (q) params.set("q", q);
+if (estado !== "all") params.set("estado", estado);
+const returnTo = `/admin/emprendimientos${params.size ? `?${params}` : ""}`;
+
+const forms = handleAdminActions(Astro, returnTo);
+if (forms.redirect) return Astro.redirect(forms.redirect, 303);
+
+const [{ data: me }, businesses, stats] = await Promise.all([
+  supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle(),
+  searchAdminBusinesses(supabase, { q, status: estado }),
+  getAdminStats(supabase),
+]);
+const canVerify = me?.role === "admin" || me?.role === "super_admin";
+const statusLabel: Record<string, string> = { draft: "Borrador", active: "Activo", inactive: "Pausado", suspended: "Suspendido" };
+const filterLabels = { all: "Todos", active: "Activos", suspended: "Suspendidos", pending: "Piden verificación" };
+---
+
+<AdminLayout title="Emprendimientos" openReports={stats?.reports_open} error={forms.error}>
+  <form method="GET" class="mb-4 flex flex-wrap gap-2">
+    <label for="q" class="sr-only">Buscar</label>
+    <input id="q" name="q" value={q} type="search" placeholder="Nombre del emprendimiento" class="h-10 min-w-0 flex-1 rounded-wl border border-line bg-surface px-3" />
+    <label for="estado" class="sr-only">Estado</label>
+    <select id="estado" name="estado" class="h-10 rounded-wl border border-line bg-surface px-3 text-sm">
+      {estados.map((e) => <option value={e} selected={e === estado}>{filterLabels[e]}</option>)}
+    </select>
+    <button class="h-10 rounded-wl bg-brand px-4 text-sm font-semibold text-brand-contrast">Buscar</button>
+  </form>
+  {
+    businesses.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">No encontramos emprendimientos.</p>
+    ) : (
+      <ul class="flex flex-col gap-3">
+        {businesses.map((b) => (
+          <li class="rounded-wl-lg border border-line bg-surface p-4" data-business={b.slug}>
+            <div class="flex flex-wrap items-center gap-3">
+              <Avatar name={b.name} path={b.logo_path} purpose="logo" shape="rounded" size={44} />
+              <div class="min-w-0 flex-1">
+                <p class="flex flex-wrap items-center gap-x-2 font-semibold">
+                  <a href={`/e/${b.slug}`} target="_blank" rel="noopener" class="hover:underline">{b.name}</a>
+                  {b.verification === "verified" && <span class="text-sm text-seek">✓ Verificado</span>}
+                  {b.verification === "pending" && <span class="rounded-full bg-warning-soft px-2 py-0.5 text-xs font-semibold text-warning">Pide verificación</span>}
+                </p>
+                <p class="mt-0.5 flex flex-wrap gap-x-2 text-xs text-ink-muted">
+                  <span class:list={["rounded-full px-2 py-0.5 font-semibold", b.status === "active" ? "bg-success-soft text-success" : b.status === "suspended" ? "bg-danger-soft text-danger" : "bg-surface-muted"]}>
+                    {statusLabel[b.status]}
+                  </span>
+                  {[b.category?.name, b.city?.name].filter(Boolean).join(" · ")}
+                  {b.owner && <span>· de <a href={`/admin/usuarios?q=${b.owner.username}`} class="underline">{displayName(b.owner)}</a></span>}
+                  <span>· {formatDate(b.created_at, { dateStyle: "medium" })}</span>
+                </p>
+                <RatingBadge sum={b.rating_sum} count={b.rating_count} size={12} class="mt-1" />
+              </div>
+            </div>
+            <div class="mt-3 border-t border-line pt-3">
+              <ModerationForm
+                type="business"
+                id={b.id}
+                target={{ type: "business", id: b.id, title: b.name, excerpt: null, href: `/e/${b.slug}`, status: b.status, hidden: b.status !== "active", ownerName: null, ownerUsername: b.owner?.username ?? null }}
+                returnTo={returnTo}
+                canVerify={canVerify}
+                verified={b.verification === "verified"}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</AdminLayout>
