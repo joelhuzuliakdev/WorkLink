@@ -1,6 +1,7 @@
 ---
 import Logo from "../brand/Logo.astro";
 import { brand } from "../../config/brand";
+import { legal } from "../../config/legal";
 
 const year = new Date().getFullYear();
 const links = [
@@ -12,6 +13,7 @@ const links = [
   { href: "/buscar", label: "Buscar" },
   { href: "/terminos", label: "Términos" },
   { href: "/privacidad", label: "Privacidad" },
+  ...(legal.contactEmail ? [{ href: `mailto:${legal.contactEmail}`, label: "Contacto" }] : []),
 ];
 ---
 

@@ -6,6 +6,7 @@
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Button from "../components/ui/Button.astro";
 import { routes } from "../config/site";
+import { legal } from "../config/legal";
 
 const { user } = Astro.locals;
 
@@ -84,6 +85,7 @@ const tips = [
   { t: "Denunciar", x: "Si ves algo que no corresponde, tocá “Denunciar”. El equipo de WorkLink lo revisa." },
   { t: "Bloquear", x: "Si alguien te molesta, entrá a su perfil y tocá “Bloquear”: no va a poder escribirte ni comentar lo tuyo." },
   { t: "Tu cuenta", x: "En el menú de tu foto → Configuración cambiás tu email o contraseña, descargás tus datos o borrás tu cuenta." },
+  ...(legal.contactEmail ? [{ t: "¿Necesitás ayuda?", x: `Escribinos a ${legal.contactEmail} y te respondemos.` }] : []),
 ];
 ---
 
