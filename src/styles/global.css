@@ -160,3 +160,58 @@
     }
   }
 }
+
+/* --- Botón "cargando" (lo activa scripts/ui.ts al enviar un formulario) --- */
+[data-loading] {
+  --wl-loading-color: var(--wl-ink-muted);
+  position: relative;
+  pointer-events: none;
+  color: transparent !important;
+  transition: none !important;
+}
+[data-loading] > * {
+  visibility: hidden;
+}
+[data-loading]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 9999px;
+  border: 2px solid var(--wl-loading-color);
+  border-right-color: transparent;
+  animation: wl-spin 0.7s linear infinite;
+}
+/* El texto queda transparente: la ruedita toma el color que tenía el texto. */
+.bg-brand[data-loading],
+.bg-danger[data-loading],
+.bg-seek[data-loading],
+.bg-offer[data-loading] {
+  --wl-loading-color: #fff;
+}
+@keyframes wl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Barra de progreso al cambiar de página --- */
+.wl-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 100;
+  height: 3px;
+  background: linear-gradient(90deg, var(--wl-brand), var(--wl-seek), var(--wl-offer));
+  transform-origin: left;
+  animation: wl-progress 8s cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+@keyframes wl-progress {
+  from {
+    transform: scaleX(0.05);
+  }
+  to {
+    transform: scaleX(0.92);
+  }
+}

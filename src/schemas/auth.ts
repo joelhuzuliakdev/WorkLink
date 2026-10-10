@@ -5,7 +5,7 @@ import { z } from "astro/zod";
  * sus mensajes se muestran en los formularios.
  */
 
-const email = z
+export const emailSchema = z
   .string({ error: "Ingresá tu email" })
   .trim()
   .toLowerCase()
@@ -30,7 +30,7 @@ const personName = (label: string) =>
 export const signUpSchema = z.object({
   first_name: personName("nombre"),
   last_name: personName("apellido"),
-  email,
+  email: emailSchema,
   password: passwordSchema,
   intent: z.enum(["seeker", "provider"], { error: "Elegí qué venís a hacer" }),
   accept_terms: z.boolean().refine((value) => value, {
@@ -39,13 +39,13 @@ export const signUpSchema = z.object({
 });
 
 export const signInSchema = z.object({
-  email,
+  email: emailSchema,
   password: z.string({ error: "Ingresá tu contraseña" }).min(1, { error: "Ingresá tu contraseña" }).max(72),
   next: z.string().max(500).optional(),
 });
 
 export const forgotPasswordSchema = z.object({
-  email,
+  email: emailSchema,
 });
 
 export const resetPasswordSchema = z

@@ -72,5 +72,8 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
       <slot />
     </main>
     {!bare && !hideFooter && <Footer />}
+    <script>
+      import "../scripts/ui";
+    </script>
   </body>
 </html>

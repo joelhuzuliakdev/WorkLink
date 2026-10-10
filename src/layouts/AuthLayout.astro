@@ -4,6 +4,7 @@
  * En la computadora: a la izquierda qué es WorkLink, a la derecha el
  * formulario con aire. En el celular: solo el formulario. Siempre noindex.
  */
+import Icon from "../components/ui/Icon.astro";
 import BaseLayout from "./BaseLayout.astro";
 import { brand } from "../config/brand";
 
@@ -17,9 +18,9 @@ interface Props {
 
 const { title, heading, subheading, showcase = false } = Astro.props;
 const points = [
-  { icon: "🔎", title: "Encontrá a quien necesitás", text: "Personas y emprendimientos de tu ciudad, con reseñas reales." },
-  { icon: "📣", title: "Mostrá lo que hacés", text: "Publicá con fotos o video y armá la página de tu emprendimiento." },
-  { icon: "💬", title: "Hablá directo", text: "Mensajes privados, sin compartir tu número." },
+  { icon: "search" as const, title: "Encontrá a quien necesitás", text: "Personas y emprendimientos de tu ciudad, con reseñas reales." },
+  { icon: "megaphone" as const, title: "Mostrá lo que hacés", text: "Publicá con fotos o video y armá la página de tu emprendimiento." },
+  { icon: "chat" as const, title: "Hablá directo", text: "Mensajes privados, sin compartir tu número." },
 ];
 ---
 
@@ -38,7 +39,7 @@ const points = [
           <ul class="mt-8 flex flex-col gap-5">
             {points.map((p) => (
               <li class="flex gap-4">
-                <span class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-surface text-xl ring-1 ring-line" aria-hidden="true">{p.icon}</span>
+                <span class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-surface text-brand ring-1 ring-line" aria-hidden="true"><Icon name={p.icon} class="h-5 w-5" /></span>
                 <span>
                   <span class="block font-semibold">{p.title}</span>
                   <span class="block text-ink-muted">{p.text}</span>

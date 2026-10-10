@@ -8,6 +8,7 @@
  * Con la pestaña en segundo plano sigue consultando (más espaciado) para
  * sonar y mostrar "(2) WorkLink" en el título cuando llega algo nuevo.
  */
+import { iconSvg } from "../config/icons";
 import { playChime } from "./sound";
 
 const INTERVAL = 10_000;
@@ -55,7 +56,7 @@ function announce(latest: Latest) {
   const icon = document.createElement("span");
   icon.className = "grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = "💬";
+  icon.innerHTML = iconSvg("chat", "h-5 w-5");
   const text = document.createElement("span");
   text.className = "min-w-0 flex-1";
   const title = document.createElement("strong");

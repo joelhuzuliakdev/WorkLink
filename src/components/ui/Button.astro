@@ -2,11 +2,12 @@
 /**
  * Botón reutilizable. Con `href` se renderiza como enlace; sin `href`, como
  * <button> (por defecto type="button"; usá type="submit" en formularios).
- * Variantes: primary, secondary, ghost, seek, offer.
+ * Variantes: primary, secondary, ghost, seek, offer, danger.
+ * Al enviar un formulario, el botón muestra "cargando" solo (ver scripts/ui.ts).
  */
 import type { HTMLAttributes } from "astro/types";
 
-type Variant = "primary" | "secondary" | "ghost" | "seek" | "offer";
+type Variant = "primary" | "secondary" | "ghost" | "seek" | "offer" | "danger";
 type Size = "sm" | "md" | "lg";
 
 type Props = {
@@ -34,6 +35,7 @@ const variants: Record<Variant, string> = {
   ghost: "text-ink hover:bg-surface-muted",
   seek: "bg-seek text-white hover:opacity-90",
   offer: "bg-offer text-white hover:opacity-90",
+  danger: "bg-danger text-white hover:opacity-90",
 };
 
 const sizes: Record<Size, string> = {

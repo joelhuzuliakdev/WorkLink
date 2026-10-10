@@ -9,6 +9,7 @@ import { needs } from "./needs";
 import { reviews } from "./reviews";
 import { admin } from "./admin";
 import { billing } from "./billing";
+import { account } from "./account";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -26,4 +27,5 @@ export const server = {
   reviews,
   admin,
   billing,
+  account,
 };

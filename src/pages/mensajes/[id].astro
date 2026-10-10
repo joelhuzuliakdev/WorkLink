@@ -4,6 +4,7 @@
  * JavaScript envía sin recargar y trae los mensajes nuevos cada pocos
  * segundos (scripts/chat.ts). Al abrirla se marca como leída.
  */
+import Icon from "../../components/ui/Icon.astro";
 import { actions, isInputError } from "astro:actions";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
@@ -112,7 +113,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
                 <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
-                      📎 Publicación: <strong>{postHeadline(m.post, 60)}</strong>
+                      <Icon name="paperclip" class="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Publicación: <strong>{postHeadline(m.post, 60)}</strong>
                     </a>
                   )}
                   <p class="whitespace-pre-line break-words">{m.body}</p>

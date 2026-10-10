@@ -5,6 +5,9 @@
  * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
  * esta vez). Ruta protegida por el middleware.
  */
+import SoundToggle from "../components/ui/SoundToggle.astro";
+import Icon from "../components/ui/Icon.astro";
+import type { IconName } from "../config/icons";
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Avatar from "../components/ui/Avatar.astro";
 import VerifiedBadge from "../components/ui/VerifiedBadge.astro";
@@ -21,29 +24,29 @@ const { data: me } = await supabase.from("profiles").select("username").eq("id",
 const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
 if (items.some((n) => !n.read_at)) await markAllRead(supabase);
 
-function describe(n: NotificationView) {
+function describe(n: NotificationView): { name: string; text: string; href: string; icon: IconName; tone: string; quote?: string | null } {
   const name = n.actor ? displayName(n.actor) : "Alguien";
   const post = n.post ? `“${postHeadline(n.post, 60)}”` : "tu publicación";
   switch (n.type) {
     case "post_like":
-      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "♥", tone: "bg-danger text-white" };
+      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "heart", tone: "bg-danger text-white" };
     case "post_comment":
       return {
         name,
         text: `comentó tu publicación ${post}:`,
         quote: n.comment?.body,
         href: n.post ? `${postPath(n.post)}${n.comment ? `#c-${n.comment.id}` : "#comentarios"}` : "#",
-        icon: "💬",
+        icon: "chat",
         tone: "bg-seek text-white",
       };
     case "profile_follow":
-      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "+", tone: "bg-success text-white" };
+      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "userPlus", tone: "bg-success text-white" };
     case "business_follow":
       return {
         name,
         text: `empezó a seguir a ${n.business?.name ?? "tu emprendimiento"}.`,
         href: n.actor ? profilePath(n.actor.username) : "#",
-        icon: "+",
+        icon: "userPlus",
         tone: "bg-offer text-white",
       };
     case "need_proposal":
@@ -51,7 +54,7 @@ function describe(n: NotificationView) {
         name,
         text: `te mandó una propuesta para “${n.need?.title ?? "tu necesidad"}”.`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
-        icon: "$",
+        icon: "inbox",
         tone: "bg-offer text-white",
       };
     case "proposal_accepted":
@@ -59,7 +62,7 @@ function describe(n: NotificationView) {
         name,
         text: `aceptó tu propuesta para “${n.need?.title ?? "su necesidad"}”. ¡Coordinen por mensajes!`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
-        icon: "✓",
+        icon: "check",
         tone: "bg-success text-white",
       };
     case "need_match":
@@ -67,7 +70,7 @@ function describe(n: NotificationView) {
         name,
         text: `necesita algo de tu rubro: “${n.need?.title ?? "una necesidad"}”. Mandale tu propuesta.`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/necesidades",
-        icon: "!",
+        icon: "alert",
         tone: "bg-seek text-white",
       };
     case "review_received": {
@@ -77,7 +80,7 @@ function describe(n: NotificationView) {
         text: `calificó ${n.business ? `a ${n.business.name}` : "tu trabajo"}${n.review ? ` con ${stars(n.review.rating)}` : ""}.`,
         quote: n.review?.body ?? undefined,
         href: n.review ? `${where}#r-${n.review.id}` : where,
-        icon: "★",
+        icon: "star",
         tone: "bg-star text-white",
       };
     }
@@ -88,26 +91,26 @@ function describe(n: NotificationView) {
         text: "respondió tu reseña:",
         quote: n.review?.reply ?? undefined,
         href: n.review ? `${where}#r-${n.review.id}` : where,
-        icon: "💬",
+        icon: "chat",
         tone: "bg-seek text-white",
       };
     }
     case "plan_activated":
-      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "★", tone: "bg-brand text-brand-contrast" };
+      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "star", tone: "bg-brand text-brand-contrast" };
     case "plan_payment_failed":
       return {
         name: "WorkLink",
         text: "Mercado Pago no pudo cobrar tu plan. Revisá tu medio de pago para no perder los beneficios.",
         href: "/panel/plan",
-        icon: "!",
+        icon: "alert",
         tone: "bg-warning text-white",
       };
     case "verification_approved":
-      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "✓", tone: "bg-seek text-white" };
+      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "check", tone: "bg-seek text-white" };
     case "verification_rejected":
-      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "!", tone: "bg-warning text-white" };
+      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "alert", tone: "bg-warning text-white" };
     default:
-      return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
+      return { name, text: "tiene novedades para vos.", href: "#", icon: "bell", tone: "bg-ink-muted text-white" };
   }
 }
 ---
@@ -116,9 +119,7 @@ function describe(n: NotificationView) {
   <section class="mx-auto max-w-2xl px-4 py-8">
     <div class="flex items-center justify-between gap-3">
       <h1 class="text-2xl font-bold">Notificaciones</h1>
-      <button type="button" class="inline-flex h-9 items-center gap-2 rounded-wl border border-line bg-surface px-3 text-sm font-medium hover:bg-surface-muted" data-sound-toggle aria-pressed="true">
-        <span data-sound-icon aria-hidden="true">🔔</span><span data-sound-label>Sonido activado</span>
-      </button>
+      <SoundToggle />
     </div>
 
     {
@@ -137,8 +138,8 @@ function describe(n: NotificationView) {
                 <a href={d.href} class:list={["flex gap-3 p-4 hover:bg-surface-muted", unread && "bg-seek-soft/60"]}>
                   <span class="relative shrink-0">
                     <Avatar name={d.name} path={n.actor?.avatar_path} size={48} />
-                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface text-xs font-bold", d.tone]} aria-hidden="true">
-                      {d.icon}
+                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface", d.tone]} aria-hidden="true">
+                      <Icon name={d.icon} class="h-3.5 w-3.5" stroke={2.5} />
                     </span>
                   </span>
                   <span class="min-w-0 flex-1">
@@ -169,20 +170,3 @@ function describe(n: NotificationView) {
   </section>
 </BaseLayout>
 
-<script>
-  import { playChime, setSoundEnabled, soundEnabled } from "../scripts/sound";
-  const button = document.querySelector<HTMLButtonElement>("[data-sound-toggle]");
-  const render = () => {
-    if (!button) return;
-    const on = soundEnabled();
-    button.setAttribute("aria-pressed", String(on));
-    button.querySelector("[data-sound-icon]")!.textContent = on ? "🔔" : "🔕";
-    button.querySelector("[data-sound-label]")!.textContent = on ? "Sonido activado" : "Sonido apagado";
-  };
-  button?.addEventListener("click", () => {
-    setSoundEnabled(!soundEnabled());
-    render();
-    if (soundEnabled()) setTimeout(() => playChime("notification"), 50);
-  });
-  render();
-</script>

@@ -1,0 +1,45 @@
+---
+/**
+ * Botón para prender o apagar el sonido de los avisos (mensajes y
+ * notificaciones). La preferencia se guarda en este navegador.
+ */
+import Icon from "./Icon.astro";
+
+interface Props {
+  class?: string;
+}
+const { class: className = "" } = Astro.props;
+---
+
+<button
+  type="button"
+  class:list={["inline-flex h-9 items-center gap-2 rounded-wl border border-line bg-surface px-3 text-sm font-medium hover:bg-surface-muted", className]}
+  data-sound-toggle
+  aria-pressed="true"
+>
+  <span data-sound-on><Icon name="bell" class="h-4 w-4" /></span>
+  <span data-sound-off hidden><Icon name="bellOff" class="h-4 w-4" /></span>
+  <span data-sound-label>Sonido activado</span>
+</button>
+
+<script>
+  import { playChime, setSoundEnabled, soundEnabled } from "../../scripts/sound";
+
+  const render = () => {
+    const on = soundEnabled();
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-sound-toggle]")) {
+      button.setAttribute("aria-pressed", String(on));
+      button.querySelector<HTMLElement>("[data-sound-on]")!.hidden = !on;
+      button.querySelector<HTMLElement>("[data-sound-off]")!.hidden = on;
+      button.querySelector("[data-sound-label]")!.textContent = on ? "Sonido activado" : "Sonido apagado";
+    }
+  };
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-sound-toggle]")) {
+    button.addEventListener("click", () => {
+      setSoundEnabled(!soundEnabled());
+      render();
+      if (soundEnabled()) setTimeout(() => playChime("notification"), 50);
+    });
+  }
+  render();
+</script>

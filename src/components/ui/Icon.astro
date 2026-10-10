@@ -1,0 +1,27 @@
+---
+/**
+ * Ícono de línea de WorkLink. Decorativo por defecto (aria-hidden); si el
+ * ícono va solo (sin texto al lado), pasá `label` para lectores de pantalla.
+ *   <Icon name="pin" class="h-4 w-4" />
+ */
+import { icons, type IconName } from "../../config/icons";
+
+interface Props {
+  name: IconName;
+  class?: string;
+  label?: string;
+  /** Grosor del trazo (por defecto 2). */
+  stroke?: 1.5 | 1.8 | 2 | 2.5;
+}
+
+const { name, class: className = "h-5 w-5", label, stroke = 2 } = Astro.props;
+---
+
+<svg
+  viewBox="0 0 24 24"
+  class:list={["shrink-0 fill-none stroke-current", className]}
+  stroke-width={stroke}
+  aria-hidden={label ? undefined : "true"}
+  role={label ? "img" : undefined}
+  aria-label={label}
+><path stroke-linecap="round" stroke-linejoin="round" d={icons[name]} /></svg>

@@ -60,7 +60,7 @@ export const messages = {
         const { error } = await supabase.from("messages").insert({
           conversation_id: conversationId,
           sender_id: user.id,
-          body: note || "Te comparto esta publicación 👇",
+          body: note || "Te comparto esta publicación.",
           post_id,
         });
         if (error) {

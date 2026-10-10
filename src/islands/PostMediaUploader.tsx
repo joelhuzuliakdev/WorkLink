@@ -12,6 +12,16 @@
 import { useRef, useState } from "preact/hooks";
 import { acceptedImageTypes, mediaPresets, POST_MAX_IMAGES, videoLimits } from "../config/media";
 import { decodeImage, inspectVideo, renderVariant, requestUploadUrls, uploadToSignedUrl } from "./lib/image";
+import { icons } from "../config/icons";
+
+/** Ícono de línea (los mismos dibujos que el resto del sitio). */
+function MiniIcon({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 fill-none stroke-current" stroke-width={2} aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d={d} />
+    </svg>
+  );
+}
 
 export interface PostMediaItem {
   /** id de media si ya estaba guardado en la publicación. */
@@ -198,7 +208,8 @@ export default function PostMediaUploader({ name = "media", initial = [], supaba
       <div class="flex flex-wrap items-center gap-2">
         {!hasVideo && imageSlots > 0 && (
           <label class={[buttonClass, busy ? "pointer-events-none opacity-60" : ""].join(" ")}>
-            📷 {items.length ? "Agregar fotos" : "Subir fotos"}
+            <MiniIcon d={icons.camera} />
+            {items.length ? "Agregar fotos" : "Subir fotos"}
             <input
               ref={imageInput}
               type="file"
@@ -215,7 +226,8 @@ export default function PostMediaUploader({ name = "media", initial = [], supaba
         )}
         {items.length === 0 && (
           <label class={[buttonClass, busy ? "pointer-events-none opacity-60" : ""].join(" ")}>
-            🎬 Subir un video
+            <MiniIcon d={icons.video} />
+            Subir un video
             <input
               ref={videoInput}
               type="file"

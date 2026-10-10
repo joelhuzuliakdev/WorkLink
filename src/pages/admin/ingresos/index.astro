@@ -165,7 +165,7 @@ const cell = "px-3 py-2 text-left";
                   {subs.map((s) => (
                     <tr data-sub-row={s.id}>
                       <td class={cell}>
-                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : "—"}
+                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : <span class="text-ink-muted">Cuenta borrada</span>}
                         <span class="block text-xs text-ink-muted">{s.payer_email}</span>
                       </td>
                       <td class={cell}>{s.plan?.name}{s.business && <span class="block text-xs text-ink-muted">{s.business.name}</span>}</td>
@@ -211,7 +211,7 @@ const cell = "px-3 py-2 text-left";
                   {payments.map((p) => (
                     <tr data-payment-row={p.mp_payment_id}>
                       <td class={cell}>{formatDate(p.paid_at ?? p.created_at, { dateStyle: "short", timeStyle: "short" })}</td>
-                      <td class={cell}>{p.user ? displayName(p.user) : "—"}</td>
+                      <td class={cell}>{p.user ? displayName(p.user) : <span class="text-ink-muted">Cuenta borrada</span>}</td>
                       <td class={cell}>{p.plan?.name}</td>
                       <td class={cell}>{PAYMENT_STATUS[p.status] ?? p.status}</td>
                       <td class={cell}>{money(p.amount)}</td>

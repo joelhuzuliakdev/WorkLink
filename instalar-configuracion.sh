@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# WorkLink · ayuda: página Cómo funciona, ayudas la primera vez, pantallas vacías y A quién seguir
+# WorkLink · configuración de la cuenta (email, contraseña, bloqueados, mis datos, borrar cuenta) y terminación visual
 # =============================================================================
 # Uso, en Git Bash, desde la carpeta raíz del proyecto (donde está package.json):
-#     bash instalar-ayuda.sh
+#     bash instalar-configuracion.sh
 #
 # Crea o reemplaza los archivos de src/ y public/, astro.config.mjs, vercel.json
-# y .env.example, y agrega la migración 0029 (sugerencias de a quién seguir). NO toca tu .env, node_modules ni
+# y .env.example, y agrega la migración 0030 (descargar mis datos y borrar la cuenta). NO toca tu .env, node_modules ni
 # las migraciones anteriores.
 # =============================================================================
 set -euo pipefail
@@ -60,6 +60,151 @@ escribir 'public/favicon.svg' << '__WORKLINK_FIN_DEL_ARCHIVO__'
     <path d="M18.19 9.24 A7 7 0 0 0 13.42 13.61" stroke="#e8572e" stroke-linecap="butt"/>
   </g>
 </svg>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/actions/account.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { ActionError, defineAction } from "astro:actions";
+import { PUBLIC_SITE_URL } from "astro:env/client";
+import { changeEmailSchema, changePasswordSchema, deleteAccountSchema, profileRefSchema } from "../schemas/account";
+import { dbError, requireUser } from "../lib/auth/guards";
+import { toActionError } from "../lib/auth/errors";
+import { routes } from "../config/site";
+import { createSupabaseAdminClient } from "../lib/supabase/admin";
+import { cancelLivePlans, checkPassword, deletionBlocker, getAccountInfo, removeUserFiles } from "../services/account";
+
+const confirmUrl = (next: string) =>
+  new URL(`${routes.authConfirm}?next=${encodeURIComponent(next)}`, PUBLIC_SITE_URL).toString();
+
+const wrongPassword = () =>
+  new ActionError({ code: "BAD_REQUEST", message: "La contraseña actual no es correcta." });
+
+/**
+ * Configuración de la cuenta. Todo se hace en el servidor con la sesión de
+ * la persona; los cambios de acceso piden la contraseña actual (si tiene).
+ */
+export const account = {
+  /** Cambiar el email: Supabase manda un enlace de confirmación; hasta que se confirma, sigue el email anterior. */
+  changeEmail: defineAction({
+    accept: "form",
+    input: changeEmailSchema,
+    handler: async ({ email }, { locals }) => {
+      const user = requireUser(locals.user);
+      if (user.email && email === user.email.toLowerCase()) {
+        throw new ActionError({ code: "BAD_REQUEST", message: "Ese ya es tu email." });
+      }
+      const { error } = await locals.supabase.auth.updateUser({ email }, { emailRedirectTo: confirmUrl("/panel/cuenta?listo=email-confirmado") });
+      if (error) throw toActionError(error, "No pudimos cambiar tu email. Probá de nuevo.");
+      return { email };
+    },
+  }),
+
+  /** Cambiar (o crear, si entró con Google) la contraseña. Cierra la sesión en los demás dispositivos. */
+  changePassword: defineAction({
+    accept: "form",
+    input: changePasswordSchema,
+    handler: async (input, { locals }) => {
+      const user = requireUser(locals.user);
+      const info = await getAccountInfo(locals.supabase);
+      if (!info) throw new ActionError({ code: "INTERNAL_SERVER_ERROR", message: "No pudimos leer tu cuenta. Probá de nuevo." });
+
+      if (info.has_password) {
+        if (!input.current_password) {
+          throw new ActionError({ code: "BAD_REQUEST", message: "Escribí tu contraseña actual." });
+        }
+        if (!user.email || !(await checkPassword(user.email, input.current_password))) throw wrongPassword();
+      }
+
+      const { error } = await locals.supabase.auth.updateUser({ password: input.password });
+      if (error) throw toActionError(error, "No pudimos cambiar tu contraseña. Probá de nuevo.");
+
+      // Si alguien más tenía tu sesión abierta, la pierde.
+      await locals.supabase.auth.signOut({ scope: "others" });
+      return { created: !info.has_password };
+    },
+  }),
+
+  /** Cerrar la sesión en todos los dispositivos (incluido este). */
+  signOutEverywhere: defineAction({
+    accept: "form",
+    handler: async (_input, { locals }) => {
+      requireUser(locals.user);
+      const { error } = await locals.supabase.auth.signOut({ scope: "global" });
+      if (error) throw toActionError(error);
+      return { redirectTo: `${routes.login}?sesiones=cerradas` };
+    },
+  }),
+
+  block: defineAction({
+    accept: "form",
+    input: profileRefSchema,
+    handler: async ({ profile_id }, { locals }) => {
+      const user = requireUser(locals.user);
+      if (profile_id === user.id) throw new ActionError({ code: "BAD_REQUEST", message: "No podés bloquearte a vos mismo." });
+      const { error } = await locals.supabase.from("user_blocks").insert({ blocker_id: user.id, blocked_id: profile_id });
+      if (error && error.code !== "23505") throw dbError(error, "No pudimos bloquear a esta persona. Probá de nuevo.");
+      return { blocked: true };
+    },
+  }),
+
+  unblock: defineAction({
+    accept: "form",
+    input: profileRefSchema,
+    handler: async ({ profile_id }, { locals }) => {
+      const user = requireUser(locals.user);
+      const { error } = await locals.supabase.from("user_blocks").delete().eq("blocker_id", user.id).eq("blocked_id", profile_id);
+      if (error) throw dbError(error, "No pudimos desbloquear a esta persona. Probá de nuevo.");
+      return { unblocked: true };
+    },
+  }),
+
+  /**
+   * Borrar la cuenta para siempre. Pasos:
+   *  1. Confirmación ("BORRAR") y contraseña actual (si tiene).
+   *  2. Que no sea la última persona con el rol principal de administración.
+   *  3. Cancelar en Mercado Pago los planes que se siguen cobrando.
+   *  4. Borrar el usuario: la base borra en cascada perfil, publicaciones,
+   *     emprendimientos, mensajes, etc. (los registros de cobros quedan sin usuario).
+   *  5. Borrar sus archivos (fotos, videos, DNI y selfie) y cerrar la sesión.
+   */
+  deleteAccount: defineAction({
+    accept: "form",
+    input: deleteAccountSchema,
+    handler: async (input, { locals }) => {
+      const user = requireUser(locals.user);
+      const info = await getAccountInfo(locals.supabase);
+      if (!info) throw new ActionError({ code: "INTERNAL_SERVER_ERROR", message: "No pudimos leer tu cuenta. Probá de nuevo." });
+      if (info.has_password) {
+        if (!input.current_password) throw new ActionError({ code: "BAD_REQUEST", message: "Escribí tu contraseña para confirmar." });
+        if (!user.email || !(await checkPassword(user.email, input.current_password))) throw wrongPassword();
+      }
+
+      const admin = createSupabaseAdminClient();
+      const blocker = await deletionBlocker(admin, user.id);
+      if (blocker) throw new ActionError({ code: "CONFLICT", message: blocker });
+
+      try {
+        await cancelLivePlans(admin, user.id);
+      } catch (e) {
+        console.error("[account] cancelar planes", e);
+        throw new ActionError({
+          code: "SERVICE_UNAVAILABLE",
+          message: "No pudimos cancelar tu plan en Mercado Pago, así que todavía no borramos la cuenta. Cancelalo desde Mi plan y volvé a probar.",
+        });
+      }
+
+      const { error } = await admin.auth.admin.deleteUser(user.id);
+      if (error) {
+        console.error("[account] borrar usuario", error.message);
+        throw new ActionError({ code: "INTERNAL_SERVER_ERROR", message: "No pudimos borrar tu cuenta. Probá de nuevo en unos minutos." });
+      }
+
+      await removeUserFiles(admin, user.id).catch((e) => console.error("[account] archivos", e));
+      // La sesión ya no sirve: se limpian las cookies de este navegador.
+      await locals.supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      return { redirectTo: "/?cuenta=borrada" };
+    },
+  }),
+};
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/actions/admin.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -744,6 +889,7 @@ import { needs } from "./needs";
 import { reviews } from "./reviews";
 import { admin } from "./admin";
 import { billing } from "./billing";
+import { account } from "./account";
 
 /**
  * Registro central de Astro Actions. Cada dominio agrega su grupo:
@@ -761,6 +907,7 @@ export const server = {
   reviews,
   admin,
   billing,
+  account,
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -827,7 +974,7 @@ export const messages = {
         const { error } = await supabase.from("messages").insert({
           conversation_id: conversationId,
           sender_id: user.id,
-          body: note || "Te comparto esta publicación 👇",
+          body: note || "Te comparto esta publicación.",
           post_id,
         });
         if (error) {
@@ -2309,7 +2456,7 @@ const links = [
   { href: "/panel/emprendimientos", label: "Mis emprendimientos" },
   { href: "/publicaciones", label: "Todas las publicaciones" },
   { href: "/rubros", label: "Explorar rubros" },
-  ...(viewer.role ? [{ href: "/admin", label: "⚙ Administración" }] : []),
+  ...(viewer.role ? [{ href: "/admin", label: "Administración" }] : []),
 ];
 ---
 
@@ -2555,7 +2702,7 @@ const sceneBadge = (value: string) => SITUATIONS.find((s) => s.value === value)!
           </span>
           <span class="rounded-full bg-warning-soft px-2.5 py-1 text-xs font-semibold text-warning">Promoción</span>
         </header>
-        <p class="mt-3">Tortas personalizadas para cumpleaños. Este mes, 10% off encargando con una semana de anticipación 🎂</p>
+        <p class="mt-3">Tortas personalizadas para cumpleaños. Este mes, 10% off encargando con una semana de anticipación.</p>
         <div class="mt-3 grid grid-cols-3 gap-1 overflow-hidden rounded-wl" aria-hidden="true">
           <span class="h-16 bg-offer-soft"></span><span class="h-16 bg-warning-soft"></span><span class="h-16 bg-seek-soft"></span>
         </div>
@@ -3038,6 +3185,7 @@ import Avatar from "../ui/Avatar.astro";
 import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import type { ViewerProfile } from "../../lib/viewer";
 import { displayName } from "../../services/profiles";
+import { icons } from "../../config/icons";
 
 interface Props {
   viewer: ViewerProfile;
@@ -3047,7 +3195,7 @@ const { viewer } = Astro.props;
 const name = displayName(viewer);
 const logoutAction = `/salir${actions.auth.signOut}`;
 const icon = "h-5 w-5 shrink-0 fill-none stroke-current stroke-[1.8] text-ink-muted";
-const groups: { href: string; label: string; hint?: string; d: string }[][] = [
+const groups: { href: string; label: string; d: string }[][] = [
   [
     { href: "/panel/publicaciones", label: "Mis publicaciones", d: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" },
     { href: "/panel/emprendimientos", label: "Mis emprendimientos", d: "M4 9.5 5.5 4h13L20 9.5M4 9.5h16M4 9.5V20h16V9.5M9.5 20v-5h5v5" },
@@ -3055,8 +3203,9 @@ const groups: { href: string; label: string; hint?: string; d: string }[][] = [
     { href: "/panel/guardados", label: "Guardados", d: "M6.5 4h11v16.5L12 16.8l-5.5 3.7z" },
   ],
   [
-    { href: "/panel/plan", label: "Mi plan", hint: viewer.role ? undefined : undefined, d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z" },
-    { href: "/panel/perfil", label: "Editar perfil y cuenta", d: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0" },
+    { href: "/panel/plan", label: "Mi plan", d: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z" },
+    { href: "/panel/perfil", label: "Editar perfil", d: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0" },
+    { href: "/panel/cuenta", label: "Configuración", d: icons.gear },
     ...(viewer.role ? [{ href: "/admin", label: "Administración", d: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z" }] : []),
     { href: "/como-funciona", label: "Cómo funciona (ayuda)", d: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" },
   ],
@@ -3124,6 +3273,7 @@ escribir 'src/components/needs/NeedCard.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /** Necesidad en listados: título, presupuesto, ciudad, fecha y propuestas. */
 import Avatar from "../ui/Avatar.astro";
+import Icon from "../ui/Icon.astro";
 import VerifiedBadge from "../ui/VerifiedBadge.astro";
 import type { NeedView } from "../../services/needs";
 import { budgetLabel, NEED_STATUS_LABELS } from "../../services/needs";
@@ -3166,8 +3316,8 @@ const status = NEED_STATUS_LABELS[need.status];
   <p class="mt-2 line-clamp-2 text-sm text-ink-muted">{need.description}</p>
   <ul class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
     {budget && <li><span class="text-ink-muted">Presupuesto:</span> <strong>{budget}</strong></li>}
-    {need.city && <li>📍 {need.city.name}</li>}
-    {need.needed_by && <li>📅 Para el {formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" })}</li>}
+    {need.city && <li class="flex items-center gap-1.5"><Icon name="pin" class="h-4 w-4 text-ink-muted" />{need.city.name}</li>}
+    {need.needed_by && <li class="flex items-center gap-1.5"><Icon name="calendar" class="h-4 w-4 text-ink-muted" />Para el {formatDate(need.needed_by + "T12:00:00", { day: "numeric", month: "long" })}</li>}
   </ul>
   <div class="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-line pt-3 text-sm">
     <span class="flex min-w-0 items-center gap-2 text-ink-muted">
@@ -4615,7 +4765,10 @@ __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/components/ui/Alert.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
-/** Mensaje destacado (error, éxito, aviso, información). */
+/** Mensaje destacado (error, éxito, aviso, información), con su ícono. */
+import Icon from "./Icon.astro";
+import type { IconName } from "../../config/icons";
+
 interface Props {
   tone?: "info" | "success" | "warning" | "danger";
   title?: string;
@@ -4630,14 +4783,24 @@ const tones = {
   warning: "border-warning/30 bg-warning-soft text-ink",
   danger: "border-danger/30 bg-danger-soft text-ink",
 } as const;
+
+const icon: Record<typeof tone, { name: IconName; class: string }> = {
+  info: { name: "info", class: "text-seek" },
+  success: { name: "checkCircle", class: "text-success" },
+  warning: { name: "alert", class: "text-warning" },
+  danger: { name: "alert", class: "text-danger" },
+};
 ---
 
 <div
-  class:list={["rounded-wl border px-4 py-3 text-sm", tones[tone], className]}
+  class:list={["flex items-start gap-3 rounded-wl border px-4 py-3 text-sm", tones[tone], className]}
   role={tone === "danger" ? "alert" : "status"}
 >
-  {title && <p class="mb-0.5 font-semibold">{title}</p>}
-  <div class="leading-relaxed"><slot /></div>
+  <Icon name={icon[tone].name} class:list={["mt-px h-5 w-5", icon[tone].class]} />
+  <div class="min-w-0 flex-1">
+    {title && <p class="mb-0.5 font-semibold">{title}</p>}
+    <div class="leading-relaxed"><slot /></div>
+  </div>
 </div>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -4710,11 +4873,12 @@ escribir 'src/components/ui/Button.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 /**
  * Botón reutilizable. Con `href` se renderiza como enlace; sin `href`, como
  * <button> (por defecto type="button"; usá type="submit" en formularios).
- * Variantes: primary, secondary, ghost, seek, offer.
+ * Variantes: primary, secondary, ghost, seek, offer, danger.
+ * Al enviar un formulario, el botón muestra "cargando" solo (ver scripts/ui.ts).
  */
 import type { HTMLAttributes } from "astro/types";
 
-type Variant = "primary" | "secondary" | "ghost" | "seek" | "offer";
+type Variant = "primary" | "secondary" | "ghost" | "seek" | "offer" | "danger";
 type Size = "sm" | "md" | "lg";
 
 type Props = {
@@ -4742,6 +4906,7 @@ const variants: Record<Variant, string> = {
   ghost: "text-ink hover:bg-surface-muted",
   seek: "bg-seek text-white hover:opacity-90",
   offer: "bg-offer text-white hover:opacity-90",
+  danger: "bg-danger text-white hover:opacity-90",
 };
 
 const sizes: Record<Size, string> = {
@@ -4911,6 +5076,36 @@ const action = `${page}${page.includes("?") ? "&" : "?"}${String(actions.auth.go
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/ui/Icon.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Ícono de línea de WorkLink. Decorativo por defecto (aria-hidden); si el
+ * ícono va solo (sin texto al lado), pasá `label` para lectores de pantalla.
+ *   <Icon name="pin" class="h-4 w-4" />
+ */
+import { icons, type IconName } from "../../config/icons";
+
+interface Props {
+  name: IconName;
+  class?: string;
+  label?: string;
+  /** Grosor del trazo (por defecto 2). */
+  stroke?: 1.5 | 1.8 | 2 | 2.5;
+}
+
+const { name, class: className = "h-5 w-5", label, stroke = 2 } = Astro.props;
+---
+
+<svg
+  viewBox="0 0 24 24"
+  class:list={["shrink-0 fill-none stroke-current", className]}
+  stroke-width={stroke}
+  aria-hidden={label ? undefined : "true"}
+  role={label ? "img" : undefined}
+  aria-label={label}
+><path stroke-linecap="round" stroke-linejoin="round" d={icons[name]} /></svg>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/ui/SectionHint.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /**
@@ -5020,6 +5215,54 @@ const current = value === null || value === undefined ? "" : String(value);
 </div>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/components/ui/SoundToggle.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Botón para prender o apagar el sonido de los avisos (mensajes y
+ * notificaciones). La preferencia se guarda en este navegador.
+ */
+import Icon from "./Icon.astro";
+
+interface Props {
+  class?: string;
+}
+const { class: className = "" } = Astro.props;
+---
+
+<button
+  type="button"
+  class:list={["inline-flex h-9 items-center gap-2 rounded-wl border border-line bg-surface px-3 text-sm font-medium hover:bg-surface-muted", className]}
+  data-sound-toggle
+  aria-pressed="true"
+>
+  <span data-sound-on><Icon name="bell" class="h-4 w-4" /></span>
+  <span data-sound-off hidden><Icon name="bellOff" class="h-4 w-4" /></span>
+  <span data-sound-label>Sonido activado</span>
+</button>
+
+<script>
+  import { playChime, setSoundEnabled, soundEnabled } from "../../scripts/sound";
+
+  const render = () => {
+    const on = soundEnabled();
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-sound-toggle]")) {
+      button.setAttribute("aria-pressed", String(on));
+      button.querySelector<HTMLElement>("[data-sound-on]")!.hidden = !on;
+      button.querySelector<HTMLElement>("[data-sound-off]")!.hidden = on;
+      button.querySelector("[data-sound-label]")!.textContent = on ? "Sonido activado" : "Sonido apagado";
+    }
+  };
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-sound-toggle]")) {
+    button.addEventListener("click", () => {
+      setSoundEnabled(!soundEnabled());
+      render();
+      if (soundEnabled()) setTimeout(() => playChime("notification"), 50);
+    });
+  }
+  render();
+</script>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/components/ui/TextArea.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /** Área de texto accesible, con contador opcional de caracteres máximos. */
@@ -5110,6 +5353,61 @@ export const brand = {
 } as const;
 
 export type Brand = typeof brand;
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/config/icons.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Íconos de WorkLink (trazos de 24×24, estilo línea). Una sola fuente para
+ * los componentes (.astro, con <Icon>) y para los scripts del navegador
+ * (con iconSvg), así todo el sitio usa los mismos dibujos en vez de emojis,
+ * que cambian según el celular.
+ */
+export const icons = {
+  search: "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM20 20l-4.5-4.5",
+  megaphone: "M4 10v4h3l5 4V6L7 10H4ZM16 9a4 4 0 0 1 0 6",
+  chat: "M20 12a8 8 0 0 1-11.8 7L4 20l1.1-4A8 8 0 1 1 20 12Z",
+  pin: "M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11ZM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z",
+  calendar: "M4.5 6h15v14h-15zM4.5 10h15M8.5 3.5V7M15.5 3.5V7",
+  paperclip: "M20 11.5 12 19.5a5 5 0 0 1-7-7L13.5 4a3.4 3.4 0 0 1 4.8 4.8L10 17.2a1.7 1.7 0 0 1-2.4-2.4L15 7.5",
+  bell: "M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16ZM10 20.5h4",
+  bellOff: "M8.7 5.7A6 6 0 0 1 18 11v4M6 11v5l-1.5 2H17M10 20.5h4M3.5 3.5l17 17",
+  check: "m5 12.5 4.5 4.5L19 7.5",
+  checkCircle: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM8 12.3l2.7 2.7L16.2 9.5",
+  x: "M6 6l12 12M18 6 6 18",
+  gear: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 13.5l1.6 1.2-2 3.4-1.9-.7a7.5 7.5 0 0 1-2.1 1.2L14.7 21h-4l-.3-2.4a7.5 7.5 0 0 1-2.1-1.2l-1.9.7-2-3.4 1.6-1.2a7.6 7.6 0 0 1 0-2.4L4.4 9.9l2-3.4 1.9.7a7.5 7.5 0 0 1 2.1-1.2L10.7 3h4l.3 2.4a7.5 7.5 0 0 1 2.1 1.2l1.9-.7 2 3.4-1.6 1.2a7.6 7.6 0 0 1 0 2.4Z",
+  link: "M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1",
+  phoneChat: "M20 12a8 8 0 0 1-11.8 7L4 20l1.1-4A8 8 0 1 1 20 12ZM9 9.2c0 3 2.8 5.8 5.8 5.8l1-1.6-1.9-.9-.8.8a4 4 0 0 1-2.4-2.4l.8-.8-.9-1.9L9 9.2Z",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  camera: "M4 8h3.5L9 5.5h6L16.5 8H20v11H4zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
+  video: "M3.5 7h11v10h-11zM14.5 10.5 20.5 7v10l-6-3.5",
+  heart: "M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10Z",
+  plus: "M12 5v14M5 12h14",
+  userPlus: "M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM3 20a7 7 0 0 1 11.5-5.4M18 14v6M15 17h6",
+  star: "M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4l-5.3 3 1.2-6L3.4 9.3l6-.7z",
+  alert: "M12 3.5 21.5 20h-19L12 3.5ZM12 10v4.5M12 17.2v.01",
+  info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 11v5.5M12 7.8v.01",
+  shield: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z",
+  user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20a7.5 7.5 0 0 1 15 0",
+  lock: "M6 10.5h12V20H6zM8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3",
+  mail: "M3.5 6h17v12h-17zM4 6.5l8 6.5 8-6.5",
+  download: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14",
+  trash: "M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5",
+  ban: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM5.6 5.6l12.8 12.8",
+  logout: "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
+  devices: "M3.5 5h13v9h-13zM7 18h6M10 14v4M17 9h3.5v10H17z",
+  share: "M12 15V4M8 7.5 12 3.5l4 4M5 12v7.5h14V12",
+  sparkles: "M12 4l1.6 4.4L18 10l-4.4 1.6L12 16l-1.6-4.4L6 10l4.4-1.6zM18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z",
+  inbox: "M4 13.5 6.5 5h11l2.5 8.5V19H4zM4 13.5h4.5l1 2h5l1-2H20",
+  key: "M14.5 9.5a4.5 4.5 0 1 0-3.2 4.3L13 15.5h2v2h2v2h3v-3l-5.8-5.8c.2-.4.3-.8.3-1.2ZM8 9.5h.01",
+  chevronRight: "m9 6 6 6-6 6",
+} as const;
+
+export type IconName = keyof typeof icons;
+
+/** SVG como texto, para los scripts del navegador. Solo usa datos propios (nunca texto de usuarios). */
+export function iconSvg(name: IconName, className = "h-5 w-5"): string {
+  return `<svg viewBox="0 0 24 24" class="${className} fill-none stroke-current stroke-2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="${icons[name]}"/></svg>`;
+}
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/config/legal.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -5618,6 +5916,16 @@ escribir 'src/islands/PostMediaUploader.tsx' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import { useRef, useState } from "preact/hooks";
 import { acceptedImageTypes, mediaPresets, POST_MAX_IMAGES, videoLimits } from "../config/media";
 import { decodeImage, inspectVideo, renderVariant, requestUploadUrls, uploadToSignedUrl } from "./lib/image";
+import { icons } from "../config/icons";
+
+/** Ícono de línea (los mismos dibujos que el resto del sitio). */
+function MiniIcon({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" class="h-5 w-5 shrink-0 fill-none stroke-current" stroke-width={2} aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d={d} />
+    </svg>
+  );
+}
 
 export interface PostMediaItem {
   /** id de media si ya estaba guardado en la publicación. */
@@ -5804,7 +6112,8 @@ export default function PostMediaUploader({ name = "media", initial = [], supaba
       <div class="flex flex-wrap items-center gap-2">
         {!hasVideo && imageSlots > 0 && (
           <label class={[buttonClass, busy ? "pointer-events-none opacity-60" : ""].join(" ")}>
-            📷 {items.length ? "Agregar fotos" : "Subir fotos"}
+            <MiniIcon d={icons.camera} />
+            {items.length ? "Agregar fotos" : "Subir fotos"}
             <input
               ref={imageInput}
               type="file"
@@ -5821,7 +6130,8 @@ export default function PostMediaUploader({ name = "media", initial = [], supaba
         )}
         {items.length === 0 && (
           <label class={[buttonClass, busy ? "pointer-events-none opacity-60" : ""].join(" ")}>
-            🎬 Subir un video
+            <MiniIcon d={icons.video} />
+            Subir un video
             <input
               ref={videoInput}
               type="file"
@@ -6061,6 +6371,7 @@ escribir 'src/layouts/AuthLayout.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * En la computadora: a la izquierda qué es WorkLink, a la derecha el
  * formulario con aire. En el celular: solo el formulario. Siempre noindex.
  */
+import Icon from "../components/ui/Icon.astro";
 import BaseLayout from "./BaseLayout.astro";
 import { brand } from "../config/brand";
 
@@ -6074,9 +6385,9 @@ interface Props {
 
 const { title, heading, subheading, showcase = false } = Astro.props;
 const points = [
-  { icon: "🔎", title: "Encontrá a quien necesitás", text: "Personas y emprendimientos de tu ciudad, con reseñas reales." },
-  { icon: "📣", title: "Mostrá lo que hacés", text: "Publicá con fotos o video y armá la página de tu emprendimiento." },
-  { icon: "💬", title: "Hablá directo", text: "Mensajes privados, sin compartir tu número." },
+  { icon: "search" as const, title: "Encontrá a quien necesitás", text: "Personas y emprendimientos de tu ciudad, con reseñas reales." },
+  { icon: "megaphone" as const, title: "Mostrá lo que hacés", text: "Publicá con fotos o video y armá la página de tu emprendimiento." },
+  { icon: "chat" as const, title: "Hablá directo", text: "Mensajes privados, sin compartir tu número." },
 ];
 ---
 
@@ -6095,7 +6406,7 @@ const points = [
           <ul class="mt-8 flex flex-col gap-5">
             {points.map((p) => (
               <li class="flex gap-4">
-                <span class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-surface text-xl ring-1 ring-line" aria-hidden="true">{p.icon}</span>
+                <span class="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-surface text-brand ring-1 ring-line" aria-hidden="true"><Icon name={p.icon} class="h-5 w-5" /></span>
                 <span>
                   <span class="block font-semibold">{p.title}</span>
                   <span class="block text-ink-muted">{p.text}</span>
@@ -6199,6 +6510,9 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
       <slot />
     </main>
     {!bare && !hideFooter && <Footer />}
+    <script>
+      import "../scripts/ui";
+    </script>
   </body>
 </html>
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -6232,7 +6546,8 @@ const links = [
   { href: "/panel/necesidades", label: "Necesidades y propuestas", active: path.startsWith("/panel/necesidades") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
-  { href: "/panel/perfil", label: "Perfil y cuenta", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/perfil", label: "Editar perfil", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/cuenta", label: "Configuración", active: path.startsWith("/panel/cuenta") },
   ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
 ];
 ---
@@ -7363,6 +7678,7 @@ escribir 'src/pages/404.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Button from "../components/ui/Button.astro";
+import Icon from "../components/ui/Icon.astro";
 
 // Se renderiza en el servidor (no prerender) para que las páginas dinámicas
 // puedan mostrarla con Astro.rewrite("/404") cuando algo no existe.
@@ -7371,11 +7687,43 @@ Astro.response.status = 404;
 
 <BaseLayout title="Página no encontrada" noindex>
   <section class="mx-auto max-w-xl px-4 py-20 text-center">
-    <p class="text-sm font-semibold text-ink-muted">Error 404</p>
+    <span class="mx-auto grid h-14 w-14 place-items-center rounded-full bg-seek-soft text-seek"><Icon name="search" class="h-7 w-7" /></span>
+    <p class="mt-4 text-sm font-semibold text-ink-muted">Error 404</p>
     <h1 class="mt-2 text-3xl font-bold">No encontramos esta página</h1>
     <p class="mt-3 text-ink-muted">Puede que el enlace esté mal escrito o que el contenido ya no exista.</p>
-    <div class="mt-8">
+    <div class="mt-8 flex flex-wrap justify-center gap-3">
       <Button href="/">Volver al inicio</Button>
+      <Button href="/buscar" variant="secondary">Buscar en WorkLink</Button>
+    </div>
+  </section>
+</BaseLayout>
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/500.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Página de error del servidor. Astro la muestra cuando algo falla al armar
+ * una página. Nunca muestra detalles técnicos (se registran en el servidor).
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Icon from "../components/ui/Icon.astro";
+
+interface Props {
+  error?: unknown;
+}
+
+if (Astro.props.error) console.error("[500]", Astro.url.pathname, Astro.props.error);
+---
+
+<BaseLayout title="Algo salió mal" noindex>
+  <section class="mx-auto max-w-xl px-4 py-20 text-center">
+    <span class="mx-auto grid h-14 w-14 place-items-center rounded-full bg-warning-soft text-warning"><Icon name="alert" class="h-7 w-7" /></span>
+    <h1 class="mt-4 text-3xl font-bold">Algo salió mal</h1>
+    <p class="mt-3 text-ink-muted">Tuvimos un problema para mostrar esta página. Ya quedó registrado. Probá de nuevo en un ratito.</p>
+    <div class="mt-8 flex flex-wrap justify-center gap-3">
+      <Button href={Astro.url.pathname}>Probar de nuevo</Button>
+      <Button href="/" variant="secondary">Ir al inicio</Button>
     </div>
   </section>
 </BaseLayout>
@@ -7414,7 +7762,7 @@ const tab = (active: boolean) => `rounded-full px-4 py-2 text-sm font-semibold $
   {
     groups.length === 0 ? (
       <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
-        {status === "open" ? "No hay denuncias pendientes. 🎉" : "Todavía no hay denuncias en esta lista."}
+        {status === "open" ? "No hay denuncias pendientes. ¡Todo al día!" : "Todavía no hay denuncias en esta lista."}
       </p>
     ) : (
       <div class="flex flex-col gap-3">
@@ -7599,7 +7947,7 @@ const cards = stats
   </div>
   {
     groups.length === 0 ? (
-      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-ink-muted">No hay denuncias pendientes. 🎉</p>
+      <p class="mt-3 rounded-wl-lg border border-dashed border-line bg-surface p-6 text-center text-ink-muted">No hay denuncias pendientes. ¡Todo al día!</p>
     ) : (
       <div class="mt-3 flex flex-col gap-3">
         {groups.map((g) => <ReportGroupCard group={g} returnTo="/admin" open />)}
@@ -7777,7 +8125,7 @@ const cell = "px-3 py-2 text-left";
                   {subs.map((s) => (
                     <tr data-sub-row={s.id}>
                       <td class={cell}>
-                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : "—"}
+                        {s.user ? <a href={`/admin/usuarios?q=${s.user.username}`} class="font-medium hover:underline">{displayName(s.user)}</a> : <span class="text-ink-muted">Cuenta borrada</span>}
                         <span class="block text-xs text-ink-muted">{s.payer_email}</span>
                       </td>
                       <td class={cell}>{s.plan?.name}{s.business && <span class="block text-xs text-ink-muted">{s.business.name}</span>}</td>
@@ -7823,7 +8171,7 @@ const cell = "px-3 py-2 text-left";
                   {payments.map((p) => (
                     <tr data-payment-row={p.mp_payment_id}>
                       <td class={cell}>{formatDate(p.paid_at ?? p.created_at, { dateStyle: "short", timeStyle: "short" })}</td>
-                      <td class={cell}>{p.user ? displayName(p.user) : "—"}</td>
+                      <td class={cell}>{p.user ? displayName(p.user) : <span class="text-ink-muted">Cuenta borrada</span>}</td>
                       <td class={cell}>{p.plan?.name}</td>
                       <td class={cell}>{PAYMENT_STATUS[p.status] ?? p.status}</td>
                       <td class={cell}>{money(p.amount)}</td>
@@ -8416,6 +8764,59 @@ export const GET: APIRoute = async ({ params, url, locals }) => {
 };
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/pages/api/mis-datos.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import type { APIRoute } from "astro";
+
+/**
+ * Descargar mis datos (derecho de acceso, Ley 25.326). Devuelve un JSON con
+ * todo lo que la persona cargó. La base arma el archivo con export_my_data(),
+ * que solo lee los datos de quien tiene la sesión: no se puede pedir el de otra
+ * cuenta cambiando nada en la URL. Nunca se cachea.
+ */
+const ORDER = [
+  "generado",
+  "cuenta",
+  "perfil",
+  "emprendimientos",
+  "publicaciones",
+  "comentarios",
+  "necesidades",
+  "propuestas",
+  "resenas_escritas",
+  "mensajes_enviados",
+  "personas_que_seguis",
+  "emprendimientos_que_seguis",
+  "guardados",
+  "bloqueados",
+  "planes",
+  "pagos",
+  "verificacion",
+];
+
+export const GET: APIRoute = async ({ locals }) => {
+  if (!locals.user) return new Response("Ingresá para descargar tus datos.", { status: 401 });
+
+  const { data, error } = await locals.supabase.rpc("export_my_data");
+  if (error || !data) {
+    console.error("[mis-datos]", error?.code, error?.message);
+    return new Response("No pudimos preparar tus datos. Probá de nuevo en unos minutos.", { status: 500 });
+  }
+
+  const raw = data as Record<string, unknown>;
+  const ordered = Object.fromEntries([...ORDER.filter((k) => k in raw).map((k) => [k, raw[k]]), ...Object.entries(raw).filter(([k]) => !ORDER.includes(k))]);
+  const day = new Date().toISOString().slice(0, 10);
+
+  return new Response(JSON.stringify({ worklink: ordered }, null, 2), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="worklink-mis-datos-${day}.json"`,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/pages/api/notificaciones.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import type { APIRoute } from "astro";
 import { countUnread } from "../../services/notifications";
@@ -8971,6 +9372,8 @@ const tips = [
   { t: "Seguir", x: "Seguí personas y emprendimientos para ver lo que publican en tu inicio." },
   { t: "Guardados", x: "Guardá publicaciones para verlas después: están en el menú de tu foto → Guardados." },
   { t: "Denunciar", x: "Si ves algo que no corresponde, tocá “Denunciar”. El equipo de WorkLink lo revisa." },
+  { t: "Bloquear", x: "Si alguien te molesta, entrá a su perfil y tocá “Bloquear”: no va a poder escribirte ni comentar lo tuyo." },
+  { t: "Tu cuenta", x: "En el menú de tu foto → Configuración cambiás tu email o contraseña, descargás tus datos o borrás tu cuenta." },
 ];
 ---
 
@@ -9561,8 +9964,11 @@ import Landing from "../components/home/Landing.astro";
 import { getViewerProfile } from "../lib/viewer";
 import { jsonLdScript } from "../lib/seo/business";
 import { brand } from "../config/brand";
+import Alert from "../components/ui/Alert.astro";
 
 const viewer = await getViewerProfile(Astro.locals);
+
+const accountDeleted = !viewer && Astro.url.searchParams.get("cuenta") === "borrada";
 
 const site = Astro.site ?? new URL(Astro.url.origin);
 // Datos estructurados: Google puede mostrar la caja de búsqueda del sitio.
@@ -9592,6 +9998,11 @@ const websiteJsonLd = {
       canonicalPath="/"
     >
       <script slot="head" type="application/ld+json" set:html={jsonLdScript(websiteJsonLd)} />
+      {accountDeleted && (
+        <div class="mx-auto max-w-6xl px-4 pt-6">
+          <Alert tone="success">Borramos tu cuenta y tus datos. Gracias por haber sido parte de WorkLink.</Alert>
+        </div>
+      )}
       <Landing />
     </BaseLayout>
   )
@@ -9629,6 +10040,7 @@ const formError = result?.error && !isInputError(result.error) ? result.error.me
 const values = result?.error ? await getSubmittedValues(Astro.request) : {};
 const linkError = Astro.url.searchParams.get("error") === "link";
 const passwordChanged = Astro.url.searchParams.get("password") === "updated";
+const sessionsClosed = Astro.url.searchParams.get("sesiones") === "cerradas";
 ---
 
 <AuthLayout title="Ingresar" heading="Ingresá a WorkLink" subheading="Qué bueno verte de nuevo." showcase>
@@ -9639,6 +10051,9 @@ const passwordChanged = Astro.url.searchParams.get("password") === "updated";
   )}
   {passwordChanged && (
     <Alert tone="success" class="mb-5">Listo, cambiaste tu contraseña.</Alert>
+  )}
+  {sessionsClosed && (
+    <Alert tone="success" class="mb-5">Cerramos tu sesión en todos los dispositivos. Ingresá de nuevo cuando quieras.</Alert>
   )}
   {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
 
@@ -9717,6 +10132,7 @@ escribir 'src/pages/mensajes/[id].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * JavaScript envía sin recargar y trae los mensajes nuevos cada pocos
  * segundos (scripts/chat.ts). Al abrirla se marca como leída.
  */
+import Icon from "../../components/ui/Icon.astro";
 import { actions, isInputError } from "astro:actions";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import Avatar from "../../components/ui/Avatar.astro";
@@ -9825,7 +10241,7 @@ const lastAt = messages.length ? messages[messages.length - 1].created_at : new 
                 <div class:list={["max-w-[78%] rounded-2xl px-3 py-1.5", mine ? "rounded-br-md bg-brand text-brand-contrast" : "rounded-bl-md bg-surface-muted text-ink"]}>
                   {m.post && (
                     <a href={postPath(m.post)} class:list={["mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs", mine ? "border-white/30 hover:bg-white/10" : "border-line hover:bg-surface"]}>
-                      📎 Publicación: <strong>{postHeadline(m.post, 60)}</strong>
+                      <Icon name="paperclip" class="mr-1 inline h-3.5 w-3.5 align-[-2px]" />Publicación: <strong>{postHeadline(m.post, 60)}</strong>
                     </a>
                   )}
                   <p class="whitespace-pre-line break-words">{m.body}</p>
@@ -10638,6 +11054,9 @@ escribir 'src/pages/notificaciones.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Al abrir la página se marcan como leídas (las nuevas se ven resaltadas
  * esta vez). Ruta protegida por el middleware.
  */
+import SoundToggle from "../components/ui/SoundToggle.astro";
+import Icon from "../components/ui/Icon.astro";
+import type { IconName } from "../config/icons";
 import BaseLayout from "../layouts/BaseLayout.astro";
 import Avatar from "../components/ui/Avatar.astro";
 import VerifiedBadge from "../components/ui/VerifiedBadge.astro";
@@ -10654,29 +11073,29 @@ const { data: me } = await supabase.from("profiles").select("username").eq("id",
 const stars = (n: number) => "★".repeat(n) + "☆".repeat(5 - n);
 if (items.some((n) => !n.read_at)) await markAllRead(supabase);
 
-function describe(n: NotificationView) {
+function describe(n: NotificationView): { name: string; text: string; href: string; icon: IconName; tone: string; quote?: string | null } {
   const name = n.actor ? displayName(n.actor) : "Alguien";
   const post = n.post ? `“${postHeadline(n.post, 60)}”` : "tu publicación";
   switch (n.type) {
     case "post_like":
-      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "♥", tone: "bg-danger text-white" };
+      return { name, text: `le gustó tu publicación ${post}.`, href: n.post ? postPath(n.post) : "#", icon: "heart", tone: "bg-danger text-white" };
     case "post_comment":
       return {
         name,
         text: `comentó tu publicación ${post}:`,
         quote: n.comment?.body,
         href: n.post ? `${postPath(n.post)}${n.comment ? `#c-${n.comment.id}` : "#comentarios"}` : "#",
-        icon: "💬",
+        icon: "chat",
         tone: "bg-seek text-white",
       };
     case "profile_follow":
-      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "+", tone: "bg-success text-white" };
+      return { name, text: "empezó a seguirte.", href: n.actor ? profilePath(n.actor.username) : "#", icon: "userPlus", tone: "bg-success text-white" };
     case "business_follow":
       return {
         name,
         text: `empezó a seguir a ${n.business?.name ?? "tu emprendimiento"}.`,
         href: n.actor ? profilePath(n.actor.username) : "#",
-        icon: "+",
+        icon: "userPlus",
         tone: "bg-offer text-white",
       };
     case "need_proposal":
@@ -10684,7 +11103,7 @@ function describe(n: NotificationView) {
         name,
         text: `te mandó una propuesta para “${n.need?.title ?? "tu necesidad"}”.`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
-        icon: "$",
+        icon: "inbox",
         tone: "bg-offer text-white",
       };
     case "proposal_accepted":
@@ -10692,7 +11111,7 @@ function describe(n: NotificationView) {
         name,
         text: `aceptó tu propuesta para “${n.need?.title ?? "su necesidad"}”. ¡Coordinen por mensajes!`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/panel/necesidades",
-        icon: "✓",
+        icon: "check",
         tone: "bg-success text-white",
       };
     case "need_match":
@@ -10700,7 +11119,7 @@ function describe(n: NotificationView) {
         name,
         text: `necesita algo de tu rubro: “${n.need?.title ?? "una necesidad"}”. Mandale tu propuesta.`,
         href: n.need ? `${needPath(n.need)}#propuestas` : "/necesidades",
-        icon: "!",
+        icon: "alert",
         tone: "bg-seek text-white",
       };
     case "review_received": {
@@ -10710,7 +11129,7 @@ function describe(n: NotificationView) {
         text: `calificó ${n.business ? `a ${n.business.name}` : "tu trabajo"}${n.review ? ` con ${stars(n.review.rating)}` : ""}.`,
         quote: n.review?.body ?? undefined,
         href: n.review ? `${where}#r-${n.review.id}` : where,
-        icon: "★",
+        icon: "star",
         tone: "bg-star text-white",
       };
     }
@@ -10721,26 +11140,26 @@ function describe(n: NotificationView) {
         text: "respondió tu reseña:",
         quote: n.review?.reply ?? undefined,
         href: n.review ? `${where}#r-${n.review.id}` : where,
-        icon: "💬",
+        icon: "chat",
         tone: "bg-seek text-white",
       };
     }
     case "plan_activated":
-      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "★", tone: "bg-brand text-brand-contrast" };
+      return { name: "WorkLink", text: "¡Tu plan está activo! Ya tenés los beneficios.", href: "/panel/plan", icon: "star", tone: "bg-brand text-brand-contrast" };
     case "plan_payment_failed":
       return {
         name: "WorkLink",
         text: "Mercado Pago no pudo cobrar tu plan. Revisá tu medio de pago para no perder los beneficios.",
         href: "/panel/plan",
-        icon: "!",
+        icon: "alert",
         tone: "bg-warning text-white",
       };
     case "verification_approved":
-      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "✓", tone: "bg-seek text-white" };
+      return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "check", tone: "bg-seek text-white" };
     case "verification_rejected":
-      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "!", tone: "bg-warning text-white" };
+      return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "alert", tone: "bg-warning text-white" };
     default:
-      return { name, text: "tiene novedades para vos.", href: "#", icon: "•", tone: "bg-ink-muted text-white" };
+      return { name, text: "tiene novedades para vos.", href: "#", icon: "bell", tone: "bg-ink-muted text-white" };
   }
 }
 ---
@@ -10749,9 +11168,7 @@ function describe(n: NotificationView) {
   <section class="mx-auto max-w-2xl px-4 py-8">
     <div class="flex items-center justify-between gap-3">
       <h1 class="text-2xl font-bold">Notificaciones</h1>
-      <button type="button" class="inline-flex h-9 items-center gap-2 rounded-wl border border-line bg-surface px-3 text-sm font-medium hover:bg-surface-muted" data-sound-toggle aria-pressed="true">
-        <span data-sound-icon aria-hidden="true">🔔</span><span data-sound-label>Sonido activado</span>
-      </button>
+      <SoundToggle />
     </div>
 
     {
@@ -10770,8 +11187,8 @@ function describe(n: NotificationView) {
                 <a href={d.href} class:list={["flex gap-3 p-4 hover:bg-surface-muted", unread && "bg-seek-soft/60"]}>
                   <span class="relative shrink-0">
                     <Avatar name={d.name} path={n.actor?.avatar_path} size={48} />
-                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface text-xs font-bold", d.tone]} aria-hidden="true">
-                      {d.icon}
+                    <span class:list={["absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full border-2 border-surface", d.tone]} aria-hidden="true">
+                      <Icon name={d.icon} class="h-3.5 w-3.5" stroke={2.5} />
                     </span>
                   </span>
                   <span class="min-w-0 flex-1">
@@ -10802,23 +11219,6 @@ function describe(n: NotificationView) {
   </section>
 </BaseLayout>
 
-<script>
-  import { playChime, setSoundEnabled, soundEnabled } from "../scripts/sound";
-  const button = document.querySelector<HTMLButtonElement>("[data-sound-toggle]");
-  const render = () => {
-    if (!button) return;
-    const on = soundEnabled();
-    button.setAttribute("aria-pressed", String(on));
-    button.querySelector("[data-sound-icon]")!.textContent = on ? "🔔" : "🔕";
-    button.querySelector("[data-sound-label]")!.textContent = on ? "Sonido activado" : "Sonido apagado";
-  };
-  button?.addEventListener("click", () => {
-    setSoundEnabled(!soundEnabled());
-    render();
-    if (soundEnabled()) setTimeout(() => playChime("notification"), 50);
-  });
-  render();
-</script>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/p/[ref].astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11099,6 +11499,243 @@ const jsonLd =
   }
 </BaseLayout>
 
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/pages/panel/cuenta.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+---
+/**
+ * Configuración de la cuenta: email, contraseña, sonido, personas
+ * bloqueadas, sesiones abiertas, descargar mis datos y borrar la cuenta.
+ * Ruta protegida por el middleware (/panel). Cada formulario usa su Astro
+ * Action y, si sale bien, se redirige (POST → GET) con un mensaje.
+ */
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Icon from "../../components/ui/Icon.astro";
+import SoundToggle from "../../components/ui/SoundToggle.astro";
+import { getAccountInfo, getBlockedPeople } from "../../services/account";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+import type { IconName } from "../../config/icons";
+
+const { supabase, user } = Astro.locals;
+
+const emailResult = Astro.getActionResult(actions.account.changeEmail);
+const passwordResult = Astro.getActionResult(actions.account.changePassword);
+const everywhereResult = Astro.getActionResult(actions.account.signOutEverywhere);
+const unblockResult = Astro.getActionResult(actions.account.unblock);
+const deleteResult = Astro.getActionResult(actions.account.deleteAccount);
+
+if (emailResult && !emailResult.error) return Astro.redirect("/panel/cuenta?listo=email#email");
+if (passwordResult && !passwordResult.error) {
+  return Astro.redirect(`/panel/cuenta?listo=${passwordResult.data.created ? "password-creada" : "password"}#contrasena`);
+}
+if (everywhereResult && !everywhereResult.error) return Astro.redirect(everywhereResult.data.redirectTo);
+if (unblockResult && !unblockResult.error) return Astro.redirect("/panel/cuenta?listo=desbloqueo#bloqueados");
+if (deleteResult && !deleteResult.error) return Astro.redirect(deleteResult.data.redirectTo);
+
+const [info, blocked] = await Promise.all([getAccountInfo(supabase), getBlockedPeople(supabase, user!.id)]);
+if (!info) throw new Error("No pudimos leer la cuenta");
+
+const fieldsOf = (result: { error?: unknown } | undefined) =>
+  result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const messageOf = (result: { error?: { message: string } } | undefined) =>
+  result?.error && !isInputError(result.error) ? result.error.message : null;
+
+const emailFields = fieldsOf(emailResult);
+const passwordFields = fieldsOf(passwordResult);
+const deleteFields = fieldsOf(deleteResult);
+
+const done = Astro.url.searchParams.get("listo");
+const doneMessages: Record<string, string> = {
+  email: "Te mandamos un email para confirmar el cambio. Revisá tu bandeja de entrada (y la carpeta de spam). Hasta que lo confirmes, seguís entrando con tu email actual.",
+  "email-confirmado": "Listo, tu email quedó actualizado.",
+  password: "Listo, cambiaste tu contraseña. Por seguridad, cerramos tu sesión en los demás dispositivos.",
+  "password-creada": "Listo, ya tenés contraseña: ahora podés entrar con tu email o con Google.",
+  desbloqueo: "Listo, desbloqueaste a esa persona.",
+};
+const doneMessage = done ? doneMessages[done] : undefined;
+
+const usesGoogle = info.providers.includes("google");
+const sections: { id: string; label: string; icon: IconName }[] = [
+  { id: "email", label: "Email", icon: "mail" },
+  { id: "contrasena", label: "Contraseña", icon: "lock" },
+  { id: "avisos", label: "Avisos y sonido", icon: "bell" },
+  { id: "bloqueados", label: "Personas bloqueadas", icon: "ban" },
+  { id: "sesiones", label: "Sesiones", icon: "devices" },
+  { id: "datos", label: "Tus datos", icon: "download" },
+  { id: "borrar", label: "Borrar cuenta", icon: "trash" },
+];
+const card = "scroll-mt-24 rounded-wl-lg border border-line bg-surface p-5 sm:p-6";
+---
+
+<PanelLayout title="Configuración" description="Tu email, tu contraseña, tu privacidad y tus datos.">
+  {doneMessage && <Alert tone="success" class="mb-6">{doneMessage}</Alert>}
+
+  <div class="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+    <nav aria-label="Secciones de la configuración" class="hidden lg:block">
+      <ul class="sticky top-24 flex flex-col gap-0.5 text-sm">
+        {
+          sections.map((s) => (
+            <li>
+              <a href={`#${s.id}`} class:list={["flex items-center gap-2.5 rounded-wl px-3 py-2 font-medium hover:bg-surface-muted", s.id === "borrar" ? "text-danger" : "text-ink-muted hover:text-ink"]}>
+                <Icon name={s.icon} class="h-4 w-4" />
+                {s.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <div class="flex max-w-2xl flex-col gap-6">
+      <section id="email" class={card} aria-labelledby="email-t">
+        <h2 id="email-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="mail" class="h-5 w-5 text-ink-muted" />Email</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Entrás con <strong class="text-ink">{info.email}</strong>{usesGoogle && " (también con Google)"}. No se muestra en tu perfil.
+        </p>
+        {info.pending_email && (
+          <Alert tone="info" class="mt-4">
+            Falta confirmar el cambio a <strong>{info.pending_email}</strong>. Abrí el enlace que te mandamos por email.
+          </Alert>
+        )}
+        {messageOf(emailResult) && <Alert tone="danger" class="mt-4">{messageOf(emailResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(emailResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand hover:underline [&::-webkit-details-marker]:hidden">
+            Cambiar email <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <form method="POST" action={actions.account.changeEmail} class="mt-4 flex flex-col gap-4" novalidate>
+            <Field name="email" id="nuevo-email" label="Email nuevo" type="email" autocomplete="email" required error={emailFields.email?.[0]} hint="Te vamos a mandar un enlace para confirmarlo." />
+            <div><Button type="submit">Cambiar email</Button></div>
+          </form>
+        </details>
+      </section>
+
+      <section id="contrasena" class={card} aria-labelledby="contrasena-t">
+        <h2 id="contrasena-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="lock" class="h-5 w-5 text-ink-muted" />Contraseña</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          {info.has_password
+            ? "Usá una contraseña que no uses en otros sitios. Al cambiarla, se cierra tu sesión en los demás dispositivos."
+            : "Entraste con Google, así que todavía no tenés contraseña. Si creás una, también vas a poder entrar con tu email."}
+        </p>
+        {messageOf(passwordResult) && <Alert tone="danger" class="mt-4">{messageOf(passwordResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(passwordResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand hover:underline [&::-webkit-details-marker]:hidden">
+            {info.has_password ? "Cambiar contraseña" : "Crear una contraseña"} <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <form method="POST" action={actions.account.changePassword} class="mt-4 flex flex-col gap-4" novalidate>
+            {info.has_password && (
+              <Field name="current_password" id="password-actual" label="Contraseña actual" type="password" autocomplete="current-password" required error={passwordFields.current_password?.[0]} />
+            )}
+            <Field name="password" id="password-nueva" label="Contraseña nueva" type="password" autocomplete="new-password" required minlength={8} maxlength={72} error={passwordFields.password?.[0]} hint="Al menos 8 caracteres, con letras y números." />
+            <Field name="password_confirm" id="password-repetir" label="Repetí la contraseña nueva" type="password" autocomplete="new-password" required error={passwordFields.password_confirm?.[0]} />
+            <div class="flex flex-wrap items-center gap-4">
+              <Button type="submit">{info.has_password ? "Cambiar contraseña" : "Crear contraseña"}</Button>
+              {info.has_password && <a href="/recuperar" class="text-sm text-ink-muted underline hover:text-ink">Me olvidé la contraseña</a>}
+            </div>
+          </form>
+        </details>
+      </section>
+
+      <section id="avisos" class={card} aria-labelledby="avisos-t">
+        <h2 id="avisos-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="bell" class="h-5 w-5 text-ink-muted" />Avisos y sonido</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Cuando te llega un mensaje o una notificación, suena un aviso corto y se ve el número en la campanita. El sonido se guarda en este
+          dispositivo: si usás WorkLink en el celular y en la compu, elegilo en cada uno.
+        </p>
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <SoundToggle />
+          <a href="/notificaciones" class="text-sm font-semibold text-brand hover:underline">Ver mis notificaciones</a>
+        </div>
+      </section>
+
+      <section id="bloqueados" class={card} aria-labelledby="bloqueados-t">
+        <h2 id="bloqueados-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="ban" class="h-5 w-5 text-ink-muted" />Personas bloqueadas</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Quien está bloqueado no puede escribirte, comentar tus publicaciones ni mandarte propuestas, y dejan de seguirse. No le avisamos que lo bloqueaste.
+        </p>
+        {messageOf(unblockResult) && <Alert tone="danger" class="mt-4">{messageOf(unblockResult)}</Alert>}
+        {
+          blocked.length === 0 ? (
+            <p class="mt-4 rounded-wl border border-dashed border-line p-4 text-sm text-ink-muted">
+              No bloqueaste a nadie. Si alguien te molesta, entrá a su perfil y tocá <strong>Bloquear</strong>.
+            </p>
+          ) : (
+            <ul class="mt-4 divide-y divide-line rounded-wl border border-line">
+              {blocked.map((person) => (
+                <li class="flex items-center gap-3 p-3">
+                  <Avatar name={displayName(person)} path={person.avatar_path} size={40} />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate font-medium">{displayName(person)}</span>
+                    <span class="block text-xs text-ink-muted">Bloqueado el {formatDate(person.blocked_at, { day: "numeric", month: "long", year: "numeric" })}</span>
+                  </span>
+                  <form method="POST" action={actions.account.unblock}>
+                    <input type="hidden" name="profile_id" value={person.id} />
+                    <Button type="submit" variant="secondary" size="sm">Desbloquear</Button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </section>
+
+      <section id="sesiones" class={card} aria-labelledby="sesiones-t">
+        <h2 id="sesiones-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="devices" class="h-5 w-5 text-ink-muted" />Sesiones</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          ¿Entraste desde una compu que no es tuya o perdiste el celular? Cerrá la sesión en todos lados. Después vas a tener que ingresar de nuevo.
+        </p>
+        {messageOf(everywhereResult) && <Alert tone="danger" class="mt-4">{messageOf(everywhereResult)}</Alert>}
+        <form method="POST" action={actions.account.signOutEverywhere} class="mt-4">
+          <Button type="submit" variant="secondary"><Icon name="logout" class="h-4 w-4" />Cerrar todas las sesiones</Button>
+        </form>
+      </section>
+
+      <section id="datos" class={card} aria-labelledby="datos-t">
+        <h2 id="datos-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="download" class="h-5 w-5 text-ink-muted" />Tus datos</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Descargá una copia de todo lo que cargaste en WorkLink: perfil, emprendimientos, publicaciones, comentarios, necesidades, propuestas,
+          reseñas, mensajes que enviaste, a quién seguís y tus planes. Es un archivo de texto (JSON). Más información en la{" "}
+          <a href="/privacidad#derechos" class="underline hover:text-ink">política de privacidad</a>.
+        </p>
+        <div class="mt-4">
+          <Button href="/api/mis-datos" variant="secondary" download><Icon name="download" class="h-4 w-4" />Descargar mis datos</Button>
+        </div>
+      </section>
+
+      <section id="borrar" class="scroll-mt-24 rounded-wl-lg border border-danger/40 bg-surface p-5 sm:p-6" aria-labelledby="borrar-t">
+        <h2 id="borrar-t" class="flex items-center gap-2 text-lg font-semibold text-danger"><Icon name="trash" class="h-5 w-5" />Borrar mi cuenta</h2>
+        <p class="mt-1 text-sm text-ink-muted">Si te vas, borramos tu cuenta para siempre. No se puede deshacer.</p>
+        {messageOf(deleteResult) && <Alert tone="danger" class="mt-4">{messageOf(deleteResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(deleteResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-danger hover:underline [&::-webkit-details-marker]:hidden">
+            Quiero borrar mi cuenta <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <div class="mt-4 rounded-wl bg-danger-soft p-4 text-sm">
+            <p class="font-semibold">Qué pasa si la borrás:</p>
+            <ul class="mt-2 list-disc space-y-1 pl-5">
+              <li>Se borran tu perfil, tus fotos, tus publicaciones, tus emprendimientos (con su catálogo y reseñas), tus necesidades, propuestas, comentarios y mensajes.</li>
+              <li>Si tenés un plan, lo cancelamos en Mercado Pago para que no se te cobre más. Lo que ya pagaste no se devuelve (salvo el arrepentimiento de los 10 días).</li>
+              <li>Guardamos solo el registro de los pagos, porque la ley nos obliga a hacerlo.</li>
+              <li>Si querés quedarte con una copia, primero <a href="/api/mis-datos" class="underline" download>descargá tus datos</a>.</li>
+            </ul>
+          </div>
+          <form method="POST" action={actions.account.deleteAccount} class="mt-4 flex flex-col gap-4" novalidate>
+            <Field name="confirm" id="confirmar-borrado" label="Para confirmar, escribí BORRAR" autocomplete="off" autocapitalize="characters" spellcheck="false" required error={deleteFields.confirm?.[0]} />
+            {info.has_password && (
+              <Field name="current_password" id="password-borrar" label="Tu contraseña" type="password" autocomplete="current-password" required error={deleteFields.current_password?.[0]} />
+            )}
+            <div><Button type="submit" variant="danger">Borrar mi cuenta para siempre</Button></div>
+          </form>
+        </details>
+      </section>
+    </div>
+  </div>
+</PanelLayout>
 __WORKLINK_FIN_DEL_ARCHIVO__
 
 escribir 'src/pages/panel/emprendimientos/[id]/catalogo.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
@@ -11569,7 +12206,7 @@ const done = steps.filter((s) => s.done).length;
 const percent = Math.round((done / steps.length) * 100);
 ---
 
-<PanelLayout title="Primeros pasos" heading={`Hola${name ? `, ${name}` : ""} 👋`} description="Completá tu perfil para que te encuentren. Son solo unos minutos.">
+<PanelLayout title="Primeros pasos" heading={`¡Hola${name ? `, ${name}` : ""}!`} description="Completá tu perfil para que te encuentren. Son solo unos minutos.">
   {passwordUpdated && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
 
   <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -12543,8 +13180,8 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
     <p>
       Las fotos de tu DNI y tu selfie se usan <strong>solo</strong> para verificar tu identidad. Se guardan en un espacio privado, al que solo
       acceden vos y la administración de WorkLink, y las fotos se procesan en tu dispositivo antes de subirse para quitarles los datos ocultos
-      (como la ubicación). No las mostramos a nadie más ni las usamos para otra cosa. Podés pedirnos que las borremos cuando quieras; en ese
-      caso se quita también la verificación.
+      (como la ubicación). No las mostramos a nadie más ni las usamos para otra cosa. Podés pedirnos que las borremos cuando quieras (en ese
+      caso se quita también la verificación); si borrás tu cuenta, se borran solas.
     </p>
   </section>
 
@@ -12574,7 +13211,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
   <section>
     <h2 id="conservacion">8. Cuánto tiempo los guardamos</h2>
     <p>
-      Guardamos tus datos mientras tengas la cuenta. Si la borrás, eliminamos tus datos personales, salvo los que la ley nos obligue a conservar
+      Guardamos tus datos mientras tengas la cuenta. Podés borrarla cuando quieras desde Configuración. Si la borrás, eliminamos tus datos personales, salvo los que la ley nos obligue a conservar
       (por ejemplo, los registros de pagos por razones contables e impositivas). Los avisos leídos se borran solos a los 90 días.
     </p>
   </section>
@@ -12591,7 +13228,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
     <h2 id="derechos">10. Tus derechos</h2>
     <p>
       Podés pedir en cualquier momento <strong>acceder</strong> a tus datos, <strong>corregirlos</strong>, <strong>actualizarlos</strong> o
-      <strong>suprimirlos</strong>. La mayoría los podés cambiar vos mismo desde “Perfil y cuenta” (en el menú de tu foto). Para el resto, contactanos {contact}: respondemos los
+      <strong>suprimirlos</strong>. La mayoría los podés cambiar vos mismo desde “Editar perfil”, y en “Configuración” (en el menú de tu foto) podés descargar una copia de tus datos o borrar tu cuenta. Para el resto, contactanos {contact}: respondemos los
       pedidos de acceso dentro de los 10 días corridos y los de corrección o supresión dentro de los 5 días hábiles, como indica la Ley 25.326.
     </p>
     <p class="rounded-wl border border-line bg-surface p-4 text-sm">
@@ -13777,7 +14414,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
       <li>Para crear una cuenta tenés que ser mayor de 18 años y dar datos verdaderos.</li>
       <li>Podés registrarte con tu email o con tu cuenta de Google. Sos responsable de cuidar tu contraseña y de lo que se haga con tu cuenta.</li>
       <li>Una persona puede tener una sola cuenta personal. Las páginas de emprendimiento se crean desde esa cuenta.</li>
-      <li>Podés dejar de usar WorkLink y pedir que borremos tu cuenta cuando quieras.</li>
+      <li>Podés borrar tu cuenta cuando quieras desde el menú de tu foto → Configuración. Se borran tus datos y se cancelan tus planes.</li>
     </ul>
   </section>
 
@@ -13786,6 +14423,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
     <p>En WorkLink no está permitido:</p>
     <ul>
       <li>Publicar contenido falso, engañoso, ofensivo, discriminatorio, violento, sexual o que incite al odio.</li>
+      <li>Acosar o molestar a otras personas. Si alguien te molesta, podés bloquearlo desde su perfil.</li>
       <li>Hacerte pasar por otra persona o emprendimiento, o publicar datos personales de terceros sin su permiso.</li>
       <li>Ofrecer productos o servicios ilegales, estafar o pedir pagos por adelantado con engaños.</li>
       <li>Enviar spam, mensajes masivos no deseados o usar programas para automatizar el uso del sitio.</li>
@@ -13894,7 +14532,10 @@ escribir 'src/pages/u/[username]/index.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Si es el propio perfil: botones "Editar perfil" y caja para publicar.
  * No se indexa en buscadores (privacidad): lo indexable son los emprendimientos.
  */
+import { actions } from "astro:actions";
 import BaseLayout from "../../../layouts/BaseLayout.astro";
+import Icon from "../../../components/ui/Icon.astro";
+import { isBlockedByMe } from "../../../services/account";
 import Avatar from "../../../components/ui/Avatar.astro";
 import Button from "../../../components/ui/Button.astro";
 import FeedPage from "../../../components/posts/FeedPage.astro";
@@ -13926,17 +14567,23 @@ const profile = await getPublicProfile(supabase, username, { withContact: Boolea
 if (!profile) return Astro.rewrite("/404");
 
 const isMe = user?.id === profile.id;
+const blockResult = Astro.getActionResult(actions.account.block);
+const unblockResult = Astro.getActionResult(actions.account.unblock);
+if (blockResult && !blockResult.error) return Astro.redirect(`/u/${profile.username}?bloqueo=1`, 303);
+if (unblockResult && !unblockResult.error) return Astro.redirect(`/u/${profile.username}?bloqueo=0`, 303);
+const blockError = blockResult?.error?.message ?? unblockResult?.error?.message ?? null;
 const reviewForms = handleReviewActions(Astro, `/u/${profile.username}`);
 if (reviewForms.redirect) return Astro.redirect(reviewForms.redirect, 303);
 const reviewSubject = { type: "profile", id: profile.id } as const;
 const cursor = decodeCursor(Astro.url.searchParams.get("desde"));
-const [businesses, { posts, nextCursor }, following, viewer, { reviews }, reviewState] = await Promise.all([
+const [businesses, { posts, nextCursor }, following, viewer, { reviews }, reviewState, blockedByMe] = await Promise.all([
   getPublicBusinessesByOwner(supabase, profile.id),
   getFeed(supabase, { authorId: profile.id, cursor }),
   isMe ? Promise.resolve(false) : isFollowing(supabase, user?.id, "profile", profile.id),
   isMe ? getViewerProfile(Astro.locals) : Promise.resolve(null),
   cursor ? Promise.resolve({ reviews: [], hasMore: false }) : getReviews(supabase, reviewSubject, { limit: 3 }),
   getViewerReviewState(supabase, user?.id, reviewSubject),
+  isBlockedByMe(supabase, user?.id, profile.id),
 ]);
 const showReviews = !cursor && (profile.rating_count > 0 || Boolean(reviewState.mine) || canReview(reviewState.eligibility));
 const reviewNotice = REVIEW_NOTICES[Astro.url.searchParams.get("resena") ?? ""] ?? null;
@@ -13998,6 +14645,11 @@ const firstName = profile.first_name ?? name;
               <Button href="/panel/perfil">Editar perfil</Button>
               <Button href="/panel/publicaciones/nueva" variant="secondary">Publicar</Button>
             </>
+          ) : blockedByMe ? (
+            <form method="POST" action={`${base}${actions.account.unblock}`}>
+              <input type="hidden" name="profile_id" value={profile.id} />
+              <Button type="submit" variant="secondary">Desbloquear</Button>
+            </form>
           ) : (
             <>
               <FollowButton kind="profile" id={profile.id} following={following} returnTo={base} />
@@ -14014,6 +14666,13 @@ const firstName = profile.first_name ?? name;
     </div>
 
     {isMe && Astro.url.searchParams.get("guardado") === "1" && <Alert tone="success" class="mt-6">Guardamos los cambios de tu perfil.</Alert>}
+    {blockError && <Alert tone="danger" class="mt-6">{blockError}</Alert>}
+    {blockedByMe && (
+      <Alert tone="warning" class="mt-6">
+        Bloqueaste a {firstName}: no puede escribirte, comentar lo que publicás ni mandarte propuestas. No le avisamos. Podés desbloquearlo cuando quieras.
+      </Alert>
+    )}
+    {!blockedByMe && Astro.url.searchParams.get("bloqueo") === "0" && <Alert tone="success" class="mt-6">Desbloqueaste a {firstName}.</Alert>}
 
     <div class="mt-6 grid gap-6 md:grid-cols-[300px_minmax(0,1fr)] lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-8">
       <aside class="flex flex-col gap-4">
@@ -14022,14 +14681,30 @@ const firstName = profile.first_name ?? name;
           {profile.situation && <SituationBadge situation={profile.situation} size="md" class="mt-3" />}
           {profile.bio && <p class="mt-3 whitespace-pre-line text-sm">{profile.bio}</p>}
           <ul class="mt-3 flex flex-col gap-1.5 text-sm text-ink-muted">
-            {location && <li>📍 {location}</li>}
-            <li>📅 En WorkLink desde {formatMonthYear(profile.created_at)}</li>
-            {user && !isMe && <li><a href={`/denunciar?tipo=perfil&id=${profile.id}`} class="text-xs underline hover:text-danger">Denunciar perfil</a></li>}
+            {location && <li class="flex items-center gap-2"><Icon name="pin" class="h-4 w-4" />{location}</li>}
+            <li class="flex items-center gap-2"><Icon name="calendar" class="h-4 w-4" />En WorkLink desde {formatMonthYear(profile.created_at)}</li>
             {profile.instagram && <li><a href={instagramUrl(profile.instagram)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Instagram @{profile.instagram}</a></li>}
             {profile.tiktok && <li><a href={tiktokUrl(profile.tiktok)} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">TikTok @{profile.tiktok}</a></li>}
             {profile.facebook && <li><a href={profile.facebook.startsWith("http") ? profile.facebook : `https://${profile.facebook}`} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Facebook</a></li>}
             {profile.website && <li><a href={profile.website} target="_blank" rel="noopener nofollow" class="text-brand hover:underline">Sitio web</a></li>}
           </ul>
+          {user && !isMe && (
+            <div class="mt-4 flex flex-wrap items-start gap-x-4 gap-y-2 border-t border-line pt-3 text-xs text-ink-muted">
+              <a href={`/denunciar?tipo=perfil&id=${profile.id}`} class="underline hover:text-danger">Denunciar perfil</a>
+              {!blockedByMe && (
+                <details class="group w-full">
+                  <summary class="cursor-pointer list-none underline hover:text-danger [&::-webkit-details-marker]:hidden">Bloquear a {firstName}</summary>
+                  <div class="mt-2 rounded-wl bg-surface-muted p-3 text-sm text-ink">
+                    <p>Si bloqueás a {firstName}, no va a poder escribirte, comentar lo que publicás ni mandarte propuestas, y dejan de seguirse. No le avisamos.</p>
+                    <form method="POST" action={`${base}${actions.account.block}`} class="mt-3">
+                      <input type="hidden" name="profile_id" value={profile.id} />
+                      <Button type="submit" variant="danger" size="sm"><Icon name="ban" class="h-4 w-4" />Sí, bloquear</Button>
+                    </form>
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
           {isMe && !profile.situation && (
             <a href="/panel/perfil#situacion" class="mt-3 block rounded-wl bg-surface-muted px-3 py-2 text-sm">
               <strong>Completá tu situación:</strong> ¿buscás empleo, tenés un emprendimiento u ofrecés servicios?
@@ -14221,6 +14896,46 @@ if (data instanceof Response) return data;
 <FollowList data={data} />
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'src/schemas/account.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { z } from "astro/zod";
+import { emailSchema, passwordSchema } from "./auth";
+
+/**
+ * Validaciones de Configuración de la cuenta. Se usan en el servidor (Astro
+ * Actions); los permisos los controla la base y Supabase Auth.
+ */
+
+const currentPassword = z.preprocess(
+  (value) => (typeof value === "string" && value === "" ? undefined : value),
+  z.string().max(72).optional(),
+);
+
+export const changeEmailSchema = z.object({ email: emailSchema });
+
+export const changePasswordSchema = z
+  .object({
+    current_password: currentPassword,
+    password: passwordSchema,
+    password_confirm: z.string(),
+  })
+  .refine((data) => data.password === data.password_confirm, {
+    error: "Las contraseñas no coinciden",
+    path: ["password_confirm"],
+  });
+
+export const profileRefSchema = z.object({
+  profile_id: z.uuid({ error: "Cuenta inválida" }),
+});
+
+export const deleteAccountSchema = z.object({
+  confirm: z
+    .string({ error: "Escribí BORRAR para confirmar" })
+    .trim()
+    .refine((value) => value.toUpperCase() === "BORRAR", { error: "Escribí BORRAR (en mayúsculas) para confirmar" }),
+  current_password: currentPassword,
+});
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 escribir 'src/schemas/admin.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 import { z } from "astro/zod";
 import { optionalText } from "./common";
@@ -14248,7 +14963,7 @@ import { z } from "astro/zod";
  * sus mensajes se muestran en los formularios.
  */
 
-const email = z
+export const emailSchema = z
   .string({ error: "Ingresá tu email" })
   .trim()
   .toLowerCase()
@@ -14273,7 +14988,7 @@ const personName = (label: string) =>
 export const signUpSchema = z.object({
   first_name: personName("nombre"),
   last_name: personName("apellido"),
-  email,
+  email: emailSchema,
   password: passwordSchema,
   intent: z.enum(["seeker", "provider"], { error: "Elegí qué venís a hacer" }),
   accept_terms: z.boolean().refine((value) => value, {
@@ -14282,13 +14997,13 @@ export const signUpSchema = z.object({
 });
 
 export const signInSchema = z.object({
-  email,
+  email: emailSchema,
   password: z.string({ error: "Ingresá tu contraseña" }).min(1, { error: "Ingresá tu contraseña" }).max(72),
   next: z.string().max(500).optional(),
 });
 
 export const forgotPasswordSchema = z.object({
-  email,
+  email: emailSchema,
 });
 
 export const resetPasswordSchema = z
@@ -15009,6 +15724,7 @@ escribir 'src/scripts/chat-core.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  *  - envía sin recargar y trae los nuevos cada pocos segundos
  *  - muestra "Visto" cuando la otra persona leyó el último mensaje propio
  */
+import { iconSvg } from "../config/icons";
 import { actions } from "astro:actions";
 
 export interface ChatMessage {
@@ -15122,7 +15838,8 @@ export class ChatThread {
       const words = slug(message.post.title || message.post.body);
       link.href = `/p/${words ? `${words}-` : ""}${message.post.id}`;
       link.className = `mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs ${mine ? "border-white/30" : "border-line"}`;
-      link.append("📎 Publicación: ");
+      link.insertAdjacentHTML("beforeend", iconSvg("paperclip", "mr-1 inline h-3.5 w-3.5 align-[-2px]"));
+      link.append("Publicación: ");
       const strong = document.createElement("strong");
       strong.textContent = (message.post.title || message.post.body).slice(0, 60);
       link.append(strong);
@@ -15681,6 +16398,7 @@ escribir 'src/scripts/notifications.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Con la pestaña en segundo plano sigue consultando (más espaciado) para
  * sonar y mostrar "(2) WorkLink" en el título cuando llega algo nuevo.
  */
+import { iconSvg } from "../config/icons";
 import { playChime } from "./sound";
 
 const INTERVAL = 10_000;
@@ -15728,7 +16446,7 @@ function announce(latest: Latest) {
   const icon = document.createElement("span");
   icon.className = "grid h-9 w-9 shrink-0 place-items-center rounded-full bg-brand text-brand-contrast";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = "💬";
+  icon.innerHTML = iconSvg("chat", "h-5 w-5");
   const text = document.createElement("span");
   text.className = "min-w-0 flex-1";
   const title = document.createElement("strong");
@@ -15818,6 +16536,7 @@ escribir 'src/scripts/share-sheet.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
  * Todo el contenido de otras personas se inserta como texto (nunca HTML).
  */
 import { actions } from "astro:actions";
+import { iconSvg } from "../config/icons";
 
 interface Person {
   username: string;
@@ -15854,7 +16573,7 @@ function build(): HTMLDialogElement {
   d.innerHTML = `
     <div class="flex items-center justify-between border-b border-line px-4 py-3">
       <h2 id="share-title" class="text-lg font-bold">Compartir</h2>
-      <button type="button" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" data-share-close aria-label="Cerrar">✕</button>
+      <button type="button" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" data-share-close aria-label="Cerrar">${iconSvg("x")}</button>
     </div>
     <div class="flex max-h-[75vh] flex-col overflow-y-auto">
       <section class="px-4 pt-4" aria-labelledby="share-wl">
@@ -15875,9 +16594,9 @@ function build(): HTMLDialogElement {
       <section class="px-4 py-4" aria-labelledby="share-other">
         <h3 id="share-other" class="text-sm font-semibold">Otras formas</h3>
         <div class="mt-2 grid grid-cols-3 gap-2 text-sm">
-          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-copy><span aria-hidden="true" class="text-xl">🔗</span><span>Copiar enlace</span></button>
-          <a target="_blank" rel="noopener" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-whatsapp><span aria-hidden="true" class="text-xl">🟢</span><span>WhatsApp</span></a>
-          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-native><span aria-hidden="true" class="text-xl">⋯</span><span>Más</span></button>
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-copy><span class="text-ink-muted">${iconSvg("link", "h-6 w-6")}</span><span>Copiar enlace</span></button>
+          <a target="_blank" rel="noopener" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-whatsapp><span class="text-success">${iconSvg("phoneChat", "h-6 w-6")}</span><span>WhatsApp</span></a>
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-native><span class="text-ink-muted">${iconSvg("share", "h-6 w-6")}</span><span>Más</span></button>
         </div>
       </section>
     </div>`;
@@ -16292,6 +17011,252 @@ export function playChime(kind: "message" | "notification" = "notification") {
     osc.start(start);
     osc.stop(start + 0.4);
   });
+}
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/scripts/ui.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Detalles de terminación para todo el sitio:
+ *
+ * 1. Botones con "cargando": al enviar un formulario, el botón que se tocó
+ *    muestra una ruedita y el formulario no se puede mandar dos veces
+ *    (evita publicaciones o pagos duplicados por tocar dos veces).
+ *    Los formularios que maneja JavaScript (me gusta, chat, etc.) cancelan el
+ *    envío normal y por eso no se tocan. Para excluir uno: data-no-loading.
+ *
+ * 2. Barra de progreso arriba al cambiar de página, si tarda más de un
+ *    instante (así se nota que el toque funcionó aunque la conexión sea lenta).
+ *
+ * Al volver con "atrás" (la página sale del caché del navegador) se limpia todo.
+ */
+
+const BUSY = "data-loading";
+
+function reset() {
+  for (const button of document.querySelectorAll<HTMLElement>(`[${BUSY}]`)) {
+    button.removeAttribute(BUSY);
+    button.removeAttribute("aria-busy");
+  }
+  for (const form of document.querySelectorAll<HTMLFormElement>("form[data-submitting]")) {
+    delete form.dataset.submitting;
+  }
+  progress(false);
+}
+
+document.addEventListener("submit", (event) => {
+  const form = event.target as HTMLFormElement;
+  if (!(form instanceof HTMLFormElement) || form.hasAttribute("data-no-loading") || form.method === "dialog") return;
+
+  // Segundo toque mientras se envía: se ignora.
+  if (form.dataset.submitting) {
+    event.preventDefault();
+    return;
+  }
+
+  const submitter = (event.submitter as HTMLElement | null) ?? form.querySelector<HTMLElement>("button[type=submit], button:not([type])");
+  // Se decide después de que corran los demás manejadores (por si alguno
+  // envía con JavaScript y cancela el envío normal).
+  setTimeout(() => {
+    if (event.defaultPrevented) return;
+    form.dataset.submitting = "1";
+    if (submitter && !(submitter as HTMLButtonElement).formTarget && form.target !== "_blank") {
+      submitter.setAttribute(BUSY, "");
+      submitter.setAttribute("aria-busy", "true");
+    }
+    if (form.target !== "_blank") progress(true);
+    // Si por algo la página no cambia (descarga, error de red), se libera.
+    setTimeout(reset, 15000);
+  }, 0);
+});
+
+// --- Barra de progreso -------------------------------------------------------
+let bar: HTMLDivElement | null = null;
+let timer: number | undefined;
+
+function progress(on: boolean) {
+  window.clearTimeout(timer);
+  if (!on) {
+    bar?.remove();
+    bar = null;
+    return;
+  }
+  timer = window.setTimeout(() => {
+    if (bar) return;
+    bar = document.createElement("div");
+    bar.className = "wl-progress";
+    bar.setAttribute("aria-hidden", "true");
+    document.body.append(bar);
+  }, 150);
+}
+
+document.addEventListener("click", (event) => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const link = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+  if (!link || link.target === "_blank" || link.hasAttribute("download") || link.origin !== location.origin) return;
+  // Mismo documento (#ancla) o descarga de archivos de la API: no hay cambio de página.
+  if (link.pathname === location.pathname && link.search === location.search) return;
+  if (link.pathname.startsWith("/api/")) return;
+  setTimeout(() => {
+    if (!event.defaultPrevented) progress(true);
+  }, 0);
+});
+
+window.addEventListener("pageshow", reset);
+__WORKLINK_FIN_DEL_ARCHIVO__
+
+escribir 'src/services/account.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { PUBLIC_SUPABASE_ANON_KEY, PUBLIC_SUPABASE_URL } from "astro:env/client";
+import { cancelPreapproval, isMercadoPagoConfigured } from "../lib/mercadopago";
+
+/**
+ * Configuración de la cuenta: datos de acceso, bloqueos y borrado.
+ * Lo que es de cada persona se lee con SU sesión (RLS). El borrado de la
+ * cuenta es lo único que necesita el cliente de servicio, y solo se usa con
+ * el id de la sesión verificada (nunca con un id que mande el navegador).
+ */
+
+export interface AccountInfo {
+  email: string | null;
+  has_password: boolean;
+  pending_email: string | null;
+  providers: string[];
+  created_at: string;
+}
+
+export async function getAccountInfo(supabase: SupabaseClient): Promise<AccountInfo | null> {
+  const { data, error } = await supabase.rpc("my_account_info");
+  if (error) {
+    console.error("[account] info", error.code, error.message);
+    return null;
+  }
+  return data as AccountInfo | null;
+}
+
+export interface BlockedPerson {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_path: string | null;
+  blocked_at: string;
+}
+
+export async function getBlockedPeople(supabase: SupabaseClient, userId: string): Promise<BlockedPerson[]> {
+  const { data, error } = await supabase
+    .from("user_blocks")
+    .select("created_at, person:profiles!user_blocks_blocked_id_fkey ( id, username, first_name, last_name, avatar_path )")
+    .eq("blocker_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) {
+    console.error("[account] bloqueados", error.code, error.message);
+    return [];
+  }
+  return (data ?? []).flatMap((row) => {
+    const person = row.person as unknown as Omit<BlockedPerson, "blocked_at"> | null;
+    return person ? [{ ...person, blocked_at: row.created_at }] : [];
+  });
+}
+
+export async function isBlockedByMe(supabase: SupabaseClient, userId: string | undefined, profileId: string): Promise<boolean> {
+  if (!userId || userId === profileId) return false;
+  const { count } = await supabase
+    .from("user_blocks")
+    .select("blocked_id", { count: "exact", head: true })
+    .eq("blocker_id", userId)
+    .eq("blocked_id", profileId);
+  return (count ?? 0) > 0;
+}
+
+/**
+ * Comprueba la contraseña actual sin tocar la sesión del navegador: usa un
+ * cliente aparte, sin cookies, y cierra enseguida la sesión que abre.
+ */
+export async function checkPassword(email: string, password: string): Promise<boolean> {
+  const probe = createClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  const { data, error } = await probe.auth.signInWithPassword({ email, password });
+  if (error || !data.session) return false;
+  await probe.auth.signOut({ scope: "local" });
+  return true;
+}
+
+/** Motivo por el que no se puede borrar la cuenta todavía (o null si se puede). */
+export async function deletionBlocker(admin: SupabaseClient, userId: string): Promise<string | null> {
+  const { data: role } = await admin.from("user_roles").select("role").eq("user_id", userId).maybeSingle();
+  if (role?.role === "super_admin") {
+    const { count } = await admin.from("user_roles").select("user_id", { count: "exact", head: true }).eq("role", "super_admin");
+    if ((count ?? 0) <= 1) {
+      return "Sos la única persona con el rol principal de administración. Antes de borrar tu cuenta, dale ese rol a otra persona del equipo.";
+    }
+  }
+  return null;
+}
+
+/**
+ * Cancela en Mercado Pago los planes que se siguen cobrando, para que no se
+ * le cobre nada más a una cuenta borrada. Si no se puede cancelar alguno,
+ * corta (es mejor no borrar la cuenta que dejar un cobro vivo).
+ */
+export async function cancelLivePlans(admin: SupabaseClient, userId: string): Promise<void> {
+  const { data: subs, error } = await admin
+    .from("subscriptions")
+    .select("id, mp_preapproval_id, status")
+    .eq("user_id", userId)
+    .in("status", ["pending", "authorized", "paused"]);
+  if (error) throw new Error(error.message);
+
+  for (const sub of subs ?? []) {
+    if (sub.mp_preapproval_id) {
+      if (!isMercadoPagoConfigured()) throw new Error("Mercado Pago no está configurado");
+      await cancelPreapproval(sub.mp_preapproval_id);
+    }
+    const done = await admin.rpc("sub_sync", {
+      p_subscription_id: sub.id,
+      p_preapproval_id: sub.mp_preapproval_id,
+      p_status: "cancelled",
+      p_next_payment_at: null,
+    });
+    if (done.error) console.warn("[account] sub_sync", done.error.message);
+  }
+}
+
+const BUCKETS = ["avatars", "covers", "post-media", "verification"] as const;
+
+/**
+ * Borra todos los archivos de la persona (fotos, portadas, publicaciones,
+ * DNI y selfie). Todos viven en la carpeta `{user_id}/` de cada bucket.
+ * Un error acá no frena el borrado de la cuenta: se registra y sigue.
+ */
+export async function removeUserFiles(admin: SupabaseClient, userId: string): Promise<number> {
+  let removed = 0;
+  for (const bucket of BUCKETS) {
+    const storage = admin.storage.from(bucket);
+    for (let round = 0; round < 20; round++) {
+      const { data: entries, error } = await storage.list(userId, { limit: 100 });
+      if (error || !entries?.length) break;
+      const paths: string[] = [];
+      for (const entry of entries) {
+        if (entry.id) {
+          paths.push(`${userId}/${entry.name}`);
+          continue;
+        }
+        // Carpeta de una imagen o video: `{user_id}/{uuid}/{archivo}`.
+        const { data: files } = await storage.list(`${userId}/${entry.name}`, { limit: 100 });
+        for (const file of files ?? []) paths.push(`${userId}/${entry.name}/${file.name}`);
+      }
+      if (!paths.length) break;
+      const { error: removeError } = await storage.remove(paths);
+      if (removeError) {
+        console.warn("[account] no se pudieron borrar archivos", bucket, removeError.message);
+        break;
+      }
+      removed += paths.length;
+    }
+  }
+  return removed;
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
 
@@ -18801,6 +19766,61 @@ escribir 'src/styles/global.css' << '__WORKLINK_FIN_DEL_ARCHIVO__'
       animation-duration: 0.01ms !important;
       transition-duration: 0.01ms !important;
     }
+  }
+}
+
+/* --- Botón "cargando" (lo activa scripts/ui.ts al enviar un formulario) --- */
+[data-loading] {
+  --wl-loading-color: var(--wl-ink-muted);
+  position: relative;
+  pointer-events: none;
+  color: transparent !important;
+  transition: none !important;
+}
+[data-loading] > * {
+  visibility: hidden;
+}
+[data-loading]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 9999px;
+  border: 2px solid var(--wl-loading-color);
+  border-right-color: transparent;
+  animation: wl-spin 0.7s linear infinite;
+}
+/* El texto queda transparente: la ruedita toma el color que tenía el texto. */
+.bg-brand[data-loading],
+.bg-danger[data-loading],
+.bg-seek[data-loading],
+.bg-offer[data-loading] {
+  --wl-loading-color: #fff;
+}
+@keyframes wl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Barra de progreso al cambiar de página --- */
+.wl-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 100;
+  height: 3px;
+  background: linear-gradient(90deg, var(--wl-brand), var(--wl-seek), var(--wl-offer));
+  transform-origin: left;
+  animation: wl-progress 8s cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+@keyframes wl-progress {
+  from {
+    transform: scaleX(0.05);
+  }
+  to {
+    transform: scaleX(0.92);
   }
 }
 __WORKLINK_FIN_DEL_ARCHIVO__
@@ -22537,13 +23557,168 @@ grant execute on function public.suggested_business_ids(integer) to authenticate
 notify pgrst, 'reload schema';
 __WORKLINK_FIN_DEL_ARCHIVO__
 
+escribir 'supabase/migrations/20261008003000_account_settings.sql' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+-- =============================================================================
+-- 0030 · Configuración de la cuenta: descargar mis datos y borrar la cuenta
+-- =============================================================================
+-- * Al borrar una cuenta se borran sus datos personales (todo cuelga de
+--   profiles con ON DELETE CASCADE), PERO los registros de cobros se conservan
+--   (obligación contable/impositiva, ver Política de privacidad punto 8): las
+--   suscripciones y pagos quedan sin usuario (user_id = null), con el email
+--   de Mercado Pago que ya tenían.
+-- * Un aviso de Mercado Pago que llegue tarde para una cuenta borrada no debe
+--   romper nada: los avisos sin destinatario se descartan.
+-- * export_my_data(): todo lo que la persona cargó, en un JSON (derecho de
+--   acceso, Ley 25.326). Solo devuelve los datos de quien la llama.
+-- * my_account_info(): si tiene contraseña, email pendiente y proveedores.
+-- =============================================================================
+
+-- 1) Los cobros se conservan aunque se borre la cuenta -----------------------
+alter table public.subscriptions alter column user_id drop not null;
+alter table public.subscriptions drop constraint subscriptions_user_id_fkey;
+alter table public.subscriptions
+  add constraint subscriptions_user_id_fkey foreign key (user_id) references public.profiles (id) on delete set null;
+
+alter table public.subscription_payments alter column user_id drop not null;
+alter table public.subscription_payments drop constraint subscription_payments_user_id_fkey;
+alter table public.subscription_payments
+  add constraint subscription_payments_user_id_fkey foreign key (user_id) references public.profiles (id) on delete set null;
+
+-- 2) Avisos sin destinatario (cuenta borrada): se descartan en silencio ------
+create or replace function public.tg_notifications_skip_orphans()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.recipient_id is null then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists notifications_skip_orphans on public.notifications;
+create trigger notifications_skip_orphans
+  before insert on public.notifications
+  for each row execute function public.tg_notifications_skip_orphans();
+
+-- 3) Descargar mis datos -------------------------------------------------------
+create or replace function public.export_my_data()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  me uuid := (select auth.uid());
+begin
+  if me is null then
+    raise exception 'Ingresá para descargar tus datos' using errcode = '42501';
+  end if;
+
+  return jsonb_build_object(
+    'generado', now(),
+    'cuenta', (
+      select jsonb_build_object('email', u.email, 'creada', u.created_at, 'ultimo_ingreso', u.last_sign_in_at)
+      from auth.users u where u.id = me
+    ),
+    'perfil', (select to_jsonb(p) - 'rating_sum' from public.profiles p where p.id = me),
+    'emprendimientos', coalesce((
+      select jsonb_agg(to_jsonb(b) order by b.created_at) from public.businesses b where b.owner_id = me
+    ), '[]'::jsonb),
+    'publicaciones', coalesce((
+      select jsonb_agg(to_jsonb(po) order by po.created_at) from public.posts po where po.author_id = me
+    ), '[]'::jsonb),
+    'comentarios', coalesce((
+      select jsonb_agg(to_jsonb(c) order by c.created_at) from public.post_comments c where c.author_id = me
+    ), '[]'::jsonb),
+    'necesidades', coalesce((
+      select jsonb_agg(to_jsonb(n) order by n.created_at) from public.needs n where n.author_id = me
+    ), '[]'::jsonb),
+    'propuestas', coalesce((
+      select jsonb_agg(to_jsonb(pr) order by pr.created_at) from public.proposals pr where pr.author_id = me
+    ), '[]'::jsonb),
+    'resenas_escritas', coalesce((
+      select jsonb_agg(to_jsonb(r) - 'reports_count' order by r.created_at) from public.reviews r where r.author_id = me
+    ), '[]'::jsonb),
+    'mensajes_enviados', coalesce((
+      select jsonb_agg(jsonb_build_object('conversacion', m.conversation_id, 'texto', m.body, 'publicacion', m.post_id, 'fecha', m.created_at) order by m.created_at)
+      from public.messages m where m.sender_id = me
+    ), '[]'::jsonb),
+    'personas_que_seguis', coalesce((
+      select jsonb_agg(jsonb_build_object('usuario', p.username, 'desde', f.created_at) order by f.created_at)
+      from public.profile_follows f join public.profiles p on p.id = f.followed_id where f.follower_id = me
+    ), '[]'::jsonb),
+    'emprendimientos_que_seguis', coalesce((
+      select jsonb_agg(jsonb_build_object('emprendimiento', b.slug, 'desde', f.created_at) order by f.created_at)
+      from public.business_follows f join public.businesses b on b.id = f.business_id where f.follower_id = me
+    ), '[]'::jsonb),
+    'guardados', coalesce((
+      select jsonb_agg(jsonb_build_object('publicacion', s.post_id, 'fecha', s.created_at) order by s.created_at)
+      from public.post_saves s where s.user_id = me
+    ), '[]'::jsonb),
+    'bloqueados', coalesce((
+      select jsonb_agg(jsonb_build_object('usuario', p.username, 'desde', ub.created_at) order by ub.created_at)
+      from public.user_blocks ub join public.profiles p on p.id = ub.blocked_id where ub.blocker_id = me
+    ), '[]'::jsonb),
+    'planes', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'plan', s.plan_id, 'estado', s.status, 'precio', s.price, 'email_mercado_pago', s.payer_email,
+        'pagado_hasta', s.paid_through, 'inicio', s.started_at, 'cancelado', s.cancelled_at, 'creado', s.created_at
+      ) order by s.created_at)
+      from public.subscriptions s where s.user_id = me
+    ), '[]'::jsonb),
+    'pagos', coalesce((
+      select jsonb_agg(jsonb_build_object('plan', sp.plan_id, 'estado', sp.status, 'monto', sp.amount, 'fecha', sp.paid_at) order by sp.created_at)
+      from public.subscription_payments sp where sp.user_id = me
+    ), '[]'::jsonb),
+    'verificacion', coalesce((
+      select jsonb_agg(jsonb_build_object('estado', v.status, 'motivo', v.reject_reason, 'enviada', v.created_at, 'revisada', v.reviewed_at) order by v.created_at)
+      from public.verification_requests v where v.user_id = me
+    ), '[]'::jsonb)
+  );
+end;
+$$;
+
+revoke execute on function public.export_my_data() from public, anon;
+grant execute on function public.export_my_data() to authenticated;
+
+-- 4) Datos de acceso de la propia cuenta (para la pantalla Configuración) ----
+-- ¿Tiene contraseña? (quien entró con Google puede no tenerla), si hay un
+-- cambio de email esperando confirmación y con qué entra.
+create or replace function public.my_account_info()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'email', u.email,
+    'has_password', coalesce(u.encrypted_password, '') <> '',
+    'pending_email', nullif(u.email_change, ''),
+    'providers', coalesce(u.raw_app_meta_data -> 'providers', '[]'::jsonb),
+    'created_at', u.created_at
+  )
+  from auth.users u
+  where u.id = (select auth.uid());
+$$;
+
+revoke execute on function public.my_account_info() from public, anon;
+grant execute on function public.my_account_info() to authenticated;
+
+notify pgrst, 'reload schema';
+__WORKLINK_FIN_DEL_ARCHIVO__
+
 # Comando para importar localidades (se agrega a package.json sin tocar lo demás).
 npm pkg set "scripts.db:localidades=node scripts/importar-localidades.mjs"
 echo "  ✓ package.json (script db:localidades)"
 
 echo ""
 echo "============================================================"
-echo " Listo. 223 archivos de las mejoras instalados."
+echo " Listo. 234 archivos de las mejoras instalados."
 echo " Siguientes pasos:"
 echo "   1) npx supabase db push"
 echo "   2) git add . / git commit / git push"

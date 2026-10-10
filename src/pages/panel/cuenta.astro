@@ -1,0 +1,234 @@
+---
+/**
+ * Configuración de la cuenta: email, contraseña, sonido, personas
+ * bloqueadas, sesiones abiertas, descargar mis datos y borrar la cuenta.
+ * Ruta protegida por el middleware (/panel). Cada formulario usa su Astro
+ * Action y, si sale bien, se redirige (POST → GET) con un mensaje.
+ */
+import { actions, isInputError } from "astro:actions";
+import PanelLayout from "../../layouts/PanelLayout.astro";
+import Field from "../../components/ui/Field.astro";
+import Button from "../../components/ui/Button.astro";
+import Alert from "../../components/ui/Alert.astro";
+import Avatar from "../../components/ui/Avatar.astro";
+import Icon from "../../components/ui/Icon.astro";
+import SoundToggle from "../../components/ui/SoundToggle.astro";
+import { getAccountInfo, getBlockedPeople } from "../../services/account";
+import { displayName } from "../../services/profiles";
+import { formatDate } from "../../lib/format";
+import type { IconName } from "../../config/icons";
+
+const { supabase, user } = Astro.locals;
+
+const emailResult = Astro.getActionResult(actions.account.changeEmail);
+const passwordResult = Astro.getActionResult(actions.account.changePassword);
+const everywhereResult = Astro.getActionResult(actions.account.signOutEverywhere);
+const unblockResult = Astro.getActionResult(actions.account.unblock);
+const deleteResult = Astro.getActionResult(actions.account.deleteAccount);
+
+if (emailResult && !emailResult.error) return Astro.redirect("/panel/cuenta?listo=email#email");
+if (passwordResult && !passwordResult.error) {
+  return Astro.redirect(`/panel/cuenta?listo=${passwordResult.data.created ? "password-creada" : "password"}#contrasena`);
+}
+if (everywhereResult && !everywhereResult.error) return Astro.redirect(everywhereResult.data.redirectTo);
+if (unblockResult && !unblockResult.error) return Astro.redirect("/panel/cuenta?listo=desbloqueo#bloqueados");
+if (deleteResult && !deleteResult.error) return Astro.redirect(deleteResult.data.redirectTo);
+
+const [info, blocked] = await Promise.all([getAccountInfo(supabase), getBlockedPeople(supabase, user!.id)]);
+if (!info) throw new Error("No pudimos leer la cuenta");
+
+const fieldsOf = (result: { error?: unknown } | undefined) =>
+  result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const messageOf = (result: { error?: { message: string } } | undefined) =>
+  result?.error && !isInputError(result.error) ? result.error.message : null;
+
+const emailFields = fieldsOf(emailResult);
+const passwordFields = fieldsOf(passwordResult);
+const deleteFields = fieldsOf(deleteResult);
+
+const done = Astro.url.searchParams.get("listo");
+const doneMessages: Record<string, string> = {
+  email: "Te mandamos un email para confirmar el cambio. Revisá tu bandeja de entrada (y la carpeta de spam). Hasta que lo confirmes, seguís entrando con tu email actual.",
+  "email-confirmado": "Listo, tu email quedó actualizado.",
+  password: "Listo, cambiaste tu contraseña. Por seguridad, cerramos tu sesión en los demás dispositivos.",
+  "password-creada": "Listo, ya tenés contraseña: ahora podés entrar con tu email o con Google.",
+  desbloqueo: "Listo, desbloqueaste a esa persona.",
+};
+const doneMessage = done ? doneMessages[done] : undefined;
+
+const usesGoogle = info.providers.includes("google");
+const sections: { id: string; label: string; icon: IconName }[] = [
+  { id: "email", label: "Email", icon: "mail" },
+  { id: "contrasena", label: "Contraseña", icon: "lock" },
+  { id: "avisos", label: "Avisos y sonido", icon: "bell" },
+  { id: "bloqueados", label: "Personas bloqueadas", icon: "ban" },
+  { id: "sesiones", label: "Sesiones", icon: "devices" },
+  { id: "datos", label: "Tus datos", icon: "download" },
+  { id: "borrar", label: "Borrar cuenta", icon: "trash" },
+];
+const card = "scroll-mt-24 rounded-wl-lg border border-line bg-surface p-5 sm:p-6";
+---
+
+<PanelLayout title="Configuración" description="Tu email, tu contraseña, tu privacidad y tus datos.">
+  {doneMessage && <Alert tone="success" class="mb-6">{doneMessage}</Alert>}
+
+  <div class="grid gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+    <nav aria-label="Secciones de la configuración" class="hidden lg:block">
+      <ul class="sticky top-24 flex flex-col gap-0.5 text-sm">
+        {
+          sections.map((s) => (
+            <li>
+              <a href={`#${s.id}`} class:list={["flex items-center gap-2.5 rounded-wl px-3 py-2 font-medium hover:bg-surface-muted", s.id === "borrar" ? "text-danger" : "text-ink-muted hover:text-ink"]}>
+                <Icon name={s.icon} class="h-4 w-4" />
+                {s.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <div class="flex max-w-2xl flex-col gap-6">
+      <section id="email" class={card} aria-labelledby="email-t">
+        <h2 id="email-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="mail" class="h-5 w-5 text-ink-muted" />Email</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Entrás con <strong class="text-ink">{info.email}</strong>{usesGoogle && " (también con Google)"}. No se muestra en tu perfil.
+        </p>
+        {info.pending_email && (
+          <Alert tone="info" class="mt-4">
+            Falta confirmar el cambio a <strong>{info.pending_email}</strong>. Abrí el enlace que te mandamos por email.
+          </Alert>
+        )}
+        {messageOf(emailResult) && <Alert tone="danger" class="mt-4">{messageOf(emailResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(emailResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand hover:underline [&::-webkit-details-marker]:hidden">
+            Cambiar email <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <form method="POST" action={actions.account.changeEmail} class="mt-4 flex flex-col gap-4" novalidate>
+            <Field name="email" id="nuevo-email" label="Email nuevo" type="email" autocomplete="email" required error={emailFields.email?.[0]} hint="Te vamos a mandar un enlace para confirmarlo." />
+            <div><Button type="submit">Cambiar email</Button></div>
+          </form>
+        </details>
+      </section>
+
+      <section id="contrasena" class={card} aria-labelledby="contrasena-t">
+        <h2 id="contrasena-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="lock" class="h-5 w-5 text-ink-muted" />Contraseña</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          {info.has_password
+            ? "Usá una contraseña que no uses en otros sitios. Al cambiarla, se cierra tu sesión en los demás dispositivos."
+            : "Entraste con Google, así que todavía no tenés contraseña. Si creás una, también vas a poder entrar con tu email."}
+        </p>
+        {messageOf(passwordResult) && <Alert tone="danger" class="mt-4">{messageOf(passwordResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(passwordResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-brand hover:underline [&::-webkit-details-marker]:hidden">
+            {info.has_password ? "Cambiar contraseña" : "Crear una contraseña"} <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <form method="POST" action={actions.account.changePassword} class="mt-4 flex flex-col gap-4" novalidate>
+            {info.has_password && (
+              <Field name="current_password" id="password-actual" label="Contraseña actual" type="password" autocomplete="current-password" required error={passwordFields.current_password?.[0]} />
+            )}
+            <Field name="password" id="password-nueva" label="Contraseña nueva" type="password" autocomplete="new-password" required minlength={8} maxlength={72} error={passwordFields.password?.[0]} hint="Al menos 8 caracteres, con letras y números." />
+            <Field name="password_confirm" id="password-repetir" label="Repetí la contraseña nueva" type="password" autocomplete="new-password" required error={passwordFields.password_confirm?.[0]} />
+            <div class="flex flex-wrap items-center gap-4">
+              <Button type="submit">{info.has_password ? "Cambiar contraseña" : "Crear contraseña"}</Button>
+              {info.has_password && <a href="/recuperar" class="text-sm text-ink-muted underline hover:text-ink">Me olvidé la contraseña</a>}
+            </div>
+          </form>
+        </details>
+      </section>
+
+      <section id="avisos" class={card} aria-labelledby="avisos-t">
+        <h2 id="avisos-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="bell" class="h-5 w-5 text-ink-muted" />Avisos y sonido</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Cuando te llega un mensaje o una notificación, suena un aviso corto y se ve el número en la campanita. El sonido se guarda en este
+          dispositivo: si usás WorkLink en el celular y en la compu, elegilo en cada uno.
+        </p>
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <SoundToggle />
+          <a href="/notificaciones" class="text-sm font-semibold text-brand hover:underline">Ver mis notificaciones</a>
+        </div>
+      </section>
+
+      <section id="bloqueados" class={card} aria-labelledby="bloqueados-t">
+        <h2 id="bloqueados-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="ban" class="h-5 w-5 text-ink-muted" />Personas bloqueadas</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Quien está bloqueado no puede escribirte, comentar tus publicaciones ni mandarte propuestas, y dejan de seguirse. No le avisamos que lo bloqueaste.
+        </p>
+        {messageOf(unblockResult) && <Alert tone="danger" class="mt-4">{messageOf(unblockResult)}</Alert>}
+        {
+          blocked.length === 0 ? (
+            <p class="mt-4 rounded-wl border border-dashed border-line p-4 text-sm text-ink-muted">
+              No bloqueaste a nadie. Si alguien te molesta, entrá a su perfil y tocá <strong>Bloquear</strong>.
+            </p>
+          ) : (
+            <ul class="mt-4 divide-y divide-line rounded-wl border border-line">
+              {blocked.map((person) => (
+                <li class="flex items-center gap-3 p-3">
+                  <Avatar name={displayName(person)} path={person.avatar_path} size={40} />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate font-medium">{displayName(person)}</span>
+                    <span class="block text-xs text-ink-muted">Bloqueado el {formatDate(person.blocked_at, { day: "numeric", month: "long", year: "numeric" })}</span>
+                  </span>
+                  <form method="POST" action={actions.account.unblock}>
+                    <input type="hidden" name="profile_id" value={person.id} />
+                    <Button type="submit" variant="secondary" size="sm">Desbloquear</Button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </section>
+
+      <section id="sesiones" class={card} aria-labelledby="sesiones-t">
+        <h2 id="sesiones-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="devices" class="h-5 w-5 text-ink-muted" />Sesiones</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          ¿Entraste desde una compu que no es tuya o perdiste el celular? Cerrá la sesión en todos lados. Después vas a tener que ingresar de nuevo.
+        </p>
+        {messageOf(everywhereResult) && <Alert tone="danger" class="mt-4">{messageOf(everywhereResult)}</Alert>}
+        <form method="POST" action={actions.account.signOutEverywhere} class="mt-4">
+          <Button type="submit" variant="secondary"><Icon name="logout" class="h-4 w-4" />Cerrar todas las sesiones</Button>
+        </form>
+      </section>
+
+      <section id="datos" class={card} aria-labelledby="datos-t">
+        <h2 id="datos-t" class="flex items-center gap-2 text-lg font-semibold"><Icon name="download" class="h-5 w-5 text-ink-muted" />Tus datos</h2>
+        <p class="mt-1 text-sm text-ink-muted">
+          Descargá una copia de todo lo que cargaste en WorkLink: perfil, emprendimientos, publicaciones, comentarios, necesidades, propuestas,
+          reseñas, mensajes que enviaste, a quién seguís y tus planes. Es un archivo de texto (JSON). Más información en la{" "}
+          <a href="/privacidad#derechos" class="underline hover:text-ink">política de privacidad</a>.
+        </p>
+        <div class="mt-4">
+          <Button href="/api/mis-datos" variant="secondary" download><Icon name="download" class="h-4 w-4" />Descargar mis datos</Button>
+        </div>
+      </section>
+
+      <section id="borrar" class="scroll-mt-24 rounded-wl-lg border border-danger/40 bg-surface p-5 sm:p-6" aria-labelledby="borrar-t">
+        <h2 id="borrar-t" class="flex items-center gap-2 text-lg font-semibold text-danger"><Icon name="trash" class="h-5 w-5" />Borrar mi cuenta</h2>
+        <p class="mt-1 text-sm text-ink-muted">Si te vas, borramos tu cuenta para siempre. No se puede deshacer.</p>
+        {messageOf(deleteResult) && <Alert tone="danger" class="mt-4">{messageOf(deleteResult)}</Alert>}
+        <details class="group mt-4" open={Boolean(deleteResult?.error)}>
+          <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-sm font-semibold text-danger hover:underline [&::-webkit-details-marker]:hidden">
+            Quiero borrar mi cuenta <Icon name="chevronRight" class="h-4 w-4 transition-transform group-open:rotate-90" />
+          </summary>
+          <div class="mt-4 rounded-wl bg-danger-soft p-4 text-sm">
+            <p class="font-semibold">Qué pasa si la borrás:</p>
+            <ul class="mt-2 list-disc space-y-1 pl-5">
+              <li>Se borran tu perfil, tus fotos, tus publicaciones, tus emprendimientos (con su catálogo y reseñas), tus necesidades, propuestas, comentarios y mensajes.</li>
+              <li>Si tenés un plan, lo cancelamos en Mercado Pago para que no se te cobre más. Lo que ya pagaste no se devuelve (salvo el arrepentimiento de los 10 días).</li>
+              <li>Guardamos solo el registro de los pagos, porque la ley nos obliga a hacerlo.</li>
+              <li>Si querés quedarte con una copia, primero <a href="/api/mis-datos" class="underline" download>descargá tus datos</a>.</li>
+            </ul>
+          </div>
+          <form method="POST" action={actions.account.deleteAccount} class="mt-4 flex flex-col gap-4" novalidate>
+            <Field name="confirm" id="confirmar-borrado" label="Para confirmar, escribí BORRAR" autocomplete="off" autocapitalize="characters" spellcheck="false" required error={deleteFields.confirm?.[0]} />
+            {info.has_password && (
+              <Field name="current_password" id="password-borrar" label="Tu contraseña" type="password" autocomplete="current-password" required error={deleteFields.current_password?.[0]} />
+            )}
+            <div><Button type="submit" variant="danger">Borrar mi cuenta para siempre</Button></div>
+          </form>
+        </details>
+      </section>
+    </div>
+  </div>
+</PanelLayout>

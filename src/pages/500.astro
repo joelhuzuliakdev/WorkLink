@@ -1,0 +1,27 @@
+---
+/**
+ * Página de error del servidor. Astro la muestra cuando algo falla al armar
+ * una página. Nunca muestra detalles técnicos (se registran en el servidor).
+ */
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Button from "../components/ui/Button.astro";
+import Icon from "../components/ui/Icon.astro";
+
+interface Props {
+  error?: unknown;
+}
+
+if (Astro.props.error) console.error("[500]", Astro.url.pathname, Astro.props.error);
+---
+
+<BaseLayout title="Algo salió mal" noindex>
+  <section class="mx-auto max-w-xl px-4 py-20 text-center">
+    <span class="mx-auto grid h-14 w-14 place-items-center rounded-full bg-warning-soft text-warning"><Icon name="alert" class="h-7 w-7" /></span>
+    <h1 class="mt-4 text-3xl font-bold">Algo salió mal</h1>
+    <p class="mt-3 text-ink-muted">Tuvimos un problema para mostrar esta página. Ya quedó registrado. Probá de nuevo en un ratito.</p>
+    <div class="mt-8 flex flex-wrap justify-center gap-3">
+      <Button href={Astro.url.pathname}>Probar de nuevo</Button>
+      <Button href="/" variant="secondary">Ir al inicio</Button>
+    </div>
+  </section>
+</BaseLayout>

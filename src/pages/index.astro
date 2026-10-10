@@ -11,8 +11,11 @@ import Landing from "../components/home/Landing.astro";
 import { getViewerProfile } from "../lib/viewer";
 import { jsonLdScript } from "../lib/seo/business";
 import { brand } from "../config/brand";
+import Alert from "../components/ui/Alert.astro";
 
 const viewer = await getViewerProfile(Astro.locals);
+
+const accountDeleted = !viewer && Astro.url.searchParams.get("cuenta") === "borrada";
 
 const site = Astro.site ?? new URL(Astro.url.origin);
 // Datos estructurados: Google puede mostrar la caja de búsqueda del sitio.
@@ -42,6 +45,11 @@ const websiteJsonLd = {
       canonicalPath="/"
     >
       <script slot="head" type="application/ld+json" set:html={jsonLdScript(websiteJsonLd)} />
+      {accountDeleted && (
+        <div class="mx-auto max-w-6xl px-4 pt-6">
+          <Alert tone="success">Borramos tu cuenta y tus datos. Gracias por haber sido parte de WorkLink.</Alert>
+        </div>
+      )}
       <Landing />
     </BaseLayout>
   )

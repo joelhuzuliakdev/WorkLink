@@ -5,6 +5,7 @@
  *  - envía sin recargar y trae los nuevos cada pocos segundos
  *  - muestra "Visto" cuando la otra persona leyó el último mensaje propio
  */
+import { iconSvg } from "../config/icons";
 import { actions } from "astro:actions";
 
 export interface ChatMessage {
@@ -118,7 +119,8 @@ export class ChatThread {
       const words = slug(message.post.title || message.post.body);
       link.href = `/p/${words ? `${words}-` : ""}${message.post.id}`;
       link.className = `mb-1.5 block rounded-wl border px-2.5 py-1.5 text-xs ${mine ? "border-white/30" : "border-line"}`;
-      link.append("📎 Publicación: ");
+      link.insertAdjacentHTML("beforeend", iconSvg("paperclip", "mr-1 inline h-3.5 w-3.5 align-[-2px]"));
+      link.append("Publicación: ");
       const strong = document.createElement("strong");
       strong.textContent = (message.post.title || message.post.body).slice(0, 60);
       link.append(strong);

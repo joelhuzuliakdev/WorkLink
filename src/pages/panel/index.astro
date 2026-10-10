@@ -33,7 +33,7 @@ const done = steps.filter((s) => s.done).length;
 const percent = Math.round((done / steps.length) * 100);
 ---
 
-<PanelLayout title="Primeros pasos" heading={`Hola${name ? `, ${name}` : ""} 👋`} description="Completá tu perfil para que te encuentren. Son solo unos minutos.">
+<PanelLayout title="Primeros pasos" heading={`¡Hola${name ? `, ${name}` : ""}!`} description="Completá tu perfil para que te encuentren. Son solo unos minutos.">
   {passwordUpdated && <Alert tone="success" class="mb-6">Listo, cambiaste tu contraseña.</Alert>}
 
   <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">

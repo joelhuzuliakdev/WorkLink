@@ -26,7 +26,8 @@ const links = [
   { href: "/panel/necesidades", label: "Necesidades y propuestas", active: path.startsWith("/panel/necesidades") },
   { href: "/panel/guardados", label: "Guardados", active: path.startsWith("/panel/guardados") },
   { href: "/panel/plan", label: "Mi plan", active: path.startsWith("/panel/plan") },
-  { href: "/panel/perfil", label: "Perfil y cuenta", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/perfil", label: "Editar perfil", active: path.startsWith("/panel/perfil") },
+  { href: "/panel/cuenta", label: "Configuración", active: path.startsWith("/panel/cuenta") },
   ...(viewer?.role ? [{ href: "/admin", label: "Administración", active: false }] : []),
 ];
 ---

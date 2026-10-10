@@ -1,5 +1,8 @@
 ---
-/** Mensaje destacado (error, éxito, aviso, información). */
+/** Mensaje destacado (error, éxito, aviso, información), con su ícono. */
+import Icon from "./Icon.astro";
+import type { IconName } from "../../config/icons";
+
 interface Props {
   tone?: "info" | "success" | "warning" | "danger";
   title?: string;
@@ -14,12 +17,22 @@ const tones = {
   warning: "border-warning/30 bg-warning-soft text-ink",
   danger: "border-danger/30 bg-danger-soft text-ink",
 } as const;
+
+const icon: Record<typeof tone, { name: IconName; class: string }> = {
+  info: { name: "info", class: "text-seek" },
+  success: { name: "checkCircle", class: "text-success" },
+  warning: { name: "alert", class: "text-warning" },
+  danger: { name: "alert", class: "text-danger" },
+};
 ---
 
 <div
-  class:list={["rounded-wl border px-4 py-3 text-sm", tones[tone], className]}
+  class:list={["flex items-start gap-3 rounded-wl border px-4 py-3 text-sm", tones[tone], className]}
   role={tone === "danger" ? "alert" : "status"}
 >
-  {title && <p class="mb-0.5 font-semibold">{title}</p>}
-  <div class="leading-relaxed"><slot /></div>
+  <Icon name={icon[tone].name} class:list={["mt-px h-5 w-5", icon[tone].class]} />
+  <div class="min-w-0 flex-1">
+    {title && <p class="mb-0.5 font-semibold">{title}</p>}
+    <div class="leading-relaxed"><slot /></div>
+  </div>
 </div>

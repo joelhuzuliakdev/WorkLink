@@ -7,6 +7,7 @@
  * Todo el contenido de otras personas se inserta como texto (nunca HTML).
  */
 import { actions } from "astro:actions";
+import { iconSvg } from "../config/icons";
 
 interface Person {
   username: string;
@@ -43,7 +44,7 @@ function build(): HTMLDialogElement {
   d.innerHTML = `
     <div class="flex items-center justify-between border-b border-line px-4 py-3">
       <h2 id="share-title" class="text-lg font-bold">Compartir</h2>
-      <button type="button" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" data-share-close aria-label="Cerrar">✕</button>
+      <button type="button" class="grid h-9 w-9 place-items-center rounded-full text-ink-muted hover:bg-surface-muted hover:text-ink" data-share-close aria-label="Cerrar">${iconSvg("x")}</button>
     </div>
     <div class="flex max-h-[75vh] flex-col overflow-y-auto">
       <section class="px-4 pt-4" aria-labelledby="share-wl">
@@ -64,9 +65,9 @@ function build(): HTMLDialogElement {
       <section class="px-4 py-4" aria-labelledby="share-other">
         <h3 id="share-other" class="text-sm font-semibold">Otras formas</h3>
         <div class="mt-2 grid grid-cols-3 gap-2 text-sm">
-          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-copy><span aria-hidden="true" class="text-xl">🔗</span><span>Copiar enlace</span></button>
-          <a target="_blank" rel="noopener" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-whatsapp><span aria-hidden="true" class="text-xl">🟢</span><span>WhatsApp</span></a>
-          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-native><span aria-hidden="true" class="text-xl">⋯</span><span>Más</span></button>
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-copy><span class="text-ink-muted">${iconSvg("link", "h-6 w-6")}</span><span>Copiar enlace</span></button>
+          <a target="_blank" rel="noopener" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-whatsapp><span class="text-success">${iconSvg("phoneChat", "h-6 w-6")}</span><span>WhatsApp</span></a>
+          <button type="button" class="flex flex-col items-center gap-1 rounded-wl border border-line p-3 hover:bg-surface-muted" data-share-native><span class="text-ink-muted">${iconSvg("share", "h-6 w-6")}</span><span>Más</span></button>
         </div>
       </section>
     </div>`;

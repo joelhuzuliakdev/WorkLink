@@ -28,6 +28,7 @@ const formError = result?.error && !isInputError(result.error) ? result.error.me
 const values = result?.error ? await getSubmittedValues(Astro.request) : {};
 const linkError = Astro.url.searchParams.get("error") === "link";
 const passwordChanged = Astro.url.searchParams.get("password") === "updated";
+const sessionsClosed = Astro.url.searchParams.get("sesiones") === "cerradas";
 ---
 
 <AuthLayout title="Ingresar" heading="Ingresá a WorkLink" subheading="Qué bueno verte de nuevo." showcase>
@@ -38,6 +39,9 @@ const passwordChanged = Astro.url.searchParams.get("password") === "updated";
   )}
   {passwordChanged && (
     <Alert tone="success" class="mb-5">Listo, cambiaste tu contraseña.</Alert>
+  )}
+  {sessionsClosed && (
+    <Alert tone="success" class="mb-5">Cerramos tu sesión en todos los dispositivos. Ingresá de nuevo cuando quieras.</Alert>
   )}
   {formError && <Alert tone="danger" class="mb-5">{formError}</Alert>}
 
