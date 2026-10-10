@@ -1,3 +1,29 @@
+#!/usr/bin/env bash
+# WorkLink · titulares en Términos y Privacidad
+# Uso (en la carpeta del proyecto): bash instalar-titulares.sh
+set -euo pipefail
+if [ ! -f package.json ] || [ ! -d src ]; then echo "ERROR: ejecutá este script desde la carpeta raíz de WorkLink."; exit 1; fi
+
+cat > 'src/config/legal.ts' << '__WORKLINK_FIN_DEL_ARCHIVO__'
+/**
+ * Datos legales que aparecen en Términos y Privacidad.
+ * Si arman una empresa (por ejemplo una SAS), cambiar `owner` por su nombre y CUIT.
+ * contactEmail: completar cuando tengan el email de WorkLink.
+ */
+export const legal = {
+  /** Nombre (o razón social) de quien es responsable de WorkLink. */
+  owner: "Joel Huzuliak y Paula Osella",
+  /** Email para consultas, reclamos y pedidos sobre datos personales. Vacío = no se muestra. */
+  contactEmail: "",
+  /** Jurisdicción para conflictos. */
+  jurisdiction: "los tribunales ordinarios de la ciudad de Córdoba, Provincia de Córdoba",
+  /** Fecha de la última actualización de los textos. */
+  updatedAt: "10 de octubre de 2026",
+};
+__WORKLINK_FIN_DEL_ARCHIVO__
+echo "  ✓ src/config/legal.ts"
+
+cat > 'src/pages/privacidad.astro' << '__WORKLINK_FIN_DEL_ARCHIVO__'
 ---
 /** Política de privacidad (Ley 25.326 de Protección de Datos Personales). */
 import LegalPage from "../components/layout/LegalPage.astro";
@@ -146,3 +172,7 @@ const contact = legal.contactEmail ? `escribiendo a ${legal.contactEmail}` : "de
     <p>Si cambiamos esta política de forma importante, te avisamos dentro de WorkLink antes de que se aplique.</p>
   </section>
 </LegalPage>
+__WORKLINK_FIN_DEL_ARCHIVO__
+echo "  ✓ src/pages/privacidad.astro"
+
+echo "Listo. Ahora: git add . / git commit / git push"
