@@ -1,0 +1,153 @@
+---
+/**
+ * BOTÓN DE ARREPENTIMIENTO (Ley 24.240 art. 34 y Res. SCI 424/2020).
+ * Público: NO exige cuenta ni ningún otro trámite. Al enviar el pedido se
+ * muestra el código de identificación en el acto (y se manda por email si el
+ * envío de emails está configurado). Con sesión, se completan los datos y se
+ * puede elegir el plan.
+ */
+import { actions, isInputError } from "astro:actions";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Field from "../components/ui/Field.astro";
+import TextArea from "../components/ui/TextArea.astro";
+import SelectField from "../components/ui/SelectField.astro";
+import Button from "../components/ui/Button.astro";
+import Alert from "../components/ui/Alert.astro";
+import Icon from "../components/ui/Icon.astro";
+import { getViewerProfile } from "../lib/viewer";
+import { displayName } from "../services/profiles";
+import { getWithdrawablePlans, withdrawalDeadline, WITHDRAWAL_DAYS, WITHDRAWAL_STATUS, type WithdrawalStatus } from "../services/withdrawals";
+import { getSubmittedValues } from "../utils/form";
+import { formatDate } from "../lib/format";
+import { legal } from "../config/legal";
+import { isEmailConfigured } from "../lib/email";
+
+const { supabase, user } = Astro.locals;
+
+const result = Astro.getActionResult(actions.withdrawals.request);
+if (result && !result.error) return Astro.redirect(`/arrepentimiento?codigo=${encodeURIComponent(result.data.code)}`, 303);
+
+const code = Astro.url.searchParams.get("codigo");
+const validCode = code && /^ARR-[0-9A-F]{8}$/.test(code) ? code : null;
+
+const viewer = user ? await getViewerProfile(Astro.locals) : null;
+const [plans, mine] = user
+  ? await Promise.all([
+      getWithdrawablePlans(supabase, user.id),
+      supabase
+        .from("withdrawal_requests")
+        .select("code, status, admin_note, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(5)
+        .then((r) => (r.data ?? []) as { code: string; status: WithdrawalStatus; admin_note: string | null; created_at: string }[]),
+    ])
+  : [[], []];
+
+const fieldErrors = result?.error && isInputError(result.error) ? (result.error.fields as Record<string, string[] | undefined>) : {};
+const formError = result?.error && !isInputError(result.error) ? result.error.message : null;
+const values = result?.error ? await getSubmittedValues(Astro.request) : {};
+const preselected = Astro.url.searchParams.get("plan");
+const v = (name: string, fallback = "") => (values as Record<string, string | undefined>)[name] ?? fallback;
+---
+
+<BaseLayout
+  title="Botón de arrepentimiento"
+  description="Revocá la contratación de un plan de WorkLink dentro de los 10 días corridos. Sin registrarte y con devolución total."
+>
+  <section class="mx-auto max-w-2xl px-4 py-10 sm:py-14">
+    <p class="text-sm font-semibold uppercase tracking-wider text-ink-muted">Botón de arrepentimiento</p>
+    <h1 class="mt-1 text-3xl font-bold tracking-tight sm:text-4xl">¿Te arrepentiste de un plan?</h1>
+    <p class="mt-3 text-lg text-ink-muted">
+      Tenés <strong class="text-ink">{WITHDRAWAL_DAYS} días corridos</strong> desde que contrataste un plan para arrepentirte, sin dar explicaciones.
+      Cancelamos el plan y te devolvemos el <strong class="text-ink">total</strong> por el mismo medio de pago.
+    </p>
+
+    {
+      validCode ? (
+        <div class="mt-8 rounded-wl-lg border border-success/40 bg-success-soft p-6 text-center" role="status">
+          <span class="mx-auto grid h-12 w-12 place-items-center rounded-full bg-success text-white"><Icon name="check" class="h-6 w-6" stroke={2.5} /></span>
+          <h2 class="mt-3 text-xl font-bold">Recibimos tu pedido</h2>
+          <p class="mt-2">Tu código de arrepentimiento es</p>
+          <p class="mt-2 select-all font-mono text-3xl font-bold tracking-wider" data-withdrawal-code>{validCode}</p>
+          <p class="mt-3 text-sm">
+            Guardalo: sirve para cualquier consulta.{isEmailConfigured() && " Te lo mandamos también por email."} Vamos a cancelar el plan y pedir la devolución lo antes posible,
+            y te avisamos cuando esté hecho.
+          </p>
+          {legal.contactEmail && <p class="mt-3 text-sm">¿Dudas? Escribinos a <a href={`mailto:${legal.contactEmail}?subject=${encodeURIComponent(`Arrepentimiento ${validCode}`)}`} class="font-semibold underline">{legal.contactEmail}</a>.</p>}
+        </div>
+      ) : (
+        <>
+          {formError && <Alert tone="danger" class="mt-6">{formError}</Alert>}
+          <form method="POST" action={actions.withdrawals.request} class="mt-8 flex flex-col gap-5 rounded-wl-lg border border-line bg-surface p-5 sm:p-6" novalidate>
+            <p class="text-sm text-ink-muted">No hace falta tener cuenta ni ingresar. Completá estos datos para identificar tu plan:</p>
+            <Field name="full_name" label="Nombre y apellido" required autocomplete="name" maxlength={120} value={v("full_name", viewer ? displayName(viewer) : "")} error={fieldErrors.full_name?.[0]} />
+            <Field
+              name="email"
+              label="Email"
+              type="email"
+              required
+              autocomplete="email"
+              value={v("email", user?.email ?? "")}
+              hint="El de tu cuenta o el que usaste para pagar en Mercado Pago. Ahí te escribimos."
+              error={fieldErrors.email?.[0]}
+            />
+            <Field name="dni" label="DNI (opcional)" inputmode="numeric" maxlength={10} value={v("dni")} hint="Nos ayuda a encontrar tu pago más rápido." error={fieldErrors.dni?.[0]} />
+            {plans.length > 0 && (
+              <SelectField
+                name="subscription_id"
+                label="¿De qué plan te arrepentís?"
+                value={v("subscription_id", preselected ?? plans[0].id)}
+                options={plans.map((p) => ({ value: p.id, label: `${p.label} (hasta el ${formatDate(withdrawalDeadline(p), { day: "numeric", month: "long" })})` }))}
+                error={fieldErrors.subscription_id?.[0]}
+              />
+            )}
+            <TextArea
+              name="detail"
+              label="Comentario (opcional)"
+              rows={3}
+              maxlength={1000}
+              placeholder={plans.length ? "Si querés, contanos por qué." : "Contanos qué plan contrataste y cuándo (por ejemplo: Destacado, el 3 de octubre)."}
+              value={v("detail")}
+              error={fieldErrors.detail?.[0]}
+            />
+            <div>
+              <Button type="submit" size="lg">Enviar pedido de arrepentimiento</Button>
+            </div>
+          </form>
+        </>
+      )
+    }
+
+    {
+      mine.length > 0 && (
+        <section class="mt-10" aria-labelledby="mis-pedidos">
+          <h2 id="mis-pedidos" class="text-lg font-semibold">Tus pedidos</h2>
+          <ul class="mt-3 divide-y divide-line rounded-wl-lg border border-line bg-surface">
+            {mine.map((m) => (
+              <li class="flex flex-wrap items-center justify-between gap-2 p-4 text-sm">
+                <span>
+                  <span class="font-mono font-semibold">{m.code}</span>
+                  <span class="text-ink-muted"> · {formatDate(m.created_at, { dateStyle: "medium" })}</span>
+                  {m.admin_note && <span class="mt-1 block text-ink-muted">{m.admin_note}</span>}
+                </span>
+                <span class:list={["rounded-full px-2.5 py-1 text-xs font-semibold", WITHDRAWAL_STATUS[m.status].class]}>{WITHDRAWAL_STATUS[m.status].label}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+
+    <section class="mt-10 text-sm text-ink-muted" aria-labelledby="como">
+      <h2 id="como" class="text-base font-semibold text-ink">Cómo funciona</h2>
+      <ul class="mt-2 list-disc space-y-1 pl-5">
+        <li>El plazo es de {WITHDRAWAL_DAYS} días corridos desde que contrataste el plan (el día del primer cobro).</li>
+        <li>Al enviar el pedido te damos un código de identificación en el momento.</li>
+        <li>Cancelamos el plan para que no se te cobre más y te devolvemos el total por Mercado Pago, por el mismo medio de pago. Según tu banco o tarjeta, puede tardar unos días en verse.</li>
+        <li>Si pasaron más de {WITHDRAWAL_DAYS} días, igual podés <a href="/panel/plan" class="underline">cancelar el plan</a> cuando quieras: no se te cobra más y conservás los beneficios hasta el final del mes pagado.</li>
+        <li>Más información en los <a href="/terminos#arrepentimiento" class="underline">términos y condiciones</a>.</li>
+      </ul>
+    </section>
+  </section>
+</BaseLayout>

@@ -105,6 +105,18 @@ export const getPreapproval = (id: string) => call<Preapproval>("GET", `/preappr
 export const cancelPreapproval = (id: string) =>
   call<Preapproval>("PUT", `/preapproval/${encodeURIComponent(id)}`, { status: "cancelled" });
 
+/**
+ * Devuelve el total de un pago (arrepentimiento). La misma clave de
+ * idempotencia evita devolver dos veces si se toca el botón de nuevo.
+ */
+export const refundPayment = (paymentId: string) =>
+  call<{ id: number | string; status: string; amount: number }>(
+    "POST",
+    `/v1/payments/${encodeURIComponent(paymentId)}/refunds`,
+    {},
+    `refund-${paymentId}`,
+  );
+
 export const getAuthorizedPayment = (id: string) => call<AuthorizedPayment>("GET", `/authorized_payments/${encodeURIComponent(id)}`);
 
 export async function searchAuthorizedPayments(preapprovalId: string): Promise<AuthorizedPayment[]> {

@@ -1,0 +1,139 @@
+---
+/**
+ * Pedidos del botón de arrepentimiento. Solo administración.
+ * Por cada pedido se muestran los planes que pueden ser los suyos (el que
+ * eligió, los de su cuenta o los pagados con su email) y sus cobros. Con un
+ * botón se cancela el plan en Mercado Pago y se devuelve el dinero.
+ */
+import { actions } from "astro:actions";
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import { getAdminStats } from "../../services/admin";
+import { getWithdrawals, WITHDRAWAL_DAYS, WITHDRAWAL_STATUS, contractedAt, withdrawalDeadline, type WithdrawalStatus } from "../../services/withdrawals";
+import { requireAdmin } from "../../lib/admin-guard";
+import { displayName } from "../../services/profiles";
+import { formatDate, formatMoney } from "../../lib/format";
+
+const denied = await requireAdmin(Astro);
+if (denied) return denied;
+const { supabase } = Astro.locals;
+
+const refunded = Astro.getActionResult(actions.withdrawals.refund);
+const resolved = Astro.getActionResult(actions.withdrawals.resolve);
+if (refunded && !refunded.error) return Astro.redirect("/admin/arrepentimientos?hecho=devuelto", 303);
+if (resolved && !resolved.error) return Astro.redirect("/admin/arrepentimientos?hecho=resuelto", 303);
+
+const tabs: { value: WithdrawalStatus | "all"; label: string }[] = [
+  { value: "pending", label: "Pendientes" },
+  { value: "refunded", label: "Devueltos" },
+  { value: "rejected", label: "Rechazados" },
+  { value: "all", label: "Todos" },
+];
+const requested = Astro.url.searchParams.get("estado");
+const status = tabs.some((t) => t.value === requested) ? (requested as WithdrawalStatus | "all") : "pending";
+const [items, stats] = await Promise.all([getWithdrawals(supabase, status), getAdminStats(supabase)]);
+const now = Date.now();
+const subStatus: Record<string, string> = { pending: "Sin pagar", authorized: "Activo", paused: "Pausado", cancelled: "Cancelado" };
+const payStatus: Record<string, string> = { approved: "Cobrado", refunded: "Devuelto", rejected: "Rechazado", pending: "Pendiente", in_process: "En proceso" };
+---
+
+<AdminLayout
+  title="Arrepentimientos"
+  description={`Pedidos para revocar un plan (hay ${WITHDRAWAL_DAYS} días corridos desde que se contrató). Resolvelos lo antes posible: la devolución es del total y por el mismo medio de pago.`}
+  openReports={stats?.reports_open}
+  error={refunded?.error?.message ?? resolved?.error?.message}
+>
+  <nav aria-label="Estado" class="mb-4 flex flex-wrap gap-2">
+    {
+      tabs.map((t) => (
+        <a
+          href={t.value === "pending" ? "/admin/arrepentimientos" : `/admin/arrepentimientos?estado=${t.value}`}
+          aria-current={status === t.value ? "page" : undefined}
+          class:list={["rounded-full border px-3 py-1.5 text-sm font-medium", status === t.value ? "border-brand bg-brand text-brand-contrast" : "border-line bg-surface hover:border-brand"]}
+        >
+          {t.label}
+        </a>
+      ))
+    }
+  </nav>
+
+  {
+    items.length === 0 ? (
+      <p class="rounded-wl-lg border border-dashed border-line bg-surface p-8 text-center text-ink-muted">
+        {status === "pending" ? "No hay pedidos pendientes. ¡Todo al día!" : "No hay pedidos en esta lista."}
+      </p>
+    ) : (
+      <ul class="flex flex-col gap-4">
+        {items.map((w) => (
+          <li class="rounded-wl-lg border border-line bg-surface p-4 sm:p-5" data-withdrawal={w.code}>
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="font-mono text-sm font-semibold">{w.code}</p>
+                <p class="mt-1 font-semibold">{w.full_name}{w.dni && <span class="font-normal text-ink-muted"> · DNI {w.dni}</span>}</p>
+                <p class="text-sm text-ink-muted">
+                  <a href={`mailto:${w.email}?subject=${encodeURIComponent(`Tu pedido de arrepentimiento ${w.code}`)}`} class="underline">{w.email}</a>
+                  {w.user && <> · cuenta <a href={`/admin/usuarios?q=${w.user.username}`} class="underline">@{w.user.username}</a></>}
+                </p>
+                <p class="text-xs text-ink-muted">Pedido el {formatDate(w.created_at, { dateStyle: "medium", timeStyle: "short" })}</p>
+              </div>
+              <span class:list={["rounded-full px-2.5 py-1 text-xs font-semibold", WITHDRAWAL_STATUS[w.status].class]}>{WITHDRAWAL_STATUS[w.status].label}</span>
+            </div>
+            {w.detail && <p class="mt-3 whitespace-pre-line rounded-wl bg-surface-muted p-3 text-sm">“{w.detail}”</p>}
+            {w.admin_note && <p class="mt-3 text-sm"><strong>Resolución:</strong> {w.admin_note}{w.resolved_at && <span class="text-ink-muted"> ({formatDate(w.resolved_at, { dateStyle: "medium" })})</span>}</p>}
+
+            {w.status === "pending" && (
+              <div class="mt-4">
+                <h3 class="text-sm font-semibold">Planes de esta persona</h3>
+                {w.candidates.length === 0 ? (
+                  <p class="mt-2 text-sm text-ink-muted">No encontramos un plan con ese email ni cuenta. Escribile para pedirle el email con el que pagó.</p>
+                ) : (
+                  <ul class="mt-2 flex flex-col gap-2">
+                    {w.candidates.map((s) => {
+                      const deadline = withdrawalDeadline(s);
+                      const inTime = new Date(w.created_at).getTime() <= deadline.getTime();
+                      const charged = s.payments.filter((p) => p.status === "approved");
+                      return (
+                        <li class="rounded-wl border border-line p-3 text-sm">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <p>
+                              <strong>{s.plan?.name ?? "Plan"}</strong> · {formatMoney(s.price)}/mes · {subStatus[s.status] ?? s.status}
+                              {s.id === w.subscription_id && <span class="ml-1 rounded-full bg-seek-soft px-2 py-0.5 text-xs font-semibold text-seek">El que eligió</span>}
+                            </p>
+                            <span class:list={["text-xs font-semibold", inTime ? "text-success" : "text-danger"]}>
+                              {inTime ? "Dentro del plazo" : "Fuera de plazo"} (contratado el {formatDate(contractedAt(s), { dateStyle: "medium" })})
+                            </span>
+                          </div>
+                          <p class="mt-1 text-xs text-ink-muted">
+                            Pagó con {s.payer_email} · Cobros: {s.payments.length ? s.payments.map((p) => `${formatMoney(p.amount)} ${payStatus[p.status] ?? p.status}${p.paid_at ? ` el ${formatDate(p.paid_at, { day: "numeric", month: "short" })}` : ""}`).join(" · ") : "ninguno"}
+                          </p>
+                          <form method="POST" action={actions.withdrawals.refund} class="mt-2">
+                            <input type="hidden" name="withdrawal_id" value={w.id} />
+                            <input type="hidden" name="subscription_id" value={s.id} />
+                            <button type="submit" class="h-9 rounded-wl border border-success/40 bg-success-soft px-4 text-sm font-semibold text-success">
+                              {charged.length ? `Cancelar plan y devolver ${formatMoney(charged.filter((p) => p.paid_at && new Date(p.paid_at).getTime() >= new Date(w.created_at).getTime() - (WITHDRAWAL_DAYS + 1) * 864e5).reduce((t, p) => t + p.amount, 0))}` : "Cancelar plan (no hay cobros)"}
+                            </button>
+                          </form>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <form method="POST" action={actions.withdrawals.resolve} class="mt-3 flex flex-col gap-2 border-t border-line pt-3">
+                  <input type="hidden" name="withdrawal_id" value={w.id} />
+                  <label class="sr-only" for={`note-${w.id}`}>Motivo</label>
+                  <input id={`note-${w.id}`} name="note" maxlength="1000" placeholder="Motivo si lo rechazás (le llega a la persona). Ej.: pasaron más de 10 días desde la contratación." class="h-10 rounded-wl border border-line bg-surface px-3 text-sm" />
+                  <div class="flex flex-wrap gap-2">
+                    <button name="status" value="rejected" class="h-9 rounded-wl border border-danger/40 bg-danger-soft px-4 text-sm font-semibold text-danger">Rechazar</button>
+                    <button name="status" value="closed" class="h-9 rounded-wl border border-line px-4 text-sm font-semibold">Marcar como resuelto (sin devolver)</button>
+                  </div>
+                </form>
+              </div>
+            )}
+            {w.status === "pending" && now - new Date(w.created_at).getTime() > 24 * 3600 * 1000 && (
+              <p class="mt-3 text-xs font-semibold text-danger">Hace más de 24 h que espera respuesta.</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</AdminLayout>

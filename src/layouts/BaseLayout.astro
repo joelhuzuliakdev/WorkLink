@@ -30,7 +30,8 @@ const { title, description = brand.description, canonicalPath, noindex = false, 
 const fullTitle = title ? `${title} · ${brand.name}` : `${brand.name} · ${brand.tagline}`;
 const site = Astro.site ?? new URL(Astro.url.origin);
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, site).toString();
-const ogImage = image ? new URL(image, site).toString() : undefined;
+// Sin imagen propia, se usa la de la marca (así WhatsApp y redes muestran una vista previa linda).
+const ogImage = new URL(image ?? "/og-worklink.png", site).toString();
 ---
 
 <!doctype html>
@@ -44,6 +45,8 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
     {noindex && <meta name="robots" content="noindex, nofollow" />}
 
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content={brand.themeColor} />
     <meta name="generator" content={Astro.generator} />
 
@@ -53,8 +56,10 @@ const ogImage = image ? new URL(image, site).toString() : undefined;
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-    {ogImage && <meta property="og:image" content={ogImage} />}
-    <meta name="twitter:card" content={ogImage ? "summary_large_image" : "summary"} />
+    <meta property="og:image" content={ogImage} />
+    {!image && <meta property="og:image:width" content="1200" />}
+    {!image && <meta property="og:image:height" content="630" />}
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
 

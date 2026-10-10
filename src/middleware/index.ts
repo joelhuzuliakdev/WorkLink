@@ -2,6 +2,9 @@ import { defineMiddleware } from "astro:middleware";
 import { createSupabaseServerClient } from "../lib/supabase/server";
 import { getSessionUser, hasRole } from "../lib/auth/session";
 import { protectedPrefixes, routes, staffPrefixes } from "../config/site";
+import { contentSecurityPolicy } from "../lib/security";
+
+const CSP = contentSecurityPolicy(import.meta.env.DEV);
 
 const matchesPrefix = (pathname: string, prefixes: readonly string[]) =>
   prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -60,7 +63,15 @@ export const onRequest = defineMiddleware(async (context, next) => {
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY");
-  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(self)");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(self), payment=()");
+  response.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  if ((response.headers.get("Content-Type") ?? "").includes("text/html")) {
+    response.headers.set("Content-Security-Policy", CSP);
+  }
+  if (import.meta.env.PROD) {
+    // Siempre por HTTPS (2 años), también en subdominios.
+    response.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  }
 
   return response;
 });

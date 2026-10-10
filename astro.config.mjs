@@ -50,6 +50,14 @@ export default defineConfig({
       MP_WEBHOOK_SECRET: envField.string({ context: "server", access: "secret", optional: true }),
       // Solo para pruebas locales: dirección de la API (por defecto la oficial).
       MP_API_URL: envField.string({ context: "server", access: "secret", optional: true }),
+      // Envío de emails propios (código de arrepentimiento, avisos al equipo).
+      // Con Gmail: smtp.gmail.com, puerto 465, el email y una "contraseña de
+      // aplicación" de Google (no la contraseña normal). Opcional: sin esto,
+      // la web funciona igual y solo no manda esos emails.
+      SMTP_HOST: envField.string({ context: "server", access: "secret", optional: true }),
+      SMTP_PORT: envField.string({ context: "server", access: "secret", optional: true }),
+      SMTP_USER: envField.string({ context: "server", access: "secret", optional: true }),
+      SMTP_PASS: envField.string({ context: "server", access: "secret", optional: true }),
     },
     validateSecrets: true,
   },

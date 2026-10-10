@@ -27,4 +27,6 @@ export const DONE_MESSAGES: Record<string, string> = {
   role: "Listo: cambiaste el rol.",
   rechazada: "Listo: rechazaste el pedido y le avisamos a la persona.",
   plan: "Listo: guardaste el plan.",
+  devuelto: "Listo: cancelamos el plan, devolvimos el dinero y le avisamos a la persona.",
+  resuelto: "Listo: guardaste la decisión.",
 };

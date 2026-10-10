@@ -7,8 +7,8 @@ import { emailSchema, passwordSchema } from "./auth";
  */
 
 const currentPassword = z.preprocess(
-  (value) => (typeof value === "string" && value === "" ? undefined : value),
-  z.string().max(72).optional(),
+  (value) => (value === null || value === "" ? undefined : value),
+  z.string().max(72).nullish(),
 );
 
 export const changeEmailSchema = z.object({ email: emailSchema });

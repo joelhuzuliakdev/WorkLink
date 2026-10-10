@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+<body style="margin:0;background:#f6f6f3;font-family:Arial,Helvetica,sans-serif;color:#15171f">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f6f3;padding:24px 12px">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #e4e4df;border-radius:16px">
+        <tr><td style="padding:24px 28px 8px">
+          <a href="{{ .SiteURL }}" style="font-size:22px;font-weight:700;color:#2f4fd8;text-decoration:none">WorkLink</a>
+        </td></tr>
+        <tr><td style="padding:8px 28px 28px">
+          <h1 style="font-size:20px;margin:8px 0 12px">Confirmá tu email</h1>
+          <p style="font-size:15px;line-height:1.55;margin:0 0 12px">¡Hola! Gracias por sumarte a WorkLink. Tocá el botón para confirmar tu email y empezar a usar tu cuenta.</p>
+          <p style="margin:20px 0">
+            <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/panel" style="display:inline-block;background:#2f4fd8;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Confirmar mi email</a>
+          </p>
+          <p style="font-size:14px;line-height:1.55;margin:0 0 12px;color:#5b5f6e">El enlace vence en 24 horas y sirve una sola vez. Podés abrirlo en cualquier dispositivo.</p>
+          <p style="font-size:13px;line-height:1.55;margin:16px 0 0;color:#5b5f6e">Si no creaste una cuenta en WorkLink, ignorá este email: no se va a crear nada.</p>
+        </td></tr>
+      </table>
+      <p style="font-size:12px;color:#5b5f6e;margin:16px 0 0">WorkLink · Conectamos lo que necesitás con quien lo ofrece<br>¿Dudas? Escribinos a worklinkcontacto@gmail.com</p>
+    </td></tr>
+  </table>
+</body>
+</html>

@@ -22,9 +22,12 @@ const { supabase, user } = Astro.locals;
 const { data: role } = await supabase.from("user_roles").select("role").eq("user_id", user!.id).maybeSingle();
 const roleLabel: Record<string, string> = { moderator: "Moderación", admin: "Administración", super_admin: "Super administración" };
 const isAdmin = role?.role === "admin" || role?.role === "super_admin";
-const { count: pendingVerifications } = isAdmin
-  ? await supabase.from("verification_requests").select("id", { count: "exact", head: true }).eq("status", "pending")
-  : { count: null };
+const [{ count: pendingVerifications }, { count: pendingWithdrawals }] = isAdmin
+  ? await Promise.all([
+      supabase.from("verification_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+      supabase.from("withdrawal_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+    ])
+  : [{ count: null }, { count: null }];
 
 const links = [
   { href: "/admin", label: "Resumen", active: path === "/admin" },
@@ -37,6 +40,7 @@ const links = [
     ? [
         { href: "/admin/ingresos", label: "Ingresos", active: path.startsWith("/admin/ingresos") },
         { href: "/admin/verificaciones", label: "Verificaciones", active: path.startsWith("/admin/verificaciones"), badge: pendingVerifications },
+        { href: "/admin/arrepentimientos", label: "Arrepentimientos", active: path.startsWith("/admin/arrepentimientos"), badge: pendingWithdrawals },
       ]
     : []),
 ];

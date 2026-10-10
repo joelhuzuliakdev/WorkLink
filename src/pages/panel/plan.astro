@@ -27,6 +27,7 @@ import { createSupabaseAdminClient } from "../../lib/supabase/admin";
 import { isMercadoPagoConfigured } from "../../lib/mercadopago";
 import { formatDate, formatMoney } from "../../lib/format";
 import { getSubmittedForm } from "../../utils/form";
+import { canWithdraw, withdrawalDeadline } from "../../services/withdrawals";
 
 const { supabase, user } = Astro.locals;
 
@@ -143,6 +144,11 @@ const inputClass =
                       <input type="hidden" name="subscription_id" value={s.id} />
                       <Button type="submit" size="sm" variant="ghost" class="text-danger">Cancelar</Button>
                     </form>
+                  )}
+                  {s.status !== "pending" && canWithdraw(s) && (
+                    <Button href={`/arrepentimiento?plan=${s.id}`} size="sm" variant="ghost">
+                      Me arrepiento (hasta el {formatDate(withdrawalDeadline(s), { day: "numeric", month: "long" })})
+                    </Button>
                   )}
                 </div>
               </li>

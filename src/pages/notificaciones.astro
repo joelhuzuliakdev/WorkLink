@@ -109,6 +109,10 @@ function describe(n: NotificationView): { name: string; text: string; href: stri
       return { name: "WorkLink", text: "¡Verificamos tu identidad! Ya tenés la tilde azul.", href: "/panel/plan#verificacion", icon: "check", tone: "bg-seek text-white" };
     case "verification_rejected":
       return { name: "WorkLink", text: "No pudimos aprobar tu verificación. Mirá el motivo y mandá las fotos de nuevo.", href: "/panel/plan#verificacion", icon: "alert", tone: "bg-warning text-white" };
+    case "withdrawal_request":
+      return { name: "WorkLink", text: "Llegó un pedido de arrepentimiento de un plan. Resolvelo lo antes posible.", href: "/admin/arrepentimientos", icon: "alert", tone: "bg-warning text-white" };
+    case "withdrawal_resolved":
+      return { name: "WorkLink", text: "Resolvimos tu pedido de arrepentimiento. Te contamos los detalles en Mi plan.", href: "/arrepentimiento", icon: "check", tone: "bg-success text-white" };
     default:
       return { name, text: "tiene novedades para vos.", href: "#", icon: "bell", tone: "bg-ink-muted text-white" };
   }

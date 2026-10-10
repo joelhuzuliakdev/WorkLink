@@ -19,10 +19,19 @@ export type NotificationType =
   | "plan_activated"
   | "plan_payment_failed"
   | "verification_approved"
-  | "verification_rejected";
+  | "verification_rejected"
+  | "withdrawal_request"
+  | "withdrawal_resolved";
 
 /** Avisos del sistema: no tienen una persona que los envíe (actor null). */
-export const SYSTEM_NOTIFICATIONS: NotificationType[] = ["plan_activated", "plan_payment_failed", "verification_approved", "verification_rejected"];
+export const SYSTEM_NOTIFICATIONS: NotificationType[] = [
+  "plan_activated",
+  "plan_payment_failed",
+  "verification_approved",
+  "verification_rejected",
+  "withdrawal_request",
+  "withdrawal_resolved",
+];
 
 export interface NotificationView {
   id: string;

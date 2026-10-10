@@ -1,0 +1,74 @@
+# =============================================================================
+# Copia de seguridad diaria de la base de datos de WorkLink
+# =============================================================================
+# Todos los días a las 3:30 (hora de Argentina) hace una copia de la base
+# (datos, cuentas y la lista de archivos), la CIFRA con una clave y la guarda
+# 14 días en GitHub (pestaña Actions → la ejecución → "Artifacts").
+#
+# Necesita dos secretos en GitHub (Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL     Supabase → Connect → "Session pooler" (URI, con la contraseña de la base)
+#   BACKUP_PASSPHRASE   Una clave larga inventada por ustedes. Guárdenla en un lugar seguro:
+#                       sin ella la copia NO se puede abrir.
+# Mientras falten, el trabajo termina sin hacer nada (no falla).
+#
+# Las fotos y videos (Storage) no entran acá: viven en Supabase.
+# Para restaurar, ver la guía de lanzamiento.
+# =============================================================================
+name: Copia de seguridad de la base
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  copia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Revisar que estén los secretos
+        id: check
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::warning::Faltan los secretos SUPABASE_DB_URL o BACKUP_PASSPHRASE. No se hizo la copia."
+            echo "listo=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "listo=si" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Instalar pg_dump 17
+        if: steps.check.outputs.listo == 'si'
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y > /dev/null
+          sudo apt-get install -y -qq postgresql-client-17 > /dev/null
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+      - name: Hacer la copia y cifrarla
+        if: steps.check.outputs.listo == 'si'
+        run: |
+          set -euo pipefail
+          umask 077
+          FILE="worklink-$(date -u +%Y-%m-%d).dump"
+          /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" \
+            --format=custom --no-owner --no-privileges \
+            --schema=public --schema=auth --schema=storage \
+            --file="$FILE"
+          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_PASSPHRASE" --output "$FILE.gpg" "$FILE"
+          shred -u "$FILE"
+          ls -lh "$FILE.gpg"
+          echo "ARCHIVO=$FILE.gpg" >> "$GITHUB_ENV"
+
+      - name: Guardar la copia (14 días)
+        if: steps.check.outputs.listo == 'si'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVO }}
+          path: ${{ env.ARCHIVO }}
+          retention-days: 14
+          if-no-files-found: error

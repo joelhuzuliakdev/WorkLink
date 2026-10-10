@@ -55,6 +55,9 @@ export const GET: APIRoute = async ({ locals, site, url }) => {
     { loc: abs("/necesidades") },
     { loc: abs("/como-funciona") },
     { loc: abs("/planes") },
+    { loc: abs("/arrepentimiento") },
+    { loc: abs("/terminos") },
+    { loc: abs("/privacidad") },
     { loc: abs(directoryPath.index) },
     ...categories.filter((c) => c.businesses >= thresholds.minBusinessesAlt).map((c) => ({ loc: abs(directoryPath.category(c.slug)) })),
     ...((pairs.data ?? []) as { category_slug: string; province_slug: string; city_slug: string; last_updated: string }[]).map((p) => ({
